@@ -1,4 +1,5 @@
-use kdl_config::{KdlChoice, KdlNode, KdlSchema, parse_str};
+use kdl_config::derive::{KdlChoice, KdlNode, KdlSchema};
+use kdl_config::runtime::parse_str;
 
 #[derive(Debug, PartialEq, KdlNode, KdlSchema)]
 struct PrefixFilter {
@@ -38,6 +39,6 @@ fn test_choice_render() {
     let filter = Filter::Regex(RegexFilter {
         pattern: ".*\\.rs".into(),
     });
-    let rendered = kdl_config::to_kdl(&filter, "filter");
+    let rendered = kdl_config::runtime::to_kdl(&filter, "filter");
     assert!(rendered.contains("regex"));
 }

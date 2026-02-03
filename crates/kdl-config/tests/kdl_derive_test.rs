@@ -1,4 +1,5 @@
-use kdl_config::{parse_str, Kdl, KdlNode};
+use kdl_config::derive::{Kdl, KdlNode};
+use kdl_config::runtime::parse_str;
 
 #[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
@@ -57,5 +58,5 @@ union OnlySchema {
 
 #[test]
 fn kdl_derive_union_schema_only_compiles() {
-    let _ = <OnlySchema as kdl_config::schema::KdlSchema>::schema_ref();
+    let _ = <OnlySchema as kdl_config::runtime::schema::KdlSchema>::schema_ref();
 }

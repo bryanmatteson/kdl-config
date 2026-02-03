@@ -1,2 +1,7 @@
-pub use kdl_config_derive::{Kdl, KdlChoice, KdlNode, KdlSchema, KdlValue};
-pub use kdl_config_runtime::*;
+pub mod derive {
+    pub use kdl_config_derive::*;
+}
+
+pub mod runtime {
+    pub use kdl_config_runtime::*;
+}
