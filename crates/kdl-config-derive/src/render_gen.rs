@@ -1,0 +1,467 @@
+use proc_macro2::TokenStream;
+use quote::quote;
+use syn::Ident;
+
+use crate::attrs::{BoolMode, FieldInfo, FlagStyle, RenderPlacement, StructAttrs};
+
+#[derive(Debug, Clone, Copy)]
+enum FieldKind {
+    ValueScalar,
+    ValueVec,
+    Node,
+    NodeVec,
+    Registry,
+}
+
+pub fn generate_render_impl(
+    struct_name: &Ident,
+    struct_attrs: &StructAttrs,
+    fields: &[FieldInfo],
+) -> TokenStream {
+    let mut positional_fields = Vec::new();
+    let mut keyed_fields = Vec::new();
+    let mut flag_fields = Vec::new();
+    let mut value_fields = Vec::new();
+    let mut child_fields = Vec::new();
+    let mut children_fields = Vec::new();
+    let mut registry_fields = Vec::new();
+
+    for field in fields {
+        let kind = field_kind(field);
+        let render_placement = render_placement_for(field, kind);
+
+        match render_placement {
+            RenderPlacement::Attr => {
+                if field.placement.positional.is_some() {
+                    positional_fields.push(field);
+                } else if field.is_bool {
+                    flag_fields.push(field);
+                } else {
+                    keyed_fields.push(field);
+                }
+            }
+            RenderPlacement::Value => value_fields.push(field),
+            RenderPlacement::Child => child_fields.push(field),
+            RenderPlacement::Children => children_fields.push(field),
+            RenderPlacement::Registry => registry_fields.push(field),
+        }
+    }
+
+    let positional_render = render_positional_fields(&positional_fields);
+    let keyed_render = render_keyed_fields(&keyed_fields);
+    let flag_render = render_flag_fields(&flag_fields, struct_attrs);
+    let value_render = render_value_fields(&value_fields, struct_attrs);
+    let child_render = render_child_fields(&child_fields);
+    let children_render = render_children_fields(&children_fields);
+    let registry_render = render_registry_fields(&registry_fields);
+
+    quote! {
+        impl ::kdl_config_runtime::KdlRender for #struct_name {
+            fn render<W: ::std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> ::std::fmt::Result {
+                let mut renderer = ::kdl_config_runtime::NodeRenderer::new(name.to_string(), ::kdl_config_runtime::Modifier::Inherit);
+
+                #positional_render
+                #flag_render
+                #keyed_render
+
+                let mut value_nodes: ::std::vec::Vec<(String, usize, String)> = ::std::vec::Vec::new();
+                let mut child_nodes: ::std::vec::Vec<(String, usize, String)> = ::std::vec::Vec::new();
+                let mut idx: usize = 0;
+
+                #value_render
+                #child_render
+                #children_render
+                #registry_render
+
+                value_nodes.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+                for (_, _, rendered) in value_nodes {
+                    renderer.child(rendered);
+                }
+
+                child_nodes.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+                for (_, _, rendered) in child_nodes {
+                    renderer.child(rendered);
+                }
+
+                ::kdl_config_runtime::write_indent(w, indent)?;
+                w.write_str(&renderer.render())?;
+                Ok(())
+            }
+        }
+    }
+}
+
+fn field_kind(field: &FieldInfo) -> FieldKind {
+    if field.placement.registry {
+        return FieldKind::Registry;
+    }
+
+    if field.is_vec || field.is_option_vec {
+        let inner = if field.is_option_vec {
+            field.inner_type().and_then(crate::attrs::extract_inner_type)
+        } else {
+            field.inner_type()
+        };
+        let is_value = inner.map(is_value_type).unwrap_or(false);
+        if is_value {
+            FieldKind::ValueVec
+        } else {
+            FieldKind::NodeVec
+        }
+    } else if is_value_type(&field.ty) {
+        FieldKind::ValueScalar
+    } else {
+        FieldKind::Node
+    }
+}
+
+fn is_value_type(ty: &syn::Type) -> bool {
+    crate::attrs::is_bool_type(ty) || crate::attrs::is_string_type(ty) || crate::attrs::is_numeric_type(ty)
+}
+
+fn render_placement_for(field: &FieldInfo, kind: FieldKind) -> RenderPlacement {
+    if let Some(render) = field.render {
+        return render;
+    }
+
+    match kind {
+        FieldKind::ValueScalar => RenderPlacement::Attr,
+        FieldKind::ValueVec => RenderPlacement::Value,
+        FieldKind::Node => RenderPlacement::Child,
+        FieldKind::NodeVec => RenderPlacement::Children,
+        FieldKind::Registry => RenderPlacement::Registry,
+    }
+}
+
+fn render_condition(field: &FieldInfo, ident: &syn::Ident) -> TokenStream {
+    if let Some(ref predicate) = field.skip_serializing_if {
+        let path: TokenStream = predicate.parse().unwrap_or_else(|_| {
+            let ident = syn::Ident::new(predicate, proc_macro2::Span::call_site());
+            quote! { #ident }
+        });
+        quote! { !(#path(&self.#ident)) }
+    } else {
+        quote! { true }
+    }
+}
+
+fn render_positional_fields(fields: &[&FieldInfo]) -> TokenStream {
+    let mut items = Vec::new();
+    for field in fields {
+        let ident = &field.ident;
+        let idx = field.placement.positional.expect("positional field");
+        let cond = render_condition(field, ident);
+
+        let render_body = if field.is_optional {
+            quote! {
+                if let Some(value) = &self.#ident {
+                    renderer.positional_raw(#idx, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::from(value.clone())));
+                }
+            }
+        } else {
+            quote! {
+                renderer.positional_raw(#idx, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::from(self.#ident.clone())));
+            }
+        };
+
+        items.push(quote! {
+            if #cond {
+                #render_body
+            }
+        });
+    }
+    quote! { #(#items)* }
+}
+
+fn render_keyed_fields(fields: &[&FieldInfo]) -> TokenStream {
+    let mut items = Vec::new();
+    for field in fields {
+        let ident = &field.ident;
+        let key = &field.kdl_key;
+        let cond = render_condition(field, ident);
+
+        let render_body = if field.is_optional {
+            quote! {
+                if let Some(value) = &self.#ident {
+                    renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::from(value.clone())));
+                }
+            }
+        } else {
+            quote! {
+                renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::from(self.#ident.clone())));
+            }
+        };
+
+        items.push(quote! {
+            if #cond {
+                #render_body
+            }
+        });
+    }
+    quote! { #(#items)* }
+}
+
+fn render_flag_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs) -> TokenStream {
+    let mut items = Vec::new();
+    for field in fields {
+        let ident = &field.ident;
+        let key = &field.kdl_key;
+        let cond = render_condition(field, ident);
+
+        let bool_mode = field
+            .bool_mode
+            .clone()
+            .unwrap_or(struct_attrs.default_bool.clone().unwrap_or(BoolMode::PresenceAndValue));
+        let bool_mode_tokens = bool_mode_tokens(bool_mode);
+        let flag_style = field
+            .flag_style
+            .clone()
+            .unwrap_or(struct_attrs.default_flag_style.clone().unwrap_or(FlagStyle::Both));
+
+        let (pos_flag, neg_flag) = match &field.placement.flag {
+            Some((Some(pos), Some(neg))) => (pos.clone(), neg.clone()),
+            _ => match flag_style {
+                FlagStyle::ValueNo | FlagStyle::Both => (key.to_string(), format!("no-{}", key)),
+                FlagStyle::WithWithout => (format!("with-{}", key), format!("without-{}", key)),
+            },
+        };
+
+        let pos_flag_lit = pos_flag;
+        let neg_flag_lit = neg_flag;
+
+        let render_body = if field.is_optional {
+            quote! {
+                if let Some(value) = &self.#ident {
+                    match #bool_mode_tokens {
+                        ::kdl_config_runtime::BoolMode::ValueOnly => {
+                            renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::Bool(*value)));
+                        }
+                        _ => {
+                            if *value {
+                                renderer.flag(#pos_flag_lit);
+                            } else {
+                                renderer.flag(#neg_flag_lit);
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            quote! {
+                match #bool_mode_tokens {
+                    ::kdl_config_runtime::BoolMode::ValueOnly => {
+                        renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::Bool(self.#ident)));
+                    }
+                    _ => {
+                        if self.#ident {
+                            renderer.flag(#pos_flag_lit);
+                        }
+                    }
+                }
+            }
+        };
+
+        items.push(quote! {
+            if #cond {
+                #render_body
+            }
+        });
+    }
+    quote! { #(#items)* }
+}
+
+fn render_value_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs) -> TokenStream {
+    let mut items = Vec::new();
+    for field in fields {
+        let ident = &field.ident;
+        let key = &field.kdl_key;
+        let cond = render_condition(field, ident);
+
+        let bool_mode = field
+            .bool_mode
+            .clone()
+            .unwrap_or(struct_attrs.default_bool.clone().unwrap_or(BoolMode::PresenceAndValue));
+        let bool_mode_tokens = bool_mode_tokens(bool_mode);
+
+        let render_body = if field.is_vec || field.is_option_vec {
+            if field.is_option_vec {
+                quote! {
+                    if let Some(values) = &self.#ident {
+                        if !values.is_empty() {
+                            let rendered = ::kdl_config_runtime::render_value_node(#key, &values.iter().cloned().map(::kdl_config_runtime::Value::from).collect::<::std::vec::Vec<_>>());
+                            value_nodes.push((#key.to_string(), idx, rendered));
+                            idx += 1;
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    if !self.#ident.is_empty() {
+                        let rendered = ::kdl_config_runtime::render_value_node(#key, &self.#ident.iter().cloned().map(::kdl_config_runtime::Value::from).collect::<::std::vec::Vec<_>>());
+                        value_nodes.push((#key.to_string(), idx, rendered));
+                        idx += 1;
+                    }
+                }
+            }
+        } else if field.is_bool {
+            if field.is_optional {
+                quote! {
+                    if let Some(value) = &self.#ident {
+                        match #bool_mode_tokens {
+                            ::kdl_config_runtime::BoolMode::PresenceOnly => {
+                                if *value {
+                                    let rendered = ::kdl_config_runtime::render_key(#key);
+                                    value_nodes.push((#key.to_string(), idx, rendered));
+                                    idx += 1;
+                                }
+                            }
+                            _ => {
+                                let rendered = ::kdl_config_runtime::render_value_node_scalar(#key, &::kdl_config_runtime::Value::Bool(*value));
+                                value_nodes.push((#key.to_string(), idx, rendered));
+                                idx += 1;
+                            }
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    match #bool_mode_tokens {
+                        ::kdl_config_runtime::BoolMode::PresenceOnly => {
+                            if self.#ident {
+                                let rendered = ::kdl_config_runtime::render_key(#key);
+                                value_nodes.push((#key.to_string(), idx, rendered));
+                                idx += 1;
+                            }
+                        }
+                        _ => {
+                            let rendered = ::kdl_config_runtime::render_value_node_scalar(#key, &::kdl_config_runtime::Value::Bool(self.#ident));
+                            value_nodes.push((#key.to_string(), idx, rendered));
+                            idx += 1;
+                        }
+                    }
+                }
+            }
+        } else if field.is_optional {
+            quote! {
+                if let Some(value) = &self.#ident {
+                    let rendered = ::kdl_config_runtime::render_value_node_scalar(#key, &::kdl_config_runtime::Value::from(value.clone()));
+                    value_nodes.push((#key.to_string(), idx, rendered));
+                    idx += 1;
+                }
+            }
+        } else {
+            quote! {
+                let rendered = ::kdl_config_runtime::render_value_node_scalar(#key, &::kdl_config_runtime::Value::from(self.#ident.clone()));
+                value_nodes.push((#key.to_string(), idx, rendered));
+                idx += 1;
+            }
+        };
+
+        items.push(quote! {
+            if #cond {
+                #render_body
+            }
+        });
+    }
+    quote! { #(#items)* }
+}
+
+fn render_child_fields(fields: &[&FieldInfo]) -> TokenStream {
+    let mut items = Vec::new();
+    for field in fields {
+        let ident = &field.ident;
+        let key = &field.kdl_key;
+        let cond = render_condition(field, ident);
+
+        let render_body = if field.is_optional {
+            quote! {
+                if let Some(value) = &self.#ident {
+                    let rendered = ::kdl_config_runtime::to_kdl(value, #key);
+                    child_nodes.push((#key.to_string(), idx, rendered));
+                    idx += 1;
+                }
+            }
+        } else {
+            quote! {
+                let rendered = ::kdl_config_runtime::to_kdl(&self.#ident, #key);
+                child_nodes.push((#key.to_string(), idx, rendered));
+                idx += 1;
+            }
+        };
+
+        items.push(quote! {
+            if #cond {
+                #render_body
+            }
+        });
+    }
+    quote! { #(#items)* }
+}
+
+fn render_children_fields(fields: &[&FieldInfo]) -> TokenStream {
+    let mut items = Vec::new();
+    for field in fields {
+        let ident = &field.ident;
+        let key = &field.kdl_key;
+        let cond = render_condition(field, ident);
+
+        let render_body = if field.is_option_vec {
+            quote! {
+                if let Some(values) = &self.#ident {
+                    for child in values {
+                        let rendered = ::kdl_config_runtime::to_kdl(child, #key);
+                        child_nodes.push((#key.to_string(), idx, rendered));
+                        idx += 1;
+                    }
+                }
+            }
+        } else {
+            quote! {
+                for child in &self.#ident {
+                    let rendered = ::kdl_config_runtime::to_kdl(child, #key);
+                    child_nodes.push((#key.to_string(), idx, rendered));
+                    idx += 1;
+                }
+            }
+        };
+
+        items.push(quote! {
+            if #cond {
+                #render_body
+            }
+        });
+    }
+    quote! { #(#items)* }
+}
+
+fn render_registry_fields(fields: &[&FieldInfo]) -> TokenStream {
+    let mut items = Vec::new();
+    for field in fields {
+        let ident = &field.ident;
+        let container = field.container.clone().unwrap_or_else(|| field.kdl_key.clone());
+        let cond = render_condition(field, ident);
+
+        items.push(quote! {
+            if #cond {
+                let mut entries: ::std::vec::Vec<(&String, &_)> = self.#ident.iter().collect();
+                entries.sort_by(|a, b| a.0.cmp(b.0));
+                for (name, value) in entries {
+                    let mut rendered = ::kdl_config_runtime::to_kdl(value, #container);
+                    let key_rendered = ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::String(name.clone()));
+                    rendered = ::kdl_config_runtime::insert_arg(&rendered, &key_rendered);
+                    child_nodes.push((#container.to_string(), idx, rendered));
+                    idx += 1;
+                }
+            }
+        });
+    }
+    quote! { #(#items)* }
+}
+
+fn bool_mode_tokens(mode: BoolMode) -> TokenStream {
+    match mode {
+        BoolMode::PresenceAndValue => quote! { ::kdl_config_runtime::BoolMode::PresenceAndValue },
+        BoolMode::ValueOnly => quote! { ::kdl_config_runtime::BoolMode::ValueOnly },
+        BoolMode::PresenceOnly => quote! { ::kdl_config_runtime::BoolMode::PresenceOnly },
+    }
+}

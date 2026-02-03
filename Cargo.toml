@@ -13,3 +13,4 @@
 [workspace.dependencies]
     kdl                = "6.5.0"
     kdl-config-runtime = { path = "crates/kdl-config-runtime", version = "0.1.0" }
+    kdl-config-derive  = { path = "crates/kdl-config-derive", version = "0.1.0" }
