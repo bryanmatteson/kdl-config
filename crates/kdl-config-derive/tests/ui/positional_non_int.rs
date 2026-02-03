@@ -1,0 +1,9 @@
+use kdl_config_derive::KdlNode;
+
+#[derive(KdlNode)]
+struct Test {
+    #[kdl(attr, positional = "x")]
+    value: String,
+}
+
+fn main() {}

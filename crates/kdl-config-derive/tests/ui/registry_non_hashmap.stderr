@@ -1,0 +1,5 @@
+error: registry placement requires HashMap<K, V> field type
+ --> tests/ui/registry_non_hashmap.rs:5:5
+  |
+5 |     #[kdl(registry)]
+  |     ^

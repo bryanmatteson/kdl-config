@@ -1,0 +1,5 @@
+error: flag override requires both flag and neg_flag
+ --> tests/ui/flag_missing_pos.rs:5:5
+  |
+5 |     #[kdl(attr, neg_flag = "off")]
+  |     ^

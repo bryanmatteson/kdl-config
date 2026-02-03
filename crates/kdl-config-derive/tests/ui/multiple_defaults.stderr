@@ -1,0 +1,5 @@
+error: field cannot have multiple default specifications (`default`, `default = ...`, `default_fn`)
+ --> tests/ui/multiple_defaults.rs:5:5
+  |
+5 |     #[kdl(default, default_fn = "make")]
+  |     ^

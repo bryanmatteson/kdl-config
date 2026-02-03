@@ -1,0 +1,28 @@
+config "alpha" 2 "flag-only" "presence-only" "with-styled-flag" "value-presence" defaulted=0 explicit-keyed="explicit" literal-default=5 name="Alpha" renamed-field="renamed" retry-limit=3 value-only=#true {
+    ports 80 443 8443
+    tags "core" "extra"
+    threshold 7
+    conflicts level="warn"
+    database host="db.local" port=5432 tls=#true {
+        pool size=15 timeout-ms=500
+    }
+    defaults "with-toggled" count=1 enabled=#true label="primary" mode="safe"
+    plugin "enabled" name="cache" priority=2 {
+        args "fast" "mem"
+    }
+    plugin name="legacy" priority=1 {
+        args "slow"
+    }
+    plugin "enabled" name="default" priority=1 {
+        args "std"
+    }
+    plugin "enabled" name="audit" priority=3 {
+        args "strict"
+    }
+    rule "alpha" kind="deny" {
+        cidrs "0.0.0.0/0"
+    }
+    rule "beta" kind="allow" {
+        cidrs "192.168.0.0/16"
+    }
+}

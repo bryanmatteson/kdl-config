@@ -9,3 +9,7 @@
 
 [dependencies]
     kdl.workspace = true
+
+[dev-dependencies]
+    kdl-config-derive.workspace = true
+    proptest                    = "1"

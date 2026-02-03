@@ -1,0 +1,5 @@
+error: expected integer literal for `positional`
+ --> tests/ui/positional_non_int.rs:5:30
+  |
+5 |     #[kdl(attr, positional = "x")]
+  |                              ^^^

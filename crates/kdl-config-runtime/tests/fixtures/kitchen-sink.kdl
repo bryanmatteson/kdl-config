@@ -1,0 +1,44 @@
+config "alpha" 2 flag-only off presence-only with-styled-flag no-optional-bool name="Alpha" explicit-keyed="explicit" renamed-field="renamed" value-only=#true ports=80 {
+    tags "core" "extra"
+    ports 443 8443
+    threshold 7
+    value-presence
+
+    database host="db.local" port=5432 tls=#true {
+        pool size=15 timeout-ms=500
+    }
+
+    +plugin name="cache" enabled priority=2 {
+        args "fast" "mem"
+    }
+    -plugin name="legacy" no-enabled {
+        args "slow"
+    }
+    !plugin name="default" enabled {
+        args "std"
+    }
+    plugin name="audit" enabled priority=3 {
+        args "strict"
+    }
+
+    rule "alpha" kind="allow" {
+        cidrs "10.0.0.0/8"
+    }
+    rule "alpha" kind="deny" {
+        cidrs "0.0.0.0/0"
+    }
+    rule "beta" kind="allow" {
+        cidrs "192.168.0.0/16"
+    }
+
+    defaults with-toggled mode="fast" {
+        count 1
+        label "primary"
+        enabled #true
+        mode "safe"
+    }
+
+    conflicts level="warn" {
+        level "info"
+    }
+}
