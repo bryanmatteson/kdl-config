@@ -1,0 +1,15 @@
+[workspace]
+    members  = ["crates/*"]
+    resolver = "2"
+
+[workspace.package]
+    version     = "0.1.0"
+    edition     = "2024"
+    authors     = ["Bryan"]
+    license     = "MIT"
+    repository  = "https://github.com/bryanmatteson/kdl-config"
+    description = "Strongly-typed configuration derived from KDL documents"
+
+[workspace.dependencies]
+    kdl                = "6.5.0"
+    kdl-config-runtime = { path = "crates/kdl-config-runtime", version = "0.1.0" }

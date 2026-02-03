@@ -1,0 +1,11 @@
+[package]
+    name                 = "kdl-config-runtime"
+    version.workspace    = true
+    edition.workspace    = true
+    authors.workspace    = true
+    license.workspace    = true
+    repository.workspace = true
+    description          = "Runtime library for kdl-config, providing trait definitions and parsing logic."
+
+[dependencies]
+    kdl.workspace = true
