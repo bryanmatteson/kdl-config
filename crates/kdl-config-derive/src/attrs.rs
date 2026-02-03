@@ -1,6 +1,8 @@
 use proc_macro2::{Span, TokenStream};
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, ExprLit, ExprUnary, Field, Ident, Lit, Path, Type, TypePath, UnOp};
+use syn::{
+    Attribute, Expr, ExprLit, ExprUnary, Field, Ident, Lit, LitStr, Path, Type, TypePath, UnOp,
+};
 
 #[derive(Debug, Default)]
 pub struct StructAttrs {
@@ -11,6 +13,7 @@ pub struct StructAttrs {
     pub default_flag_style: Option<FlagStyle>,
     pub default_conflict: Option<ConflictPolicy>,
     pub deny_unknown: Option<bool>,
+    pub schema: StructSchemaOverride,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +94,33 @@ pub struct FieldAttrs {
     pub flag_style: Option<FlagStyle>,
     pub conflict: Option<ConflictPolicy>,
     pub render: Option<RenderPlacement>,
+    pub scalar: bool,
+    pub schema: FieldSchemaOverride,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StructSchemaOverride {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub deny_unknown: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SchemaTypeOverride {
+    String,
+    Integer,
+    Float,
+    Boolean,
+    Null,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FieldSchemaOverride {
+    pub skip: bool,
+    pub name: Option<String>,
+    pub required: Option<bool>,
+    pub ty: Option<SchemaTypeOverride>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -266,11 +296,15 @@ pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
 
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("node") {
-                let value: Expr = meta.value()?.parse()?;
-                if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
-                    result.node_name = Some(lit.value());
-                } else {
-                    return Err(syn::Error::new(value.span(), "expected string literal for `node`"));
+                if meta.input.peek(syn::Token![=]) {
+                    let value: Expr = meta.value()?.parse()?;
+                    if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                        result.node_name = Some(lit.value());
+                    } else {
+                        return Err(syn::Error::new(value.span(), "expected string literal for `node`"));
+                    }
+                } else if !meta.input.is_empty() {
+                    meta.parse_nested_meta(|_| Ok(()))?;
                 }
             } else if meta.path.is_ident("rename_all") {
                 let value: Expr = meta.value()?.parse()?;
@@ -351,6 +385,92 @@ pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
                 }
             } else if meta.path.is_ident("deny_unknown") {
                 result.deny_unknown = Some(true);
+            } else if meta.path.is_ident("schema") {
+                if meta.input.peek(syn::Token![=]) {
+                    let _: Expr = meta.value()?.parse()?;
+                    return Ok(());
+                }
+                if meta.input.is_empty() {
+                    return Ok(());
+                }
+                meta.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("name") || meta.path.is_ident("rename") {
+                        let value: Expr = meta.value()?.parse()?;
+                        if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                            if result.schema.name.is_some() {
+                                return Err(syn::Error::new(
+                                    lit.span(),
+                                    "schema name override already set",
+                                ));
+                            }
+                            result.schema.name = Some(lit.value());
+                        } else {
+                            return Err(syn::Error::new(
+                                value.span(),
+                                "expected string literal for `schema(name = ...)`",
+                            ));
+                        }
+                    } else if meta.path.is_ident("description") || meta.path.is_ident("desc") {
+                        let value: Expr = meta.value()?.parse()?;
+                        if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                            if result.schema.description.is_some() {
+                                return Err(syn::Error::new(
+                                    lit.span(),
+                                    "schema description override already set",
+                                ));
+                            }
+                            result.schema.description = Some(lit.value());
+                        } else {
+                            return Err(syn::Error::new(
+                                value.span(),
+                                "expected string literal for `schema(description = ...)`",
+                            ));
+                        }
+                    } else if meta.path.is_ident("deny_unknown") {
+                        let value = if meta.input.peek(syn::Token![=]) {
+                            let lit: syn::LitBool = meta.value()?.parse()?;
+                            lit.value()
+                        } else {
+                            true
+                        };
+                        if result.schema.deny_unknown.is_some() {
+                            return Err(syn::Error::new(
+                                meta.path.span(),
+                                "schema deny_unknown override already set",
+                            ));
+                        }
+                        result.schema.deny_unknown = Some(value);
+                    } else if meta.path.is_ident("allow_unknown") {
+                        let value = if meta.input.peek(syn::Token![=]) {
+                            let lit: syn::LitBool = meta.value()?.parse()?;
+                            lit.value()
+                        } else {
+                            true
+                        };
+                        if result.schema.deny_unknown.is_some() {
+                            return Err(syn::Error::new(
+                                meta.path.span(),
+                                "schema deny_unknown override already set",
+                            ));
+                        }
+                        result.schema.deny_unknown = Some(!value);
+                    } else {
+                        return Err(syn::Error::new(
+                            meta.path.span(),
+                            format!(
+                                "unknown schema override: {}",
+                                path_to_string(&meta.path)
+                            ),
+                        ));
+                    }
+                    Ok(())
+                })?;
+            } else if meta.path.is_ident("choice") || meta.path.is_ident("value") {
+                if meta.input.peek(syn::Token![=]) {
+                    let _: Expr = meta.value()?.parse()?;
+                } else if !meta.input.is_empty() {
+                    meta.parse_nested_meta(|_| Ok(()))?;
+                }
             } else {
                 return Err(syn::Error::new(meta.path.span(), format!("unknown struct attribute: {}", path_to_string(&meta.path))));
             }
@@ -375,6 +495,8 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
     let mut flag_style: Option<FlagStyle> = None;
     let mut conflict: Option<ConflictPolicy> = None;
     let mut render: Option<RenderPlacement> = None;
+    let mut scalar = false;
+    let mut schema: FieldSchemaOverride = FieldSchemaOverride::default();
     let mut primary_span = field.span();
 
     let mut has_kdl_attr = false;
@@ -658,6 +780,112 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                         "expected string literal for `render`",
                     ));
                 }
+            } else if meta.path.is_ident("scalar") || meta.path.is_ident("value_type") {
+                let value = if meta.input.peek(syn::Token![=]) {
+                    let lit: syn::LitBool = meta.value()?.parse()?;
+                    lit.value()
+                } else {
+                    true
+                };
+                scalar = value;
+            } else if meta.path.is_ident("schema") {
+                if meta.input.peek(syn::Token![=]) {
+                    let _: Expr = meta.value()?.parse()?;
+                    return Ok(());
+                }
+                if meta.input.is_empty() {
+                    return Ok(());
+                }
+                meta.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("skip") {
+                        schema.skip = true;
+                    } else if meta.path.is_ident("name") || meta.path.is_ident("rename") {
+                        let value: Expr = meta.value()?.parse()?;
+                        if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                            if schema.name.is_some() {
+                                return Err(syn::Error::new(
+                                    lit.span(),
+                                    "schema name override already set",
+                                ));
+                            }
+                            schema.name = Some(lit.value());
+                        } else {
+                            return Err(syn::Error::new(
+                                value.span(),
+                                "expected string literal for `schema(name = ...)`",
+                            ));
+                        }
+                    } else if meta.path.is_ident("type") {
+                        let value: Expr = meta.value()?.parse()?;
+                        if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                            if schema.ty.is_some() {
+                                return Err(syn::Error::new(
+                                    lit.span(),
+                                    "schema type override already set",
+                                ));
+                            }
+                            schema.ty = Some(parse_schema_type(&lit)?);
+                        } else {
+                            return Err(syn::Error::new(
+                                value.span(),
+                                "expected string literal for `schema(type = ...)`",
+                            ));
+                        }
+                    } else if meta.path.is_ident("required") {
+                        let value = if meta.input.peek(syn::Token![=]) {
+                            let lit: syn::LitBool = meta.value()?.parse()?;
+                            lit.value()
+                        } else {
+                            true
+                        };
+                        if schema.required.is_some() {
+                            return Err(syn::Error::new(
+                                meta.path.span(),
+                                "schema required override already set",
+                            ));
+                        }
+                        schema.required = Some(value);
+                    } else if meta.path.is_ident("optional") {
+                        let value = if meta.input.peek(syn::Token![=]) {
+                            let lit: syn::LitBool = meta.value()?.parse()?;
+                            lit.value()
+                        } else {
+                            true
+                        };
+                        if schema.required.is_some() {
+                            return Err(syn::Error::new(
+                                meta.path.span(),
+                                "schema required override already set",
+                            ));
+                        }
+                        schema.required = Some(!value);
+                    } else if meta.path.is_ident("description") || meta.path.is_ident("desc") {
+                        let value: Expr = meta.value()?.parse()?;
+                        if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                            if schema.description.is_some() {
+                                return Err(syn::Error::new(
+                                    lit.span(),
+                                    "schema description override already set",
+                                ));
+                            }
+                            schema.description = Some(lit.value());
+                        } else {
+                            return Err(syn::Error::new(
+                                value.span(),
+                                "expected string literal for `schema(description = ...)`",
+                            ));
+                        }
+                    } else {
+                        return Err(syn::Error::new(
+                            meta.path.span(),
+                            format!(
+                                "unknown schema override: {}",
+                                path_to_string(&meta.path)
+                            ),
+                        ));
+                    }
+                    Ok(())
+                })?;
             } else {
                 return Err(syn::Error::new(
                     meta.path.span(),
@@ -690,6 +918,8 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
             flag_style,
             conflict,
             render,
+            scalar,
+            schema: schema.clone(),
         }));
     }
 
@@ -707,6 +937,8 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
         flag_style,
         conflict,
         render,
+        scalar,
+        schema,
     }))
 }
 
@@ -751,6 +983,23 @@ fn parse_negated_default_literal(lit: &Lit) -> syn::Result<DefaultLiteral> {
         _ => Err(syn::Error::new(
             lit.span(),
             "default value must be a numeric literal",
+        )),
+    }
+}
+
+fn parse_schema_type(lit: &LitStr) -> syn::Result<SchemaTypeOverride> {
+    match lit.value().as_str() {
+        "string" => Ok(SchemaTypeOverride::String),
+        "integer" | "int" => Ok(SchemaTypeOverride::Integer),
+        "float" => Ok(SchemaTypeOverride::Float),
+        "number" => Ok(SchemaTypeOverride::Float),
+        "boolean" | "bool" => Ok(SchemaTypeOverride::Boolean),
+        "null" => Ok(SchemaTypeOverride::Null),
+        other => Err(syn::Error::new(
+            lit.span(),
+            format!(
+                "unknown schema type override: '{other}'. expected string, integer, float, boolean, or null"
+            ),
         )),
     }
 }
@@ -952,6 +1201,7 @@ pub struct FieldInfo {
     pub is_hashmap: bool,
     pub is_bool: bool,
     pub is_modifier: bool,
+    pub is_scalar: bool,
     pub is_skipped: bool,
     pub default: Option<DefaultSpec>,
     pub skip_serializing_if: Option<String>,
@@ -961,6 +1211,7 @@ pub struct FieldInfo {
     pub render: Option<RenderPlacement>,
     pub container: Option<String>,
     pub registry_key: Option<RegistryKey>,
+    pub schema: FieldSchemaOverride,
 }
 
 impl FieldInfo {
@@ -996,7 +1247,8 @@ impl FieldInfo {
                 && extract_inner_type(&field.ty)
                     .map(is_modifier_type)
                     .unwrap_or(false));
-        let is_value = is_value_type(&field.ty);
+        let is_scalar = attrs.scalar;
+        let is_value = is_value_type(&field.ty) || (is_scalar && !is_vec && !is_option_vec);
         let vec_inner = if is_option_vec {
             extract_inner_type(&field.ty).and_then(extract_inner_type)
         } else if is_vec {
@@ -1004,7 +1256,8 @@ impl FieldInfo {
         } else {
             None
         };
-        let is_vec_value = vec_inner.map(is_value_type).unwrap_or(false);
+        let is_vec_value =
+            vec_inner.map(is_value_type).unwrap_or(false) || (is_scalar && (is_vec || is_option_vec));
         let is_value_like = is_value || is_vec_value;
 
         let required = match attrs.required {
@@ -1022,6 +1275,13 @@ impl FieldInfo {
         let err_span = attrs.span;
 
         let is_registry_vec = extract_registry_vec_value(&field.ty).is_some();
+
+        if attrs.schema.ty.is_some() && !is_value_like {
+            return Err(syn::Error::new(
+                err_span,
+                "schema(type = ...) is only valid for scalar value fields",
+            ));
+        }
 
         if attrs.placement.modifier {
             if !is_modifier {
@@ -1128,6 +1388,7 @@ impl FieldInfo {
             is_hashmap,
             is_bool,
             is_modifier,
+            is_scalar,
             is_skipped: attrs.skip,
             default: attrs.default,
             skip_serializing_if: attrs.skip_serializing_if,
@@ -1137,6 +1398,7 @@ impl FieldInfo {
             render: attrs.render,
             container: attrs.container,
             registry_key: attrs.registry_key,
+            schema: attrs.schema,
         }))
     }
 
@@ -1196,6 +1458,7 @@ impl FieldInfo {
                 && extract_inner_type(&field.ty)
                     .map(is_modifier_type)
                     .unwrap_or(false));
+        let is_scalar = attrs.scalar;
 
         if is_vec || is_option_vec {
             return Err(syn::Error::new(
@@ -1211,7 +1474,7 @@ impl FieldInfo {
             ));
         }
 
-        if !is_value_type(&field.ty) {
+        if !is_value_type(&field.ty) && !is_scalar {
             return Err(syn::Error::new(
                 err_span,
                 "tuple struct positional fields must be scalar value types",
@@ -1257,6 +1520,7 @@ impl FieldInfo {
             is_hashmap,
             is_bool,
             is_modifier,
+            is_scalar,
             is_skipped: attrs.skip,
             default: attrs.default,
             skip_serializing_if: attrs.skip_serializing_if,
@@ -1266,6 +1530,7 @@ impl FieldInfo {
             render: attrs.render,
             container: None,
             registry_key: None,
+            schema: attrs.schema,
         }))
     }
 }

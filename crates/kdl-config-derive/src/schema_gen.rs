@@ -5,8 +5,9 @@ use syn::{Attribute, DataEnum, DeriveInput, Expr, ExprLit, ExprUnary, Fields, Li
 
 use crate::attrs::{
     BoolMode, ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle, StructAttrs,
-    extract_hashmap_types, extract_inner_type, extract_registry_vec_value, is_bool_type,
-    is_numeric_type, is_option_type, is_string_type, parse_struct_attrs,
+    SchemaTypeOverride, extract_hashmap_types, extract_inner_type, extract_registry_vec_value,
+    is_bool_type, is_numeric_type, is_option_type, is_string_type, parse_field_attrs,
+    parse_struct_attrs,
 };
 
 pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -20,18 +21,20 @@ pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
                 syn::Fields::Named(named) => {
                     for field in &named.named {
                         if let Some(info) = FieldInfo::from_field(field, struct_attrs.rename_all)? {
-                            if !info.is_skipped {
-                                field_infos.push(info);
+                            if info.is_skipped || info.schema.skip {
+                                continue;
                             }
+                            field_infos.push(info);
                         }
                     }
                 }
                 syn::Fields::Unnamed(unnamed) => {
                     for (index, field) in unnamed.unnamed.iter().enumerate() {
                         if let Some(info) = FieldInfo::from_tuple_field(field, index)? {
-                            if !info.is_skipped {
-                                field_infos.push(info);
+                            if info.is_skipped || info.schema.skip {
+                                continue;
                             }
+                            field_infos.push(info);
                         }
                     }
                 }
@@ -81,10 +84,7 @@ pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
             })
         }
         syn::Data::Enum(data) => generate_schema_enum_impl(input, data, &struct_attrs),
-        _ => Err(syn::Error::new_spanned(
-            struct_name,
-            "KdlSchema only supports named structs or enums for now",
-        )),
+        syn::Data::Union(data) => generate_schema_union_impl(input, data, &struct_attrs),
     }
 }
 
@@ -124,13 +124,13 @@ fn field_kind(field: &FieldInfo) -> SchemaFieldKind {
         } else {
             field.inner_type()
         };
-        let is_value = inner.map(is_value_type).unwrap_or(false);
+        let is_value = inner.map(is_value_type).unwrap_or(false) || field.is_scalar;
         if is_value {
             SchemaFieldKind::Value
         } else {
             SchemaFieldKind::Node
         }
-    } else if is_value_type(&field.ty) {
+    } else if is_value_type(&field.ty) || field.is_scalar {
         SchemaFieldKind::Value
     } else {
         SchemaFieldKind::Node
@@ -190,6 +190,33 @@ fn schema_type_expr(ty: &Type) -> TokenStream {
     }}
 }
 
+fn schema_type_override_expr(override_ty: &SchemaTypeOverride) -> TokenStream {
+    match override_ty {
+        SchemaTypeOverride::String => quote! { ::kdl_config_runtime::schema::SchemaType::String },
+        SchemaTypeOverride::Integer => quote! { ::kdl_config_runtime::schema::SchemaType::Integer },
+        SchemaTypeOverride::Float => quote! { ::kdl_config_runtime::schema::SchemaType::Float },
+        SchemaTypeOverride::Boolean => quote! { ::kdl_config_runtime::schema::SchemaType::Boolean },
+        SchemaTypeOverride::Null => quote! { ::kdl_config_runtime::schema::SchemaType::Null },
+    }
+}
+
+fn schema_type_expr_with_override(
+    ty: &Type,
+    override_ty: Option<&SchemaTypeOverride>,
+) -> TokenStream {
+    match override_ty {
+        Some(override_ty) => schema_type_override_expr(override_ty),
+        None => schema_type_expr(ty),
+    }
+}
+
+fn schema_desc_expr(desc: Option<&String>) -> TokenStream {
+    match desc {
+        Some(desc) => quote! { Some(#desc.to_string()) },
+        None => quote! { None },
+    }
+}
+
 fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> SchemaParts {
     let mut prop_inserts = Vec::new();
     let mut value_entries: Vec<(usize, TokenStream)> = Vec::new();
@@ -214,15 +241,15 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         .clone()
         .unwrap_or(ConflictPolicy::Error);
 
-    let prop_insert = |ty: &Type,
+    let prop_insert = |type_expr: TokenStream,
                        kdl_key: &str,
                        variadic: bool,
                        required: bool,
                        bool_mode: TokenStream,
                        flag_style: TokenStream,
-                       conflict: TokenStream|
+                       conflict: TokenStream,
+                       description: TokenStream|
      -> TokenStream {
-        let type_expr = schema_type_expr(ty);
         quote! {
             let type_spec = #type_expr;
             let type_spec = if #variadic {
@@ -236,28 +263,31 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 bool_mode: #bool_mode,
                 flag_style: #flag_style,
                 conflict: #conflict,
+                description: #description,
             });
         }
     };
 
-    let value_insert = |ty: &Type, required: bool| -> TokenStream {
-        let type_expr = schema_type_expr(ty);
+    let value_insert =
+        |type_expr: TokenStream, required: bool, description: TokenStream| -> TokenStream {
         quote! {
             let type_spec = #type_expr;
             schema.values.push(::kdl_config_runtime::schema::SchemaValue {
                 ty: type_spec,
                 required: #required,
+                description: #description,
+                enum_values: None,
             });
         }
     };
 
-    let value_child_insert = |ty: &Type,
+    let value_child_insert = |type_expr: TokenStream,
                               kdl_key: &str,
                               variadic: bool,
                               required: bool,
-                              bool_mode: TokenStream|
+                              bool_mode: TokenStream,
+                              description: TokenStream|
      -> TokenStream {
-        let type_expr = schema_type_expr(ty);
         quote! {
             let type_spec = #type_expr;
             let type_spec = if #variadic {
@@ -267,7 +297,13 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             };
             let mut node_schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
             node_schema.name = Some(#kdl_key.to_string());
-            node_schema.values.push(::kdl_config_runtime::schema::SchemaValue { ty: type_spec, required: #required });
+            node_schema.description = #description;
+            node_schema.values.push(::kdl_config_runtime::schema::SchemaValue {
+                ty: type_spec,
+                required: #required,
+                description: None,
+                enum_values: None,
+            });
             node_schema.required = Some(#required);
             if let Some(bool_mode) = #bool_mode {
                 node_schema.defaults.bool_mode = Some(bool_mode);
@@ -282,11 +318,16 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         }
     };
 
-    let node_child_insert = |ty: &Type, kdl_key: &str, required: bool| -> TokenStream {
+    let node_child_insert = |ty: &Type,
+                             kdl_key: &str,
+                             required: bool,
+                             description: TokenStream|
+     -> TokenStream {
         quote! {
             let schema_ref = <#ty as ::kdl_config_runtime::schema::KdlSchema>::schema_ref();
             let mut node_schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
             node_schema.name = Some(#kdl_key.to_string());
+            node_schema.description = #description;
             node_schema.required = Some(#required);
             match schema_ref {
                 ::kdl_config_runtime::schema::SchemaRef::Ref(r) => {
@@ -296,6 +337,13 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                     node_schema.props = s.props;
                     node_schema.values = s.values;
                     node_schema.children = s.children;
+                }
+                ::kdl_config_runtime::schema::SchemaRef::Choice(choices) => {
+                    node_schema.children = Some(::std::boxed::Box::new(
+                        ::kdl_config_runtime::schema::ChildrenSchema {
+                            nodes: vec![::kdl_config_runtime::schema::SchemaRef::Choice(choices)],
+                        },
+                    ));
                 }
             }
 
@@ -311,15 +359,19 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
     let registry_child_insert = |val_ty: &Type,
                                  container: &str,
                                  key_schema: Option<TokenStream>,
-                                 required: bool|
+                                 required: bool,
+                                 description: TokenStream|
      -> TokenStream {
         quote! {
             let schema_ref = <#val_ty as ::kdl_config_runtime::schema::KdlSchema>::schema_ref();
             let mut node_schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
             node_schema.name = Some(#container.to_string());
+            node_schema.description = #description;
             node_schema.values.push(::kdl_config_runtime::schema::SchemaValue {
                 ty: ::kdl_config_runtime::schema::SchemaType::String,
                 required: #required,
+                description: None,
+                enum_values: None,
             });
             node_schema.required = Some(#required);
             if let Some(key_schema) = #key_schema {
@@ -334,6 +386,13 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 ::kdl_config_runtime::schema::SchemaRef::Ref(r) => {
                     node_schema.ref_type = Some(r);
                 }
+                ::kdl_config_runtime::schema::SchemaRef::Choice(choices) => {
+                    node_schema.children = Some(::std::boxed::Box::new(
+                        ::kdl_config_runtime::schema::ChildrenSchema {
+                            nodes: vec![::kdl_config_runtime::schema::SchemaRef::Choice(choices)],
+                        },
+                    ));
+                }
             }
 
             if children_nodes.is_none() {
@@ -346,10 +405,10 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
     };
 
     for field in fields {
-        if field.is_modifier || field.is_skipped {
+        if field.is_modifier || field.is_skipped || field.schema.skip {
             continue;
         }
-        let required = field.required;
+        let required = field.schema.required.unwrap_or(field.required);
         let bool_mode = field
             .bool_mode
             .clone()
@@ -395,14 +454,30 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         };
 
         let ty = &field.ty;
-        let kdl_key = &field.kdl_key;
+        let kdl_key = field
+            .schema
+            .name
+            .clone()
+            .unwrap_or_else(|| field.kdl_key.clone());
+        let desc_expr = schema_desc_expr(field.schema.description.as_ref());
+        let type_expr = if field.is_scalar && field.schema.ty.is_none() {
+            quote! { ::kdl_config_runtime::schema::SchemaType::String }
+        } else {
+            schema_type_expr_with_override(ty, field.schema.ty.as_ref())
+        };
 
-        register_calls.push(quote! {
-            <#ty as ::kdl_config_runtime::schema::KdlSchema>::register_definitions(registry);
-        });
+        if field.schema.ty.is_none() && !field.is_scalar {
+            register_calls.push(quote! {
+                <#ty as ::kdl_config_runtime::schema::KdlSchema>::register_definitions(registry);
+            });
+        }
 
         if field.placement.registry {
-            let container = field.container.clone().unwrap_or_else(|| kdl_key.clone());
+            let container = if field.schema.name.is_some() {
+                kdl_key.clone()
+            } else {
+                field.container.clone().unwrap_or_else(|| kdl_key.clone())
+            };
             let val_ty = registry_value_type(field).expect(
                 "registry placement requires HashMap<String, V> or Vec<(String, V)> field type",
             );
@@ -411,7 +486,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 field.registry_key.as_ref().unwrap_or(&default_key),
             ));
             child_inserts.push(registry_child_insert(
-                val_ty, &container, key_schema, required,
+                val_ty, &container, key_schema, required, desc_expr.clone(),
             ));
             continue;
         }
@@ -427,38 +502,53 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             if field.placement.attr || field.placement.keyed {
                 let variadic = field.is_vec || field.is_option_vec;
                 prop_inserts.push(prop_insert(
-                    ty,
-                    kdl_key,
+                    type_expr.clone(),
+                    &kdl_key,
                     variadic,
                     required,
                     bool_mode_expr.clone(),
                     flag_style_expr.clone(),
                     conflict_expr.clone(),
+                    desc_expr.clone(),
                 ));
             }
             if let Some(index) = field.placement.positional {
-                value_entries.push((index, value_insert(ty, required)));
+                value_entries.push((
+                    index,
+                    value_insert(type_expr.clone(), required, desc_expr.clone()),
+                ));
             }
             if field.placement.value {
                 match field_kind(field) {
                     SchemaFieldKind::Value => {
                         let variadic = field.is_vec || field.is_option_vec;
                         child_inserts.push(value_child_insert(
-                            ty,
-                            kdl_key,
+                            type_expr.clone(),
+                            &kdl_key,
                             variadic,
                             required,
                             bool_mode_expr.clone(),
+                            desc_expr.clone(),
                         ));
                     }
                     SchemaFieldKind::Node => {
-                        child_inserts.push(node_child_insert(ty, kdl_key, required))
+                        child_inserts.push(node_child_insert(
+                            ty,
+                            &kdl_key,
+                            required,
+                            desc_expr.clone(),
+                        ))
                     }
                     SchemaFieldKind::Registry | SchemaFieldKind::Modifier => {}
                 }
             }
             if field.placement.child || field.placement.children {
-                child_inserts.push(node_child_insert(ty, kdl_key, required));
+                child_inserts.push(node_child_insert(
+                    ty,
+                    &kdl_key,
+                    required,
+                    desc_expr.clone(),
+                ));
             }
         } else {
             match field_kind(field) {
@@ -466,49 +556,58 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                     DefaultPlacement::Exhaustive => {
                         let variadic = field.is_vec || field.is_option_vec;
                         prop_inserts.push(prop_insert(
-                            ty,
-                            kdl_key,
+                            type_expr.clone(),
+                            &kdl_key,
                             variadic,
                             required,
                             bool_mode_expr.clone(),
                             flag_style_expr.clone(),
                             conflict_expr.clone(),
+                            desc_expr.clone(),
                         ));
                         let variadic = field.is_vec || field.is_option_vec;
                         child_inserts.push(value_child_insert(
-                            ty,
-                            kdl_key,
+                            type_expr.clone(),
+                            &kdl_key,
                             variadic,
                             required,
                             bool_mode_expr.clone(),
+                            desc_expr.clone(),
                         ));
                     }
                     DefaultPlacement::Attr => {
                         let variadic = field.is_vec || field.is_option_vec;
                         prop_inserts.push(prop_insert(
-                            ty,
-                            kdl_key,
+                            type_expr.clone(),
+                            &kdl_key,
                             variadic,
                             required,
                             bool_mode_expr.clone(),
                             flag_style_expr.clone(),
                             conflict_expr.clone(),
+                            desc_expr.clone(),
                         ));
                     }
                     DefaultPlacement::Value | DefaultPlacement::Child => {
                         let variadic = field.is_vec || field.is_option_vec;
                         child_inserts.push(value_child_insert(
-                            ty,
-                            kdl_key,
+                            type_expr.clone(),
+                            &kdl_key,
                             variadic,
                             required,
                             bool_mode_expr.clone(),
+                            desc_expr.clone(),
                         ));
                     }
                 },
                 SchemaFieldKind::Node => match default_placement {
                     DefaultPlacement::Exhaustive | DefaultPlacement::Child => {
-                        child_inserts.push(node_child_insert(ty, kdl_key, required));
+                        child_inserts.push(node_child_insert(
+                            ty,
+                            &kdl_key,
+                            required,
+                            desc_expr.clone(),
+                        ));
                     }
                     DefaultPlacement::Attr | DefaultPlacement::Value => {}
                 },
@@ -525,6 +624,20 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         value_entries,
         child_inserts,
     }
+}
+
+fn collect_schema_parts_with_offset(
+    fields: &[FieldInfo],
+    struct_attrs: &StructAttrs,
+    value_offset: usize,
+) -> SchemaParts {
+    let mut parts = collect_schema_parts(fields, struct_attrs);
+    if value_offset > 0 {
+        for (idx, _) in parts.value_entries.iter_mut() {
+            *idx += value_offset;
+        }
+    }
+    parts
 }
 
 fn render_schema_parts(parts: &SchemaParts) -> TokenStream {
@@ -555,7 +668,12 @@ fn generate_schema_builder(
 ) -> TokenStream {
     let name_str = struct_name.to_string();
     let parts = collect_schema_parts(fields, struct_attrs);
-    let node_name_assign = if let Some(n) = &struct_attrs.node_name {
+    let node_name_assign = if let Some(n) = struct_attrs
+        .schema
+        .name
+        .as_ref()
+        .or(struct_attrs.node_name.as_ref())
+    {
         quote! { schema.name = Some(#n.to_string()); }
     } else {
         quote! {}
@@ -564,10 +682,12 @@ fn generate_schema_builder(
     let schema_body = render_schema_parts(&parts);
     let register_calls = parts.register_calls;
 
-    let deny_unknown = match struct_attrs.deny_unknown {
+    let deny_unknown = match struct_attrs.schema.deny_unknown.or(struct_attrs.deny_unknown) {
         Some(val) => quote! { Some(#val) },
         None => quote! { Some(false) },
     };
+
+    let schema_description = schema_desc_expr(struct_attrs.schema.description.as_ref());
 
     let default_placement = match struct_attrs.default_placement {
         Some(DefaultPlacement::Exhaustive) => {
@@ -620,6 +740,7 @@ fn generate_schema_builder(
 
         let mut schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
         #node_name_assign
+        schema.description = #schema_description;
         schema.deny_unknown = #deny_unknown;
         schema.defaults.placement = #default_placement;
         schema.defaults.bool_mode = #default_bool;
@@ -738,6 +859,7 @@ enum VariantSchemaKind {
 
 struct VariantSchemaInfo {
     kind: VariantSchemaKind,
+    tag: VariantTag,
 }
 
 fn tag_schema_type(tags: &[VariantTag]) -> TagSchema {
@@ -786,6 +908,38 @@ fn tag_schema_expr(tags: &[VariantTag]) -> TokenStream {
         TagSchema::Integer => quote! { ::kdl_config_runtime::schema::SchemaType::Integer },
         TagSchema::Float => quote! { ::kdl_config_runtime::schema::SchemaType::Float },
         TagSchema::Boolean => quote! { ::kdl_config_runtime::schema::SchemaType::Boolean },
+    }
+}
+
+fn variant_tag_schema_expr(tag: &VariantTag) -> TokenStream {
+    match tag {
+        VariantTag::String(_) => quote! { ::kdl_config_runtime::schema::SchemaType::String },
+        VariantTag::Literal(LiteralTag::Int(_)) => {
+            quote! { ::kdl_config_runtime::schema::SchemaType::Integer }
+        }
+        VariantTag::Literal(LiteralTag::Float(_)) => {
+            quote! { ::kdl_config_runtime::schema::SchemaType::Float }
+        }
+        VariantTag::Literal(LiteralTag::Bool(_)) => {
+            quote! { ::kdl_config_runtime::schema::SchemaType::Boolean }
+        }
+    }
+}
+
+fn variant_tag_literal_expr(tag: &VariantTag) -> TokenStream {
+    match tag {
+        VariantTag::String(s) => {
+            quote! { ::kdl_config_runtime::schema::SchemaLiteral::String(#s.to_string()) }
+        }
+        VariantTag::Literal(LiteralTag::Int(n)) => {
+            quote! { ::kdl_config_runtime::schema::SchemaLiteral::Int(#n) }
+        }
+        VariantTag::Literal(LiteralTag::Float(f)) => {
+            quote! { ::kdl_config_runtime::schema::SchemaLiteral::Float(#f) }
+        }
+        VariantTag::Literal(LiteralTag::Bool(b)) => {
+            quote! { ::kdl_config_runtime::schema::SchemaLiteral::Bool(#b) }
+        }
     }
 }
 
@@ -851,9 +1005,10 @@ fn generate_schema_enum_impl(
                 let mut field_infos = Vec::new();
                 for field in &fields.named {
                     if let Some(info) = FieldInfo::from_field(field, struct_attrs.rename_all)? {
-                        if !info.is_skipped {
-                            field_infos.push(info);
+                        if info.is_skipped || info.schema.skip {
+                            continue;
                         }
+                        field_infos.push(info);
                     }
                 }
                 if field_infos.iter().filter(|info| info.is_modifier).count() > 1 {
@@ -869,12 +1024,21 @@ fn generate_schema_enum_impl(
         };
 
         tag_values.push(tag.clone());
-        variants.push(VariantSchemaInfo { kind });
+        variants.push(VariantSchemaInfo { kind, tag });
     }
 
     let tag_value_expr = tag_schema_expr(&tag_values);
+    let enum_literals: Vec<TokenStream> = tag_values
+        .iter()
+        .map(variant_tag_literal_expr)
+        .collect();
 
-    let node_name_assign = if let Some(n) = &struct_attrs.node_name {
+    let node_name_assign = if let Some(n) = struct_attrs
+        .schema
+        .name
+        .as_ref()
+        .or(struct_attrs.node_name.as_ref())
+    {
         quote! { enum_schema.name = Some(#n.to_string()); }
     } else {
         quote! {}
@@ -904,10 +1068,12 @@ fn generate_schema_enum_impl(
         })
         .collect();
 
-    let deny_unknown = match struct_attrs.deny_unknown {
+    let deny_unknown = match struct_attrs.schema.deny_unknown.or(struct_attrs.deny_unknown) {
         Some(val) => quote! { Some(#val) },
         None => quote! { Some(false) },
     };
+
+    let schema_description = schema_desc_expr(struct_attrs.schema.description.as_ref());
 
     let default_placement = match struct_attrs.default_placement {
         Some(DefaultPlacement::Exhaustive) => {
@@ -955,6 +1121,151 @@ fn generate_schema_enum_impl(
         None => quote! { Some(::kdl_config_runtime::ConflictPolicy::Error) },
     };
 
+    let variant_name_assign = if let Some(n) = struct_attrs
+        .schema
+        .name
+        .as_ref()
+        .or(struct_attrs.node_name.as_ref())
+    {
+        quote! { schema.name = Some(#n.to_string()); }
+    } else {
+        quote! {}
+    };
+
+    let variant_nodes: Vec<TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let tag_expr = variant_tag_schema_expr(&variant.tag);
+            let tag_literal = variant_tag_literal_expr(&variant.tag);
+            match &variant.kind {
+                VariantSchemaKind::Unit => {
+                    quote! {
+                        {
+                            let mut schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
+                            #variant_name_assign
+                            schema.deny_unknown = #deny_unknown;
+                            schema.defaults.placement = #default_placement;
+                            schema.defaults.bool_mode = #default_bool;
+                            schema.defaults.flag_style = #default_flag_style;
+                            schema.defaults.conflict = #default_conflict;
+                            schema.values.push(::kdl_config_runtime::schema::SchemaValue {
+                                ty: #tag_expr,
+                                required: true,
+                                description: None,
+                                enum_values: Some(vec![#tag_literal]),
+                            });
+                            ::kdl_config_runtime::schema::SchemaRef::Inline(schema)
+                        }
+                    }
+                }
+                VariantSchemaKind::Newtype(ty) => {
+                    quote! {
+                        {
+                            let schema_ref = <#ty as ::kdl_config_runtime::schema::KdlSchema>::schema_ref();
+                            let mut schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
+                            #variant_name_assign
+                            schema.deny_unknown = #deny_unknown;
+                            schema.defaults.placement = #default_placement;
+                            schema.defaults.bool_mode = #default_bool;
+                            schema.defaults.flag_style = #default_flag_style;
+                            schema.defaults.conflict = #default_conflict;
+                            schema.values.push(::kdl_config_runtime::schema::SchemaValue {
+                                ty: #tag_expr,
+                                required: true,
+                                description: None,
+                                enum_values: Some(vec![#tag_literal]),
+                            });
+                            match schema_ref {
+                                ::kdl_config_runtime::schema::SchemaRef::Ref(r) => {
+                                    schema.ref_type = Some(r);
+                                }
+                                ::kdl_config_runtime::schema::SchemaRef::Inline(s) => {
+                                    schema.props = s.props;
+                                    schema.values.extend(s.values);
+                                    schema.children = s.children;
+                                    schema.registry_key = s.registry_key;
+                                }
+                                ::kdl_config_runtime::schema::SchemaRef::Choice(choices) => {
+                                    schema.children = Some(::std::boxed::Box::new(
+                                        ::kdl_config_runtime::schema::ChildrenSchema {
+                                            nodes: vec![::kdl_config_runtime::schema::SchemaRef::Choice(choices)],
+                                        },
+                                    ));
+                                }
+                            }
+                            ::kdl_config_runtime::schema::SchemaRef::Inline(schema)
+                        }
+                    }
+                }
+                VariantSchemaKind::Tuple(types) => {
+                    let value_inserts: Vec<TokenStream> = types
+                        .iter()
+                        .map(|ty| {
+                            let is_option = is_option_type(ty);
+                            let value_ty = if is_option {
+                                extract_inner_type(ty).unwrap_or(ty)
+                            } else {
+                                ty
+                            };
+                            let required = !is_option;
+                            let type_expr = schema_type_expr(value_ty);
+                            quote! {
+                                schema.values.push(::kdl_config_runtime::schema::SchemaValue {
+                                    ty: #type_expr,
+                                    required: #required,
+                                    description: None,
+                                    enum_values: None,
+                                });
+                            }
+                        })
+                        .collect();
+                    quote! {
+                        {
+                            let mut schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
+                            #variant_name_assign
+                            schema.deny_unknown = #deny_unknown;
+                            schema.defaults.placement = #default_placement;
+                            schema.defaults.bool_mode = #default_bool;
+                            schema.defaults.flag_style = #default_flag_style;
+                            schema.defaults.conflict = #default_conflict;
+                            schema.values.push(::kdl_config_runtime::schema::SchemaValue {
+                                ty: #tag_expr,
+                                required: true,
+                                description: None,
+                                enum_values: Some(vec![#tag_literal]),
+                            });
+                            #(#value_inserts)*
+                            ::kdl_config_runtime::schema::SchemaRef::Inline(schema)
+                        }
+                    }
+                }
+                VariantSchemaKind::Struct { fields } => {
+                    let parts = collect_schema_parts_with_offset(fields, struct_attrs, 1);
+                    let schema_body = render_schema_parts(&parts);
+                    quote! {
+                        {
+                            let mut schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
+                            #variant_name_assign
+                            schema.deny_unknown = #deny_unknown;
+                            schema.defaults.placement = #default_placement;
+                            schema.defaults.bool_mode = #default_bool;
+                            schema.defaults.flag_style = #default_flag_style;
+                            schema.defaults.conflict = #default_conflict;
+                            schema.values.push(::kdl_config_runtime::schema::SchemaValue {
+                                ty: #tag_expr,
+                                required: true,
+                                description: None,
+                                enum_values: Some(vec![#tag_literal]),
+                            });
+                            #schema_body
+                            ::kdl_config_runtime::schema::SchemaRef::Inline(schema)
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
     Ok(quote! {
         impl ::kdl_config_runtime::schema::KdlSchema for #enum_name {
             fn schema_ref() -> ::kdl_config_runtime::schema::SchemaRef {
@@ -971,16 +1282,160 @@ fn generate_schema_enum_impl(
 
                 let mut enum_schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
                 #node_name_assign
+                enum_schema.description = #schema_description;
                 enum_schema.deny_unknown = #deny_unknown;
                 enum_schema.defaults.placement = #default_placement;
                 enum_schema.defaults.bool_mode = #default_bool;
                 enum_schema.defaults.flag_style = #default_flag_style;
                 enum_schema.defaults.conflict = #default_conflict;
-                enum_schema.values.push(::kdl_config_runtime::schema::SchemaValue { ty: #tag_value_expr, required: true });
+                enum_schema.values.push(::kdl_config_runtime::schema::SchemaValue {
+                    ty: #tag_value_expr,
+                    required: true,
+                    description: None,
+                    enum_values: Some(vec![#(#enum_literals),*]),
+                });
+                enum_schema.variants = Some(vec![#(#variant_nodes),*]);
 
                 #(#variant_registers)*
 
                 registry.definitions.insert(name, enum_schema);
+            }
+        }
+    })
+}
+
+fn generate_schema_union_impl(
+    input: &DeriveInput,
+    data: &syn::DataUnion,
+    struct_attrs: &StructAttrs,
+) -> syn::Result<TokenStream> {
+    let union_name = &input.ident;
+
+    let mut choices = Vec::new();
+    let mut register_calls = Vec::new();
+
+    for field in &data.fields.named {
+        let ident = field.ident.as_ref().ok_or_else(|| {
+            syn::Error::new(field.span(), "union fields must be named")
+        })?;
+        let attrs = parse_field_attrs(field)?;
+        let attrs = match attrs {
+            Some(attrs) => attrs,
+            None => continue,
+        };
+
+        if attrs.skip || attrs.schema.skip {
+            continue;
+        }
+
+        if attrs.schema.ty.is_some() && !is_value_type(&field.ty) && !attrs.scalar {
+            return Err(syn::Error::new(
+                field.span(),
+                "schema(type = ...) is only valid for scalar value fields",
+            ));
+        }
+
+        let base_name = attrs
+            .name
+            .unwrap_or_else(|| struct_attrs.rename_all.apply(&ident.to_string()));
+        let schema_name = attrs.schema.name.clone().unwrap_or(base_name);
+        let desc_expr = schema_desc_expr(attrs.schema.description.as_ref());
+        let required_assign = if let Some(required) = attrs.schema.required {
+            quote! { node_schema.required = Some(#required); }
+        } else {
+            quote! {}
+        };
+
+        let override_block = if let Some(override_ty) = attrs.schema.ty.as_ref() {
+            let override_expr = schema_type_override_expr(override_ty);
+            let required_value = attrs.schema.required.unwrap_or(true);
+            quote! {
+                let override_ty = #override_expr;
+                if node_schema.values.is_empty() {
+                    node_schema.values.push(::kdl_config_runtime::schema::SchemaValue {
+                        ty: override_ty,
+                        required: #required_value,
+                        description: None,
+                        enum_values: None,
+                    });
+                } else {
+                    for value in &mut node_schema.values {
+                        value.ty = override_ty.clone();
+                    }
+                }
+            }
+        } else if attrs.scalar {
+            let required_value = attrs.schema.required.unwrap_or(true);
+            quote! {
+                if node_schema.values.is_empty() {
+                    node_schema.values.push(::kdl_config_runtime::schema::SchemaValue {
+                        ty: ::kdl_config_runtime::schema::SchemaType::String,
+                        required: #required_value,
+                        description: None,
+                        enum_values: None,
+                    });
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        let ty = &field.ty;
+        if !attrs.scalar && attrs.schema.ty.is_none() {
+            register_calls.push(quote! {
+                <#ty as ::kdl_config_runtime::schema::KdlSchema>::register_definitions(registry);
+            });
+        }
+
+        let schema_ref_block = if attrs.scalar {
+            quote! {}
+        } else {
+            quote! {
+                let schema_ref = <#ty as ::kdl_config_runtime::schema::KdlSchema>::schema_ref();
+                match schema_ref {
+                    ::kdl_config_runtime::schema::SchemaRef::Ref(r) => {
+                        node_schema.ref_type = Some(r);
+                    }
+                    ::kdl_config_runtime::schema::SchemaRef::Inline(s) => {
+                        node_schema.props = s.props;
+                        node_schema.values = s.values;
+                        node_schema.children = s.children;
+                        node_schema.registry_key = s.registry_key;
+                    }
+                    ::kdl_config_runtime::schema::SchemaRef::Choice(choices) => {
+                        node_schema.children = Some(::std::boxed::Box::new(
+                            ::kdl_config_runtime::schema::ChildrenSchema {
+                                nodes: vec![::kdl_config_runtime::schema::SchemaRef::Choice(choices)],
+                            },
+                        ));
+                    }
+                }
+            }
+        };
+
+        choices.push(quote! {
+            {
+                let mut node_schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
+                node_schema.name = Some(#schema_name.to_string());
+                node_schema.description = #desc_expr;
+                #required_assign
+                #schema_ref_block
+                #override_block
+                ::kdl_config_runtime::schema::SchemaRef::Inline(node_schema)
+            }
+        });
+    }
+
+    Ok(quote! {
+        impl ::kdl_config_runtime::schema::KdlSchema for #union_name {
+            fn schema_ref() -> ::kdl_config_runtime::schema::SchemaRef {
+                ::kdl_config_runtime::schema::SchemaRef::Choice(vec![
+                    #(#choices),*
+                ])
+            }
+
+            fn register_definitions(registry: &mut ::kdl_config_runtime::schema::SchemaRegistry) {
+                #(#register_calls)*
             }
         }
     })

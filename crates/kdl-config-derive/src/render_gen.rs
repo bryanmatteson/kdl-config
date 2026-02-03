@@ -159,13 +159,13 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
         } else {
             field.inner_type()
         };
-        let is_value = inner.map(is_value_type).unwrap_or(false);
+        let is_value = inner.map(is_value_type).unwrap_or(false) || field.is_scalar;
         if is_value {
             FieldKind::ValueVec
         } else {
             FieldKind::NodeVec
         }
-    } else if is_value_type(&field.ty) {
+    } else if is_value_type(&field.ty) || field.is_scalar {
         FieldKind::ValueScalar
     } else {
         FieldKind::Node
@@ -346,7 +346,12 @@ fn render_flag_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, accesso
                         ::kdl_config_runtime::BoolMode::ValueOnly => {
                             renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::Bool(*value)));
                         }
-                        _ => {
+                        ::kdl_config_runtime::BoolMode::PresenceOnly => {
+                            if *value {
+                                renderer.flag(#pos_flag_lit);
+                            }
+                        }
+                        ::kdl_config_runtime::BoolMode::PresenceAndValue => {
                             if *value {
                                 renderer.flag(#pos_flag_lit);
                             } else {

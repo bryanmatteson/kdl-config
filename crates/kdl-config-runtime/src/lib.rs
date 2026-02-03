@@ -5,6 +5,7 @@ pub mod convert;
 pub mod error;
 pub mod helpers;
 pub mod parse;
+pub mod round_trip;
 pub mod render;
 pub mod schema;
 pub mod types;
@@ -16,6 +17,7 @@ pub use config::{
 pub use convert::{FromKdlValue, convert_value, convert_value_checked};
 pub use error::{ErrorKind, KdlConfigError, Placement};
 pub use parse::parse_config;
+pub use round_trip::{parse_str_roundtrip, parse_str_with_config_roundtrip, RoundTrip, RoundTripMut};
 pub use render::{
     NodeRenderer, escape_string, insert_arg, is_valid_identifier, render_key, render_key_with_repr,
     render_value,

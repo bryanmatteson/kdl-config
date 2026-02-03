@@ -178,7 +178,7 @@ impl NodeRenderer {
 
         for flag in &self.flags {
             result.push(' ');
-            result.push_str(&escape_string(flag));
+            result.push_str(&render_key(flag));
         }
 
         let mut keyed = self.keyed.clone();

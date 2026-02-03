@@ -32,12 +32,118 @@ fn main() {
 }
 ```
 
+Note: For `bool` fields using `#[kdl(bool = "presence-only")]`, only the positive flag token is valid; negative flags are rejected.
+
 ## Features
 
 - **Declarative Mapping**: Use `#[derive(KdlNode)]` to map KDL nodes to Rust structs.
 - **Attributes & Arguments**: Easily map KDL attributes and arguments to struct fields.
 - **Children**: Automatically collect children nodes into `Vec`, `HashMap`, or nested structs.
 - **Customization**: Renaming, default values, and type conversion support.
+- **Schema Generation**: Generate KDL schema metadata for your types.
+- **Round-trip Rendering**: Preserve original KDL when no changes are made.
+
+## Schema Generation
+
+Derive `KdlSchema` (or use `#[derive(Kdl)]` with `#[kdl(schema)]`) to register schema definitions.
+
+```rust
+use kdl_config::{KdlNode, KdlSchema};
+use kdl_config::schema::SchemaRegistry;
+
+#[derive(KdlNode, KdlSchema)]
+#[kdl(node = "config")]
+struct Config {
+    #[kdl(attr)]
+    name: String,
+}
+
+let mut registry = SchemaRegistry::default();
+Config::register_definitions(&mut registry);
+```
+
+### Schema Overrides
+
+Override schema metadata per struct or field with `#[kdl(schema(...))]`:
+
+```rust
+use kdl_config::Kdl;
+
+#[derive(Kdl)]
+#[kdl(node = "config", schema(name = "config_schema", description = "Config schema", deny_unknown))]
+struct Config {
+    #[kdl(attr)]
+    #[kdl(schema(name = "title", description = "Title", optional))]
+    name: String,
+
+    #[kdl(positional = 0)]
+    #[kdl(schema(type = "integer", description = "Primary count"))]
+    count: i64,
+
+    #[kdl(attr)]
+    #[kdl(schema(skip))]
+    ignored: String,
+}
+```
+
+Notes:
+- `schema(type = ...)` is only valid for scalar value fields.
+- `schema(skip)` excludes a field from schema generation only (parsing/rendering still apply).
+
+### Custom Scalar Types
+
+If you derive `KdlValue` (or implement `FromKdlValue`) for a custom scalar type and want to use it
+in `attr`/`positional`/`value` placements, mark the field as scalar:
+
+```rust
+use kdl_config::{KdlNode, KdlValue};
+
+#[derive(Clone, Debug, KdlValue)]
+enum Mode {
+    Fast,
+    Safe,
+}
+
+#[derive(KdlNode)]
+#[kdl(node = "config")]
+struct Config {
+    #[kdl(attr, scalar)]
+    mode: Mode,
+}
+```
+
+### Union Schemas
+
+Unions can generate schema-only `choice` nodes:
+
+```rust
+use kdl_config::KdlSchema;
+
+#[derive(KdlSchema)]
+union Choice {
+    #[kdl(schema(name = "count", type = "integer"))]
+    count: i64,
+}
+```
+
+## Round-trip Rendering
+
+Use round-trip helpers to preserve the original KDL if nothing changes:
+
+```rust
+use kdl_config::round_trip::parse_str_roundtrip;
+
+#[derive(kdl_config::KdlNode)]
+#[kdl(node = "config")]
+struct Config {
+    #[kdl(attr)]
+    name: String,
+}
+
+let src = r#"config name="demo""#;
+let parsed = parse_str_roundtrip::<Config>(src).unwrap();
+assert_eq!(parsed.to_kdl(), src);
+```
 
 ## License
 

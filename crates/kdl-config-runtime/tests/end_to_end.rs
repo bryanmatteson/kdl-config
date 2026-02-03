@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kdl_config_derive::KdlNode;
+use kdl_config_derive::{KdlNode, KdlValue};
 use kdl_config_runtime::{
     BoolMode, DefaultPlacement, KdlParse, ParseConfig, parse_config, parse_str,
 };
@@ -151,6 +151,7 @@ fn presence_only_bools_reject_explicit_values() {
     assert!(parsed.enabled);
 
     assert!(parse_named::<BoolPresenceOnly>("config enabled=#true", "config").is_err());
+    assert!(parse_named::<BoolPresenceOnly>("config no-enabled", "config").is_err());
 }
 
 #[derive(Debug, PartialEq, KdlNode)]
@@ -559,7 +560,32 @@ struct RenderBoolFalse {
 fn render_bool_false_emits_negative_flag() {
     let config = RenderBoolFalse { enabled: false };
     let rendered = kdl_config_runtime::to_kdl(&config, "config");
-    assert_eq!(rendered.trim(), "config \"no-enabled\"");
+    assert_eq!(rendered.trim(), "config no-enabled");
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct OptionalPresenceOnlyRender {
+    #[kdl(attr, bool = "presence-only")]
+    enabled: Option<bool>,
+}
+
+#[test]
+fn presence_only_optional_renders_only_positive_flag() {
+    let rendered = kdl_config_runtime::to_kdl(
+        &OptionalPresenceOnlyRender { enabled: Some(true) },
+        "config",
+    );
+    assert_eq!(rendered.trim(), "config enabled");
+
+    let rendered = kdl_config_runtime::to_kdl(
+        &OptionalPresenceOnlyRender { enabled: Some(false) },
+        "config",
+    );
+    assert_eq!(rendered.trim(), "config");
+
+    let rendered = kdl_config_runtime::to_kdl(&OptionalPresenceOnlyRender { enabled: None }, "config");
+    assert_eq!(rendered.trim(), "config");
 }
 
 #[derive(Debug, PartialEq, KdlNode)]
@@ -594,6 +620,60 @@ fn positional_and_flag_candidates_conflict() {
 struct PresencePlusValueDefaults {
     #[kdl(attr, bool = "presence+value")]
     enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, KdlValue)]
+enum Mode {
+    Fast,
+    Safe,
+}
+
+#[derive(Debug, Clone, PartialEq, KdlValue)]
+struct Port(u32);
+
+#[derive(Debug, Clone, PartialEq, KdlValue)]
+struct Flag(bool);
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ScalarAttrConfig {
+    #[kdl(attr, scalar)]
+    mode: Mode,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ScalarValueConfig {
+    #[kdl(value, scalar)]
+    mode: Mode,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ScalarDefaultConfig {
+    #[kdl(attr, scalar, default = 8080)]
+    port: Port,
+    #[kdl(attr, scalar, default = true)]
+    enabled: Flag,
+}
+
+#[test]
+fn scalar_custom_type_parses_attr() {
+    let parsed = parse_named::<ScalarAttrConfig>("config mode=\"Fast\"", "config").unwrap();
+    assert_eq!(parsed.mode, Mode::Fast);
+}
+
+#[test]
+fn scalar_custom_type_parses_value_node() {
+    let parsed = parse_named::<ScalarValueConfig>("config { mode \"Safe\" }", "config").unwrap();
+    assert_eq!(parsed.mode, Mode::Safe);
+}
+
+#[test]
+fn scalar_custom_type_defaults_work() {
+    let parsed = parse_named::<ScalarDefaultConfig>("config", "config").unwrap();
+    assert_eq!(parsed.port, Port(8080));
+    assert_eq!(parsed.enabled, Flag(true));
 }
 
 #[test]
@@ -824,6 +904,18 @@ fn raw_parse_preserves_identifier_quoting() {
 
     let rendered = kdl_config_runtime::to_kdl(node, &node.name);
     assert_eq!(rendered.trim(), "\"+config\" \"+attr\"=1");
+}
+
+#[test]
+fn raw_parse_preserves_raw_string_quoting() {
+    let root = parse_config(r##"#"+config"# #"+attr"#=1"##).unwrap();
+    let node = root.children().first().unwrap();
+    assert_eq!(node.name, "+config");
+    assert_eq!(node.name_repr(), Some("#\"+config\"#"));
+    assert_eq!(node.attr_repr("+attr"), Some("#\"+attr\"#"));
+
+    let rendered = kdl_config_runtime::to_kdl(node, &node.name);
+    assert_eq!(rendered.trim(), "#\"+config\"# #\"+attr\"#=1");
 }
 
 #[derive(Debug, PartialEq, KdlNode)]

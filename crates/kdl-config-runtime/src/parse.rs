@@ -27,7 +27,9 @@ fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
     let raw_name = name_ident.value();
     let repr = name_ident.repr();
     let is_quoted = repr
-        .map(|repr| repr.starts_with('"') || repr.starts_with('#') || repr.is_empty())
+        .map(|repr| {
+            repr.starts_with('"') || repr.starts_with('#') || repr.starts_with('r') || repr.is_empty()
+        })
         .unwrap_or(false);
     let (name, modifier) = if is_quoted {
         (raw_name.to_string(), Modifier::Inherit)
@@ -36,7 +38,7 @@ fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
     };
     let mut result = Node::named(name).with_modifier(modifier);
     if let Some(repr) = repr {
-        if repr.starts_with('"') || repr.starts_with('#') {
+        if repr.starts_with('"') || repr.starts_with('#') || repr.starts_with('r') {
             result = result.with_name_repr(repr.to_string());
         }
     }
@@ -45,7 +47,7 @@ fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
         if let Some(name) = entry.name() {
             let key = name.value().to_string();
             if let Some(repr) = name.repr() {
-                if repr.starts_with('"') || repr.starts_with('#') {
+                if repr.starts_with('"') || repr.starts_with('#') || repr.starts_with('r') {
                     result.set_attr_repr(key.clone(), repr.to_string());
                 }
             }

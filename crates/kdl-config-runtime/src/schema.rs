@@ -40,6 +40,7 @@ impl SchemaRegistry {
 pub enum SchemaRef {
     Ref(String),
     Inline(KdlNodeSchema),
+    Choice(Vec<SchemaRef>),
 }
 
 /// A complete KDL Document Schema.
@@ -136,6 +137,7 @@ pub struct KdlNodeSchema {
     pub props: HashMap<String, SchemaProp>,
     pub values: Vec<SchemaValue>,
     pub children: Option<Box<ChildrenSchema>>,
+    pub variants: Option<Vec<SchemaRef>>,
 
     // For when this schema is just a wrapper around another type (e.g. typedef)
     pub ref_type: Option<String>,
@@ -248,6 +250,11 @@ impl KdlRender for KdlNodeSchema {
             registry_key.render(w, indent + 1)?;
         }
 
+        if let Some(variants) = &self.variants {
+            render_choice_nodes(variants, w, indent + 1)?;
+            writeln!(w)?;
+        }
+
         // Props
         let mut sorted_props: Vec<_> = self.props.iter().collect();
         sorted_props.sort_by_key(|(k, _)| *k);
@@ -303,12 +310,44 @@ impl KdlRender for ChildrenSchema {
                     s.render(w, "node", indent + 1)?;
                     writeln!(w)?;
                 }
+                SchemaRef::Choice(choices) => {
+                    render_choice_nodes(choices, w, indent + 1)?;
+                    writeln!(w)?;
+                }
             }
         }
         crate::write_indent(w, indent)?;
         write!(w, "}}")?;
         Ok(())
     }
+}
+
+fn render_choice_nodes<W: std::fmt::Write>(
+    choices: &[SchemaRef],
+    w: &mut W,
+    indent: usize,
+) -> std::fmt::Result {
+    crate::write_indent(w, indent)?;
+    writeln!(w, "choice {{")?;
+    for choice in choices {
+        match choice {
+            SchemaRef::Ref(r) => {
+                crate::write_indent(w, indent + 1)?;
+                writeln!(w, "node ref={:?}", r)?;
+            }
+            SchemaRef::Inline(s) => {
+                s.render(w, "node", indent + 1)?;
+                writeln!(w)?;
+            }
+            SchemaRef::Choice(nested) => {
+                render_choice_nodes(nested, w, indent + 1)?;
+                writeln!(w)?;
+            }
+        }
+    }
+    crate::write_indent(w, indent)?;
+    write!(w, "}}")?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -330,7 +369,7 @@ impl SchemaType {
                 write!(w, " repeat=\"*\"")
             }
             Self::String => write!(w, " type=\"string\""),
-            Self::Integer => write!(w, " type=\"number\""), // KDL schema uses number usually, or supports specific
+            Self::Integer => write!(w, " type=\"integer\""),
             Self::Float => write!(w, " type=\"number\""),
             Self::Boolean => write!(w, " type=\"boolean\""),
             Self::Null => write!(w, " type=\"null\""),
@@ -353,6 +392,7 @@ pub struct SchemaProp {
     pub bool_mode: Option<BoolMode>,
     pub flag_style: Option<FlagStyle>,
     pub conflict: Option<ConflictPolicy>,
+    pub description: Option<String>,
 }
 
 impl SchemaProp {
@@ -360,6 +400,9 @@ impl SchemaProp {
         self.ty.render_inline(w)?;
         if self.required {
             write!(w, " required=#true")?;
+        }
+        if let Some(desc) = &self.description {
+            write!(w, " description={:?}", desc)?;
         }
         if let Some(bool_mode) = self.bool_mode {
             write!(
@@ -403,6 +446,8 @@ impl SchemaProp {
 pub struct SchemaValue {
     pub ty: SchemaType,
     pub required: bool,
+    pub description: Option<String>,
+    pub enum_values: Option<Vec<SchemaLiteral>>,
 }
 
 impl SchemaValue {
@@ -411,7 +456,45 @@ impl SchemaValue {
         if self.required {
             write!(w, " required=#true")?;
         }
+        if let Some(desc) = &self.description {
+            write!(w, " description={:?}", desc)?;
+        }
+        if let Some(values) = &self.enum_values {
+            let rendered = values
+                .iter()
+                .map(render_literal)
+                .collect::<Vec<_>>()
+                .join(" ");
+            write!(w, " enum=[{}]", rendered)?;
+        }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SchemaLiteral {
+    String(String),
+    Int(i128),
+    Float(f64),
+    Bool(bool),
+    Null,
+}
+
+fn render_literal(lit: &SchemaLiteral) -> String {
+    match lit {
+        SchemaLiteral::String(s) => crate::escape_string(s),
+        SchemaLiteral::Int(n) => n.to_string(),
+        SchemaLiteral::Float(f) => {
+            let s = f.to_string();
+            if s.contains('.') || s.contains('e') || s.contains('E') {
+                s
+            } else {
+                format!("{s}.0")
+            }
+        }
+        SchemaLiteral::Bool(true) => "#true".to_string(),
+        SchemaLiteral::Bool(false) => "#false".to_string(),
+        SchemaLiteral::Null => "#null".to_string(),
     }
 }
 
@@ -464,7 +547,27 @@ impl KdlSchema for String {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
             props: HashMap::new(),
-            values: vec![SchemaValue { ty: SchemaType::String, required: true }],
+            values: vec![SchemaValue {
+                ty: SchemaType::String,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
+            ..Default::default()
+        })
+    }
+    fn register_definitions(_registry: &mut SchemaRegistry) {}
+}
+
+impl KdlSchema for std::path::PathBuf {
+    fn schema_ref() -> SchemaRef {
+        SchemaRef::Inline(KdlNodeSchema {
+            values: vec![SchemaValue {
+                ty: SchemaType::String,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
             ..Default::default()
         })
     }
@@ -474,7 +577,12 @@ impl KdlSchema for String {
 impl KdlSchema for i64 {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
-            values: vec![SchemaValue { ty: SchemaType::Integer, required: true }],
+            values: vec![SchemaValue {
+                ty: SchemaType::Integer,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
             ..Default::default()
         })
     }
@@ -484,7 +592,12 @@ impl KdlSchema for i64 {
 impl KdlSchema for i128 {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
-            values: vec![SchemaValue { ty: SchemaType::Integer, required: true }],
+            values: vec![SchemaValue {
+                ty: SchemaType::Integer,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
             ..Default::default()
         })
     }
@@ -494,7 +607,12 @@ impl KdlSchema for i128 {
 impl KdlSchema for i32 {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
-            values: vec![SchemaValue { ty: SchemaType::Integer, required: true }],
+            values: vec![SchemaValue {
+                ty: SchemaType::Integer,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
             ..Default::default()
         })
     }
@@ -504,7 +622,12 @@ impl KdlSchema for i32 {
 impl KdlSchema for u64 {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
-            values: vec![SchemaValue { ty: SchemaType::Integer, required: true }],
+            values: vec![SchemaValue {
+                ty: SchemaType::Integer,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
             ..Default::default()
         })
     }
@@ -514,7 +637,12 @@ impl KdlSchema for u64 {
 impl KdlSchema for u32 {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
-            values: vec![SchemaValue { ty: SchemaType::Integer, required: true }],
+            values: vec![SchemaValue {
+                ty: SchemaType::Integer,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
             ..Default::default()
         })
     }
@@ -524,7 +652,12 @@ impl KdlSchema for u32 {
 impl KdlSchema for usize {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
-            values: vec![SchemaValue { ty: SchemaType::Integer, required: true }],
+            values: vec![SchemaValue {
+                ty: SchemaType::Integer,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
             ..Default::default()
         })
     }
@@ -534,7 +667,12 @@ impl KdlSchema for usize {
 impl KdlSchema for f64 {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
-            values: vec![SchemaValue { ty: SchemaType::Float, required: true }],
+            values: vec![SchemaValue {
+                ty: SchemaType::Float,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
             ..Default::default()
         })
     }
@@ -544,7 +682,12 @@ impl KdlSchema for f64 {
 impl KdlSchema for f32 {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
-            values: vec![SchemaValue { ty: SchemaType::Float, required: true }],
+            values: vec![SchemaValue {
+                ty: SchemaType::Float,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
             ..Default::default()
         })
     }
@@ -554,7 +697,12 @@ impl KdlSchema for f32 {
 impl KdlSchema for bool {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
-            values: vec![SchemaValue { ty: SchemaType::Boolean, required: true }],
+            values: vec![SchemaValue {
+                ty: SchemaType::Boolean,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
             ..Default::default()
         })
     }

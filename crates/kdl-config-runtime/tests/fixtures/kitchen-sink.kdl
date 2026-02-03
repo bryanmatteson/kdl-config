@@ -11,7 +11,7 @@ config "alpha" 2 flag-only off presence-only with-styled-flag no-optional-bool n
     +plugin name="cache" enabled priority=2 {
         args "fast" "mem"
     }
-    -plugin name="legacy" no-enabled {
+    -plugin name="legacy" {
         args "slow"
     }
     !plugin name="default" enabled {

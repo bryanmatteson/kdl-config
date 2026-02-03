@@ -226,13 +226,13 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
         } else {
             field.inner_type()
         };
-        let is_value = inner.map(is_value_type).unwrap_or(false);
+        let is_value = inner.map(is_value_type).unwrap_or(false) || field.is_scalar;
         if is_value {
             FieldKind::ValueVec
         } else {
             FieldKind::NodeVec
         }
-    } else if is_value_type(&field.ty) {
+    } else if is_value_type(&field.ty) || field.is_scalar {
         FieldKind::ValueScalar
     } else {
         FieldKind::Node
@@ -620,6 +620,15 @@ fn generate_value_scalar_parser(
                                 #field_name,
                             )?
                         };
+                        if field_config.bool_mode == ::kdl_config_runtime::BoolMode::PresenceOnly {
+                            if let Some(false) = flag_val {
+                                return Err(::kdl_config_runtime::KdlConfigError::incompatible_placement(
+                                    #struct_name,
+                                    #field_name,
+                                    "negative flags are not allowed in presence-only mode",
+                                ));
+                            }
+                        }
                         if let Some(flag_val) = flag_val {
                             let v: #value_ty = ::kdl_config_runtime::convert_value_checked(&::kdl_config_runtime::Value::Bool(flag_val), #struct_name, #field_name, #kdl_key, ::kdl_config_runtime::Placement::AttrFlag)?;
                             ::kdl_config_runtime::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config_runtime::Placement::AttrFlag)?;
@@ -704,6 +713,15 @@ fn generate_value_scalar_parser(
                                 #field_name,
                             )?
                         };
+                        if field_config.bool_mode == ::kdl_config_runtime::BoolMode::PresenceOnly {
+                            if let Some(false) = flag_val {
+                                return Err(::kdl_config_runtime::KdlConfigError::incompatible_placement(
+                                    #struct_name,
+                                    #field_name,
+                                    "negative flags are not allowed in presence-only mode",
+                                ));
+                            }
+                        }
                         if let Some(flag_val) = flag_val {
                             let v: #value_ty = ::kdl_config_runtime::convert_value_checked(&::kdl_config_runtime::Value::Bool(flag_val), #struct_name, #field_name, #kdl_key, ::kdl_config_runtime::Placement::AttrFlag)?;
                             ::kdl_config_runtime::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config_runtime::Placement::AttrFlag)?;
@@ -897,6 +915,15 @@ fn generate_value_scalar_parser(
                         #field_name,
                     )?
                 };
+                if field_config.bool_mode == ::kdl_config_runtime::BoolMode::PresenceOnly {
+                    if let Some(false) = flag_val {
+                        return Err(::kdl_config_runtime::KdlConfigError::incompatible_placement(
+                            #struct_name,
+                            #field_name,
+                            "negative flags are not allowed in presence-only mode",
+                        ));
+                    }
+                }
                 if let Some(flag_val) = flag_val {
                     let v: #value_ty = ::kdl_config_runtime::convert_value_checked(&::kdl_config_runtime::Value::Bool(flag_val), #struct_name, #field_name, #kdl_key, ::kdl_config_runtime::Placement::AttrFlag)?;
                     ::kdl_config_runtime::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config_runtime::Placement::AttrFlag)?;
@@ -1580,9 +1607,39 @@ fn generate_default_expr(default_spec: &DefaultSpec, ty: &syn::Type) -> TokenStr
 
 fn generate_literal_default_expr(lit: &DefaultLiteral, ty: &syn::Type) -> TokenStream {
     match lit {
-        DefaultLiteral::Int(n) => quote! { #n as #ty },
-        DefaultLiteral::Float(f) => quote! { #f as #ty },
-        DefaultLiteral::Bool(b) => quote! { #b },
+        DefaultLiteral::Int(n) => {
+            if is_numeric_type(ty) {
+                quote! { #n as #ty }
+            } else {
+                quote! {
+                    ::kdl_config_runtime::FromKdlValue::from_value(
+                        &::kdl_config_runtime::Value::Int(#n)
+                    ).expect(concat!("invalid default value for ", stringify!(#ty)))
+                }
+            }
+        }
+        DefaultLiteral::Float(f) => {
+            if is_numeric_type(ty) {
+                quote! { #f as #ty }
+            } else {
+                quote! {
+                    ::kdl_config_runtime::FromKdlValue::from_value(
+                        &::kdl_config_runtime::Value::Float(#f)
+                    ).expect(concat!("invalid default value for ", stringify!(#ty)))
+                }
+            }
+        }
+        DefaultLiteral::Bool(b) => {
+            if is_bool_type(ty) {
+                quote! { #b }
+            } else {
+                quote! {
+                    ::kdl_config_runtime::FromKdlValue::from_value(
+                        &::kdl_config_runtime::Value::Bool(#b)
+                    ).expect(concat!("invalid default value for ", stringify!(#ty)))
+                }
+            }
+        }
         DefaultLiteral::String(s) => {
             if is_string_type(ty) {
                 quote! { ::std::string::String::from(#s) }

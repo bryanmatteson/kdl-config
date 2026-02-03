@@ -1,5 +1,6 @@
 mod attrs;
 mod choice_gen;
+mod kdl_gen;
 mod enum_gen;
 mod parse_gen;
 mod render_gen;
@@ -16,13 +17,13 @@ use render_gen::{FieldAccessor, generate_render_impl, render_body_with_accessor}
 #[proc_macro_derive(KdlNode, attributes(kdl))]
 pub fn derive_kdl_node(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    match derive_kdl_node_impl(input) {
+    match derive_kdl_node_impl(&input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
 }
 
-fn derive_kdl_node_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let struct_name = &input.ident;
 
     match &input.data {
@@ -243,7 +244,16 @@ pub fn derive_kdl_value(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(KdlChoice, attributes(kdl))]
 pub fn derive_kdl_choice(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    match choice_gen::generate_kdl_choice_impl(&input) {
+    match choice_gen::generate_kdl_choice_impl(&input, true) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(Kdl, attributes(kdl))]
+pub fn derive_kdl(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match kdl_gen::generate_kdl_impl(&input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }

@@ -26,7 +26,10 @@ struct ChoiceVariantInfo {
     kind: VariantKind,
 }
 
-pub fn generate_kdl_choice_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
+pub fn generate_kdl_choice_impl(
+    input: &DeriveInput,
+    include_schema: bool,
+) -> syn::Result<TokenStream> {
     let enum_name = &input.ident;
     let enum_name_str = enum_name.to_string();
 
@@ -131,6 +134,79 @@ pub fn generate_kdl_choice_impl(input: &DeriveInput) -> syn::Result<TokenStream>
         })
         .collect();
 
+    let schema_choices: Vec<TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let kdl_name = &variant.kdl_name;
+            match &variant.kind {
+                VariantKind::Newtype(ty) => {
+                    quote! {
+                        {
+                            let schema_ref = <#ty as ::kdl_config_runtime::schema::KdlSchema>::schema_ref();
+                            let mut node_schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
+                            node_schema.name = Some(#kdl_name.to_string());
+                            match schema_ref {
+                                ::kdl_config_runtime::schema::SchemaRef::Ref(r) => {
+                                    node_schema.ref_type = Some(r);
+                                }
+                                ::kdl_config_runtime::schema::SchemaRef::Inline(s) => {
+                                    node_schema.props = s.props;
+                                    node_schema.values = s.values;
+                                    node_schema.children = s.children;
+                                }
+                                ::kdl_config_runtime::schema::SchemaRef::Choice(choices) => {
+                                    node_schema.children = Some(::std::boxed::Box::new(
+                                        ::kdl_config_runtime::schema::ChildrenSchema {
+                                            nodes: vec![::kdl_config_runtime::schema::SchemaRef::Choice(choices)],
+                                        },
+                                    ));
+                                }
+                            }
+                            ::kdl_config_runtime::schema::SchemaRef::Inline(node_schema)
+                        }
+                    }
+                }
+                VariantKind::Unit => {
+                    quote! {
+                        {
+                            let mut node_schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
+                            node_schema.name = Some(#kdl_name.to_string());
+                            ::kdl_config_runtime::schema::SchemaRef::Inline(node_schema)
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let schema_register_calls: Vec<TokenStream> = variants
+        .iter()
+        .filter_map(|variant| match &variant.kind {
+            VariantKind::Newtype(ty) => Some(quote! {
+                <#ty as ::kdl_config_runtime::schema::KdlSchema>::register_definitions(registry);
+            }),
+            VariantKind::Unit => None,
+        })
+        .collect();
+
+    let schema_impl = if include_schema {
+        quote! {
+            impl ::kdl_config_runtime::schema::KdlSchema for #enum_name {
+                fn schema_ref() -> ::kdl_config_runtime::schema::SchemaRef {
+                    ::kdl_config_runtime::schema::SchemaRef::Choice(vec![
+                        #(#schema_choices),*
+                    ])
+                }
+
+                fn register_definitions(registry: &mut ::kdl_config_runtime::schema::SchemaRegistry) {
+                    #(#schema_register_calls)*
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         impl ::kdl_config_runtime::KdlParse for #enum_name {
             fn from_node(
@@ -163,6 +239,7 @@ pub fn generate_kdl_choice_impl(input: &DeriveInput) -> syn::Result<TokenStream>
                 }
             }
         }
+        #schema_impl
     })
 }
 
@@ -190,6 +267,12 @@ fn parse_choice_enum_attrs(attrs: &[Attribute]) -> syn::Result<ChoiceEnumAttrs> 
                         ));
                     }
                 };
+            } else if meta.path.is_ident("choice") || meta.path.is_ident("schema") {
+                if meta.input.peek(syn::Token![=]) {
+                    let _: syn::Expr = meta.value()?.parse()?;
+                } else if !meta.input.is_empty() {
+                    meta.parse_nested_meta(|_| Ok(()))?;
+                }
             } else {
                 return Err(syn::Error::new(
                     meta.path.span(),

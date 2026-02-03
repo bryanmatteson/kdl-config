@@ -38,6 +38,12 @@ fn parse_enum_attrs(attrs: &[syn::Attribute]) -> syn::Result<EnumAttrs> {
                 } else {
                     return Err(syn::Error::new(value.span(), "expected string literal for `rename_all`"));
                 }
+            } else if meta.path.is_ident("value") || meta.path.is_ident("schema") {
+                if meta.input.peek(syn::Token![=]) {
+                    let _: syn::Expr = meta.value()?.parse()?;
+                } else if !meta.input.is_empty() {
+                    meta.parse_nested_meta(|_| Ok(()))?;
+                }
             } else {
                 return Err(syn::Error::new(meta.path.span(), "unknown enum attribute for KdlValue"));
             }
@@ -97,12 +103,14 @@ fn generate_kdl_value_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Re
 
     let parse_arms: Vec<_> = variants
         .iter()
-        .map(|(ident, name)| quote! { #name => Ok(Self::#ident), })
+        .map(|(ident, name)| quote! { #name => Some(Self::#ident), })
         .collect();
 
     let render_arms: Vec<_> = variants
         .iter()
-        .map(|(ident, name)| quote! { Self::#ident => ::kdl_config_runtime::Value::String(#name.to_string()), })
+        .map(|(ident, name)| {
+            quote! { #enum_name::#ident => ::kdl_config_runtime::Value::String(#name.to_string()), }
+        })
         .collect();
 
     let variants_const: Vec<_> = variants.iter().map(|(_, name)| name.as_str()).collect();

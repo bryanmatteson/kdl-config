@@ -37,7 +37,7 @@ In child form, `attr1` and `attr2` are child node names. A child â€œvalue nodeâ€
 - `#[kdl(registry)]`: parse a registry map from repeated nodes keyed by their **first positional arg**.
   - Override key source with `#[kdl(registry, key_arg = N)]`, `#[kdl(registry, key_attr = "id")]`, or `#[kdl(registry, key_fn = "path")]`.
 
-Note: for bool fields, `attr` includes flags only when presence is enabled (`bool = "presence+value"` or `"presence-only"`). With `bool = "value-only"`, `attr` means keyed values only.
+Note: for bool fields, `attr` includes flags only when presence is enabled (`bool = "presence+value"` or `"presence-only"`). With `bool = "value-only"`, `attr` means keyed values only. In `presence-only` mode, only the **positive** flag token is valid; negative flags are rejected.
 If `keyed` is explicitly set, flags are not considered unless `flag` is also set.
 
 **Field-Level Modifiers**
