@@ -1,0 +1,12 @@
+[package]
+    name                  = "kdl-config"
+    version.workspace     = true
+    edition.workspace     = true
+    authors.workspace     = true
+    license.workspace     = true
+    repository.workspace  = true
+    description.workspace = true
+
+[dependencies]
+    kdl-config-runtime.workspace = true
+    kdl-config-derive.workspace  = true
