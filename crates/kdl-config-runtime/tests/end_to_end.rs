@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kdl_config_derive::{KdlNode, KdlValue};
+use kdl_config_derive::{Kdl, KdlNode, KdlValue};
 use kdl_config_runtime::{
     BoolMode, DefaultPlacement, KdlParse, ParseConfig, parse_config, parse_str,
 };
@@ -70,14 +70,14 @@ fn parse_str_uses_single_top_level_node() {
     assert!(parse_str::<ScalarConfig>("").is_err());
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct OutOfRangeI64 {
     #[kdl(attr)]
     value: i64,
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct LargeU64 {
     #[kdl(attr)]
@@ -91,7 +91,7 @@ fn rejects_out_of_range_integers() {
     assert_eq!(parsed.value, u64::MAX);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct BoolConfig {
     #[kdl(attr)]
@@ -110,7 +110,7 @@ fn parses_bool_presence_and_value() {
     assert!(!explicit.enabled);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct BoolValueOnly {
     #[kdl(attr, bool = "value-only")]
@@ -124,7 +124,7 @@ fn value_only_bools_reject_flags() {
     assert!(parsed.enabled);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config", default_bool = "value-only")]
 struct DefaultValueOnlyNoPlacement {
     enabled: bool,
@@ -138,7 +138,7 @@ fn default_value_only_rejects_flags_without_explicit_placement() {
     assert!(parsed.enabled);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct BoolPresenceOnly {
     #[kdl(attr, bool = "presence-only")]
@@ -154,7 +154,7 @@ fn presence_only_bools_reject_explicit_values() {
     assert!(parse_named::<BoolPresenceOnly>("config no-enabled", "config").is_err());
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct BoolDefaultsMissing {
     #[kdl(attr)]
@@ -170,7 +170,7 @@ fn missing_bools_default_false_and_none() {
     assert!(parsed.optional.is_none());
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct BoolRequiredMissing {
     #[kdl(attr, required)]
@@ -182,7 +182,7 @@ fn required_bools_still_error_when_missing() {
     assert!(parse_named::<BoolRequiredMissing>("config", "config").is_err());
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct BoolCustomFlags {
     #[kdl(attr, flag = "on", neg_flag = "off")]
@@ -198,7 +198,7 @@ fn parses_custom_flag_names() {
     assert!(!off.enabled);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct DefaultNegative {
     #[kdl(attr, default = -1)]
@@ -211,7 +211,7 @@ fn parses_negative_default_literals() {
     assert_eq!(parsed.value, -1);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct BoolWithWithoutOnly {
     #[kdl(attr, flag_style = "with|without")]
@@ -226,21 +226,21 @@ fn flag_style_with_without_only() {
     assert!(parse_named::<BoolWithWithoutOnly>("config enabled", "config").is_err());
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct ConflictError {
     #[kdl(attr, value)]
     value: i64,
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct ConflictFirst {
     #[kdl(attr, value, conflict = "first")]
     value: i64,
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct ConflictLast {
     #[kdl(attr, value, conflict = "last")]
@@ -262,14 +262,14 @@ fn conflict_policies_apply_in_deterministic_order() {
     assert_eq!(last.value, 2);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct DuplicateAttrLast {
     #[kdl(attr, conflict = "last")]
     value: i64,
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct DuplicateAttrError {
     #[kdl(attr)]
@@ -284,7 +284,7 @@ fn duplicate_attributes_use_conflict_policy() {
     assert!(parse_named::<DuplicateAttrError>("config value=1 value=2", "config").is_err());
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct VecAppendConfig {
     #[kdl(attr, value, conflict = "append")]
@@ -299,13 +299,14 @@ fn vec_append_conflict_concatenates() {
     assert_eq!(parsed.values, vec![1, 2, 3]);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node = "config_node")]
 struct RegistryEntry {
     #[kdl(attr)]
     size: i64,
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct RegistryConfig {
     #[kdl(registry, container = "config_node")]
@@ -325,7 +326,7 @@ fn parses_registry_keyed_by_first_arg() {
     assert_eq!(parsed.nodes.get("third").unwrap().size, 3);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct RegistryLast {
     #[kdl(registry, container = "config_node", conflict = "last")]
@@ -343,7 +344,7 @@ fn registry_conflict_last_wins() {
     assert_eq!(parsed.nodes.get("dup").unwrap().size, 9);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct RegistryVecConfig {
     #[kdl(registry, container = "config_node")]
@@ -363,7 +364,7 @@ fn parses_registry_vec_in_document_order() {
     assert_eq!(parsed.nodes[2].0, "third");
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct RegistryVecLast {
     #[kdl(registry, container = "config_node", conflict = "last")]
@@ -383,7 +384,7 @@ fn registry_vec_last_moves_to_last_occurrence() {
     assert_eq!(parsed.nodes[1].1.size, 9);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct RegistryVecAppend {
     #[kdl(registry, container = "config_node", conflict = "append")]
@@ -403,7 +404,7 @@ fn registry_vec_append_keeps_duplicates() {
     assert_eq!(parsed.nodes[1].1.size, 2);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config", deny_unknown)]
 struct DenyUnknownConfig {
     #[kdl(attr)]
@@ -424,7 +425,7 @@ fn deny_unknown_rejects_extra_args() {
     assert!(parse_named::<DenyUnknownConfig>("config name=\"ok\" extra", "config").is_err());
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config", deny_unknown)]
 struct DenyUnknownDefaultPlacement {
     name: String,
@@ -437,7 +438,7 @@ fn deny_unknown_allows_default_placement_fields() {
     assert_eq!(parsed.name, "ok");
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct PlacementOverrideConfig {
     value: i64,
@@ -476,14 +477,14 @@ fn parses_signal_modifiers() {
     assert!(modifiers.contains(&kdl_config_runtime::Modifier::Replace));
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct ModifierConfig {
     #[kdl(modifier)]
     modifier: kdl_config_runtime::Modifier,
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct OptionalModifierConfig {
     #[kdl(modifier)]
@@ -515,7 +516,7 @@ fn renders_node_modifiers_from_fields() {
     assert_eq!(rendered.trim(), "config");
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct RenderConfig {
     #[kdl(attr)]
@@ -531,7 +532,7 @@ fn render_is_deterministic() {
     assert_eq!(rendered.trim(), "config a=1 b=2");
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct VecAttrRender {
     #[kdl(attr, render = "attr")]
@@ -549,7 +550,7 @@ fn renders_repeated_attrs_for_vecs() {
     assert!(trimmed.contains("values=2"));
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct RenderBoolFalse {
     #[kdl(attr)]
@@ -563,7 +564,7 @@ fn render_bool_false_emits_negative_flag() {
     assert_eq!(rendered.trim(), "config no-enabled");
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct OptionalPresenceOnlyRender {
     #[kdl(attr, bool = "presence-only")]
@@ -573,22 +574,27 @@ struct OptionalPresenceOnlyRender {
 #[test]
 fn presence_only_optional_renders_only_positive_flag() {
     let rendered = kdl_config_runtime::to_kdl(
-        &OptionalPresenceOnlyRender { enabled: Some(true) },
+        &OptionalPresenceOnlyRender {
+            enabled: Some(true),
+        },
         "config",
     );
     assert_eq!(rendered.trim(), "config enabled");
 
     let rendered = kdl_config_runtime::to_kdl(
-        &OptionalPresenceOnlyRender { enabled: Some(false) },
+        &OptionalPresenceOnlyRender {
+            enabled: Some(false),
+        },
         "config",
     );
     assert_eq!(rendered.trim(), "config");
 
-    let rendered = kdl_config_runtime::to_kdl(&OptionalPresenceOnlyRender { enabled: None }, "config");
+    let rendered =
+        kdl_config_runtime::to_kdl(&OptionalPresenceOnlyRender { enabled: None }, "config");
     assert_eq!(rendered.trim(), "config");
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct PresenceOnlyChild {
     #[kdl(value, bool = "presence-only")]
@@ -602,7 +608,7 @@ fn presence_only_child_nodes_allow_empty_values() {
     assert!(parse_named::<PresenceOnlyChild>("config { enabled #true }", "config").is_err());
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct FlagAndPositional {
     #[kdl(attr, positional = 0)]
@@ -615,7 +621,7 @@ fn positional_and_flag_candidates_conflict() {
     assert!(result.is_err());
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct PresencePlusValueDefaults {
     #[kdl(attr, bool = "presence+value")]
@@ -634,21 +640,21 @@ struct Port(u32);
 #[derive(Debug, Clone, PartialEq, KdlValue)]
 struct Flag(bool);
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct ScalarAttrConfig {
     #[kdl(attr, scalar)]
     mode: Mode,
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct ScalarValueConfig {
     #[kdl(value, scalar)]
     mode: Mode,
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct ScalarDefaultConfig {
     #[kdl(attr, scalar, default = 8080)]
@@ -772,11 +778,9 @@ struct RegistryItem {
 
 #[test]
 fn registry_key_attr_is_removed_before_parsing() {
-    let parsed = parse_named::<RegistryKeyAttrConfig>(
-        "config {\n  item id=\"alpha\" value=1\n}",
-        "config",
-    )
-    .unwrap();
+    let parsed =
+        parse_named::<RegistryKeyAttrConfig>("config {\n  item id=\"alpha\" value=1\n}", "config")
+            .unwrap();
     assert_eq!(parsed.items.get("alpha").unwrap().value, 1);
 }
 
@@ -796,19 +800,20 @@ struct RegistryItemPositional {
 
 #[test]
 fn registry_key_arg_uses_custom_index() {
-    let parsed = parse_named::<RegistryKeyArgConfig>(
-        "config {\n  item 10 \"beta\"\n}",
-        "config",
-    )
-    .unwrap();
+    let parsed =
+        parse_named::<RegistryKeyArgConfig>("config {\n  item 10 \"beta\"\n}", "config").unwrap();
     assert_eq!(parsed.items.get("beta").unwrap().value, 10);
 }
 
-fn registry_key_from_attr(node: &kdl_config_runtime::Node) -> Result<String, kdl_config_runtime::KdlConfigError> {
+fn registry_key_from_attr(
+    node: &kdl_config_runtime::Node,
+) -> Result<String, kdl_config_runtime::KdlConfigError> {
     node.attr("key")
         .and_then(|value| value.as_str())
         .map(|val| val.to_string())
-        .ok_or_else(|| kdl_config_runtime::KdlConfigError::custom("registry key", "missing key attribute"))
+        .ok_or_else(|| {
+            kdl_config_runtime::KdlConfigError::custom("registry key", "missing key attribute")
+        })
 }
 
 #[derive(Debug, PartialEq, KdlNode)]
@@ -829,11 +834,9 @@ struct RegistryKeyFnConfig {
 
 #[test]
 fn registry_key_fn_is_used() {
-    let parsed = parse_named::<RegistryKeyFnConfig>(
-        "config {\n  item key=\"gamma\" value=3\n}",
-        "config",
-    )
-    .unwrap();
+    let parsed =
+        parse_named::<RegistryKeyFnConfig>("config {\n  item key=\"gamma\" value=3\n}", "config")
+            .unwrap();
     assert_eq!(parsed.items.get("gamma").unwrap().value, 3);
 }
 

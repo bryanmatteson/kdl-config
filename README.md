@@ -43,6 +43,37 @@ Note: For `bool` fields using `#[kdl(bool = "presence-only")]`, only the positiv
 - **Schema Generation**: Generate KDL schema metadata for your types.
 - **Round-trip Rendering**: Preserve original KDL when no changes are made.
 
+## Booleans
+
+Boolean fields support three modes:
+
+1. `presence+value` (default): accepts flags (e.g., `enabled`, `no-enabled`) and explicit values (`enabled=#true`).
+2. `value-only`: accepts only explicit values (`enabled=#true` or `enabled=#false`), no flags.
+3. `presence-only`: accepts only the **positive** flag token (e.g., `enabled`); negative flags are rejected.
+
+Example:
+
+```rust
+use kdl_config::KdlNode;
+
+#[derive(KdlNode)]
+#[kdl(node = "config")]
+struct Config {
+    #[kdl(attr)]
+    enabled: bool,
+    #[kdl(attr, bool = "value-only")]
+    strict: bool,
+    #[kdl(attr, bool = "presence-only")]
+    fast: bool,
+}
+```
+
+KDL example for the struct above:
+
+```kdl
+config enabled no-enabled strict=#true fast
+```
+
 ## Schema Generation
 
 Derive `KdlSchema` (or use `#[derive(Kdl)]` with `#[kdl(schema)]`) to register schema definitions.
