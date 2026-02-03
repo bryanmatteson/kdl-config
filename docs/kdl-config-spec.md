@@ -35,6 +35,7 @@ In child form, `attr1` and `attr2` are child node names. A child “value node�
 - `#[kdl(child)]`: allow child struct node `key { ... }`.
 - `#[kdl(children)]`: allow multiple child struct nodes `key { ... }` into `Vec<T>`.
 - `#[kdl(registry)]`: parse a registry map from repeated nodes keyed by their **first positional arg**.
+  - Override key source with `#[kdl(registry, key_arg = N)]`, `#[kdl(registry, key_attr = "id")]`, or `#[kdl(registry, key_fn = "path")]`.
 
 Note: for bool fields, `attr` includes flags only when presence is enabled (`bool = "presence+value"` or `"presence-only"`). With `bool = "value-only"`, `attr` means keyed values only.
 If `keyed` is explicitly set, flags are not considered unless `flag` is also set.
@@ -61,7 +62,7 @@ config-node second { ... }
 config-node third key=value { ... }
 ```
 
-Rust shape:
+Rust shape (map):
 ```rust
 struct Test {
     #[kdl(registry, container = "config-node")]
@@ -69,17 +70,86 @@ struct Test {
 }
 ```
 
+Rust shape (ordered):
+```rust
+struct Test {
+    #[kdl(registry, container = "config-node")]
+    config_nodes: Vec<(String, ConfigNode)>,
+}
+```
+
 Rules:
 - The **container name** defaults to the field key (after rename). You can override it with `container = "..."`.
-- Each `config-node <key> { ... }` entry uses its **first positional arg** as the map key: `first`, `second`, `third`.
+- By default, each `config-node <key> { ... }` entry uses its **first positional arg** as the map key: `first`, `second`, `third`.
+  - `key_arg = N` uses positional arg `N` instead.
+  - `key_attr = "id"` uses the `id=` attribute as the key (and the attribute is not passed to the inner type).
+  - `key_fn = "path"` calls a helper `fn(&Node) -> Result<String, KdlConfigError>` to compute the key.
+    - The helper does not mutate or strip data from the node; if the key lives in attrs/args, the inner type must accept it or use `key_attr` / `key_arg`.
 - The node’s **body and attributes** are parsed into `ConfigNode` as usual (it can itself have attrs, values, or children).
-- The key must be a string value; non-string keys are an error unless a custom key parser is specified.
+- The key must be a string value; non-string keys are an error.
 - Missing container yields an empty map.
 - If duplicate keys appear, conflict policy applies (`error`, `first`, or `last`).
+  - For `Vec<(String, T)>`, `last` removes the earlier entry and appends the last occurrence (preserving document order).
+  - For `Vec<(String, T)>`, `append` keeps all entries (including duplicates) in document order.
+  - For `HashMap<String, T>`, `append` is invalid.
 
 Rendering:
 - The map renders as repeated nodes named `config-node`.
 - Each entry renders as `config-node <key> { ... }`.
+  - For `HashMap`, entries are rendered sorted by key for determinism.
+  - For `Vec<(String, T)>`, entries are rendered in vector order.
+
+## Tuple and Unit Structs
+
+- Unit structs parse nodes with no args, attrs, or children.
+- Tuple structs map fields to positional arguments (`arg[0]`, `arg[1]`, ...).
+  - Use `#[kdl(positional = N)]` on a field to override its index.
+  - Tuple fields must be scalar value types (string, number, bool, or `Option<T>`).
+  - Defaults and `optional` are supported.
+
+## Enums
+
+Enums are encoded as **tagged nodes** where the first positional argument is the variant discriminator.
+
+Example:
+```
+test value
+test with-struct-type {}
+test with-struct { key "" }
+```
+
+Rust shape:
+```rust
+#[derive(KdlNode)]
+#[kdl(node = "test", rename_all = "kebab-case")]
+enum Test {
+    Value,
+    WithStructType(NewStruct),
+    WithStruct {
+        #[kdl(value, render = "value")]
+        key: String,
+    },
+}
+```
+
+Rules:
+- The **outer node name** matches `#[kdl(node = "...")]` when provided.
+- The **first positional arg** is the variant discriminator.
+  - Default discriminator is the variant name (string, after `rename_all`).
+  - Use `#[kdl(tag = <literal>)]` to set a non-string discriminator (int/float/bool) or override the string tag.
+- The remaining args/attrs/children are parsed as the variant payload.
+- Unit variants accept **no additional args/attrs/children**.
+- Tuple variants consume positional args in order after the discriminator.
+  - Attributes/children are not allowed for tuple variants.
+- Newtype variants are parsed with the inner type’s `KdlParse` using the variant name as the node name.
+  - If the inner type declares `#[kdl(node = "...")]`, it must match the variant name or parsing will error.
+- Struct variants (named fields) are parsed like structs using the enum’s defaults and overrides.
+
+Rendering:
+- Enums render as `outer <tag> ...`.
+- String tags are rendered as identifiers when possible (quoted if needed).
+- Non-string tags render using KDL literal forms (e.g., `#true`, `1`, `3.14`).
+- Struct/newtype/tuple variants render their payload inline with canonical placement rules.
 
 ## Defaults and Overrides
 
@@ -131,6 +201,7 @@ config {
 ```
 
 Modifiers apply only to node names, not to attribute tokens. Boolean negation uses `no-key` / `without-key`, not `!key`.
+Modifiers are only recognized on bare identifiers. Quoted node names that start with `+`, `-`, or `!` are treated as literal names and do not carry modifier semantics.
 
 ## Type Compatibility
 

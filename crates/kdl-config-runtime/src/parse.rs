@@ -23,16 +23,36 @@ pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
 }
 
 fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
-    let (name, modifier) = parse_node_name(node.name().value());
+    let name_ident = node.name();
+    let raw_name = name_ident.value();
+    let repr = name_ident.repr();
+    let is_quoted = repr
+        .map(|repr| repr.starts_with('"') || repr.starts_with('#') || repr.is_empty())
+        .unwrap_or(false);
+    let (name, modifier) = if is_quoted {
+        (raw_name.to_string(), Modifier::Inherit)
+    } else {
+        parse_node_name(raw_name)
+    };
     let mut result = Node::named(name).with_modifier(modifier);
+    if let Some(repr) = repr {
+        if repr.starts_with('"') || repr.starts_with('#') {
+            result = result.with_name_repr(repr.to_string());
+        }
+    }
 
     for entry in node.entries() {
         if let Some(name) = entry.name() {
             let key = name.value().to_string();
-            if let Some(value) = kdl_value_to_value(entry.value()) {
-                result.set_attr(key, value);
+            if let Some(repr) = name.repr() {
+                if repr.starts_with('"') || repr.starts_with('#') {
+                    result.set_attr_repr(key.clone(), repr.to_string());
+                }
             }
-        } else if let Some(value) = kdl_value_to_value(entry.value()) {
+            let value = kdl_value_to_value(entry.value())?;
+            result.set_attr(key, value);
+        } else {
+            let value = kdl_value_to_value(entry.value())?;
             result.add_arg(value);
         }
     }
@@ -59,12 +79,12 @@ fn parse_node_name(raw: &str) -> (String, Modifier) {
     }
 }
 
-fn kdl_value_to_value(val: &KdlValue) -> Option<Value> {
+fn kdl_value_to_value(val: &KdlValue) -> Result<Value, KdlConfigError> {
     match val {
-        KdlValue::String(s) => Some(Value::String(s.to_string())),
-        KdlValue::Integer(i) => Some(Value::Int(*i as i64)),
-        KdlValue::Float(f) => Some(Value::Float(*f)),
-        KdlValue::Bool(b) => Some(Value::Bool(*b)),
-        KdlValue::Null => Some(Value::Null),
+        KdlValue::String(s) => Ok(Value::String(s.to_string())),
+        KdlValue::Integer(i) => Ok(Value::Int(*i)),
+        KdlValue::Float(f) => Ok(Value::Float(*f)),
+        KdlValue::Bool(b) => Ok(Value::Bool(*b)),
+        KdlValue::Null => Ok(Value::Null),
     }
 }

@@ -51,6 +51,7 @@ pub enum ErrorKind {
     UnknownAttribute { key: String },
     UnknownChild { name: String },
     InvalidRegistryKey { reason: String },
+    UnknownArgument { index: usize },
     IncompatiblePlacement { reason: String },
     Custom(String),
     Parse(String),
@@ -85,6 +86,7 @@ impl fmt::Display for ErrorKind {
             ErrorKind::UnknownAttribute { key } => write!(f, "unknown attribute '{key}'"),
             ErrorKind::UnknownChild { name } => write!(f, "unknown child '{name}'"),
             ErrorKind::InvalidRegistryKey { reason } => write!(f, "invalid registry key: {reason}"),
+            ErrorKind::UnknownArgument { index } => write!(f, "unknown argument at position {index}"),
             ErrorKind::IncompatiblePlacement { reason } => write!(f, "incompatible placement: {reason}"),
             ErrorKind::Custom(msg) => write!(f, "{msg}"),
             ErrorKind::Parse(msg) => write!(f, "parse error: {msg}"),
@@ -232,6 +234,53 @@ impl KdlConfigError {
             placement: Placement::Registry,
             required: false,
             kind: ErrorKind::InvalidRegistryKey { reason: reason.into() },
+        }
+    }
+
+    pub fn unknown_argument(struct_name: impl Into<String>, index: usize) -> Self {
+        Self {
+            struct_name: struct_name.into(),
+            field_name: None,
+            kdl_key: Some(format!("arg[{index}]")),
+            placement: Placement::AttrPositional,
+            required: false,
+            kind: ErrorKind::UnknownArgument { index },
+        }
+    }
+
+    pub fn invalid_variant(
+        struct_name: impl Into<String>,
+        value: impl Into<String>,
+        valid_variants: Vec<String>,
+    ) -> Self {
+        Self {
+            struct_name: struct_name.into(),
+            field_name: Some("variant".into()),
+            kdl_key: Some("arg[0]".into()),
+            placement: Placement::AttrPositional,
+            required: false,
+            kind: ErrorKind::InvalidVariant {
+                value: value.into(),
+                valid_variants,
+            },
+        }
+    }
+
+    pub fn no_matching_choice(
+        struct_name: &str,
+        discriminator: &str,
+        valid_choices: &[&str],
+    ) -> Self {
+        Self {
+            struct_name: struct_name.to_string(),
+            field_name: None,
+            kdl_key: Some(discriminator.to_string()),
+            placement: Placement::Unknown,
+            required: true,
+            kind: ErrorKind::NoMatchingChoice {
+                discriminator: discriminator.to_string(),
+                valid_choices: valid_choices.iter().map(|s| s.to_string()).collect(),
+            },
         }
     }
 

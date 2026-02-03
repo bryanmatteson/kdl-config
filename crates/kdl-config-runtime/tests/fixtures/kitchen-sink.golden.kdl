@@ -1,4 +1,4 @@
-config "alpha" 2 "flag-only" "presence-only" "with-styled-flag" "value-presence" defaulted=0 explicit-keyed="explicit" literal-default=5 name="Alpha" renamed-field="renamed" retry-limit=3 value-only=#true {
+config "alpha" 2 "flag-only" "off" "presence-only" "with-styled-flag" "no-optional-bool" "value-presence" defaulted=0 explicit-keyed="explicit" literal-default=5 name="Alpha" renamed-field="renamed" retry-limit=3 value-only=#true {
     ports 80 443 8443
     tags "core" "extra"
     threshold 7

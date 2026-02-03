@@ -1,5 +1,6 @@
 use crate::error::{KdlConfigError, Placement};
 use crate::Value;
+use std::path::PathBuf;
 
 pub trait FromKdlValue: Sized {
     const TYPE_NAME: &'static str;
@@ -12,6 +13,18 @@ impl FromKdlValue for String {
     fn from_value(value: &Value) -> Option<Self> {
         match value {
             Value::String(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl FromKdlValue for PathBuf {
+    const TYPE_NAME: &'static str = "path";
+
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Path(p) => Some(p.clone()),
+            Value::String(s) => Some(PathBuf::from(s)),
             _ => None,
         }
     }
@@ -33,6 +46,17 @@ impl FromKdlValue for i64 {
 
     fn from_value(value: &Value) -> Option<Self> {
         match value {
+            Value::Int(n) if *n >= i64::MIN as i128 && *n <= i64::MAX as i128 => Some(*n as i64),
+            _ => None,
+        }
+    }
+}
+
+impl FromKdlValue for i128 {
+    const TYPE_NAME: &'static str = "i128";
+
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
             Value::Int(n) => Some(*n),
             _ => None,
         }
@@ -44,7 +68,7 @@ impl FromKdlValue for u64 {
 
     fn from_value(value: &Value) -> Option<Self> {
         match value {
-            Value::Int(n) if *n >= 0 => Some(*n as u64),
+            Value::Int(n) if *n >= 0 && *n <= u64::MAX as i128 => Some(*n as u64),
             _ => None,
         }
     }
@@ -55,7 +79,7 @@ impl FromKdlValue for i32 {
 
     fn from_value(value: &Value) -> Option<Self> {
         match value {
-            Value::Int(n) if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 => Some(*n as i32),
+            Value::Int(n) if *n >= i32::MIN as i128 && *n <= i32::MAX as i128 => Some(*n as i32),
             _ => None,
         }
     }
@@ -66,7 +90,7 @@ impl FromKdlValue for u32 {
 
     fn from_value(value: &Value) -> Option<Self> {
         match value {
-            Value::Int(n) if *n >= 0 && *n <= u32::MAX as i64 => Some(*n as u32),
+            Value::Int(n) if *n >= 0 && *n <= u32::MAX as i128 => Some(*n as u32),
             _ => None,
         }
     }
@@ -78,9 +102,8 @@ impl FromKdlValue for usize {
     fn from_value(value: &Value) -> Option<Self> {
         match value {
             Value::Int(n) if *n >= 0 => {
-                let n = *n as u64;
-                if n <= usize::MAX as u64 {
-                    Some(n as usize)
+                if *n <= usize::MAX as i128 {
+                    Some(*n as usize)
                 } else {
                     None
                 }

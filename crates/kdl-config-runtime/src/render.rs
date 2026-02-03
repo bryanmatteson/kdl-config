@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use crate::types::{Modifier, Value};
+use crate::types::{Modifier, Node, Value};
 
 pub fn escape_string(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 2);
@@ -53,6 +53,14 @@ pub fn render_key(key: &str) -> String {
     }
 }
 
+pub fn render_key_with_repr(key: &str, repr: Option<&str>) -> String {
+    if let Some(repr) = repr {
+        repr.to_string()
+    } else {
+        render_key(key)
+    }
+}
+
 pub fn render_value(value: &Value) -> String {
     match value {
         Value::Null => "#null".to_string(),
@@ -68,6 +76,7 @@ pub fn render_value(value: &Value) -> String {
             }
         }
         Value::String(s) => escape_string(s),
+        Value::Path(p) => escape_string(&p.to_string_lossy()),
         Value::Array(arr) => arr.iter().map(render_value).collect::<Vec<_>>().join(" "),
     }
 }
@@ -85,6 +94,7 @@ fn render_modifier(modifier: Modifier) -> &'static str {
 pub struct NodeRenderer {
     name: String,
     modifier: Modifier,
+    name_repr: Option<String>,
     positional: Vec<(usize, String)>,
     flags: Vec<String>,
     keyed: Vec<(String, String)>,
@@ -96,8 +106,14 @@ impl NodeRenderer {
         Self {
             name: name.into(),
             modifier,
+            name_repr: None,
             ..Default::default()
         }
+    }
+
+    pub fn with_name_repr(&mut self, repr: Option<String>) -> &mut Self {
+        self.name_repr = repr;
+        self
     }
 
     pub fn positional(&mut self, index: usize, value: &Value) -> &mut Self {
@@ -123,7 +139,11 @@ impl NodeRenderer {
         self
     }
 
-    pub fn keyed_raw(&mut self, key: impl Into<String>, rendered_value: impl Into<String>) -> &mut Self {
+    pub fn keyed_raw(
+        &mut self,
+        key: impl Into<String>,
+        rendered_value: impl Into<String>,
+    ) -> &mut Self {
         let key = key.into();
         let rendered_key = render_key(&key);
         self.keyed.push((rendered_key, rendered_value.into()));
@@ -138,7 +158,15 @@ impl NodeRenderer {
     pub fn render(&self) -> String {
         let mut result = String::new();
 
-        let name = format!("{}{}", render_modifier(self.modifier), render_key(&self.name));
+        let modifier = if self.modifier != Modifier::Inherit
+            && (self.name_repr.is_some() || !is_valid_identifier(&self.name))
+        {
+            ""
+        } else {
+            render_modifier(self.modifier)
+        };
+        let name_repr = self.name_repr.as_deref();
+        let name = format!("{}{}", modifier, render_key_with_repr(&self.name, name_repr));
         result.push_str(&name);
 
         let mut positional = self.positional.clone();
@@ -175,6 +203,57 @@ impl NodeRenderer {
         }
 
         result
+    }
+}
+
+impl crate::KdlRender for Node {
+    fn render<W: std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> std::fmt::Result {
+        write_indent(w, indent)?;
+
+        let use_self_name = name == self.name;
+        let (name_for_modifier, repr_for_modifier) = if use_self_name {
+            (self.name.as_str(), self.name_repr.as_deref())
+        } else {
+            (name, None)
+        };
+        let render_name = if use_self_name {
+            render_key_with_repr(&self.name, self.name_repr.as_deref())
+        } else {
+            render_key(name)
+        };
+        let modifier = if self.modifier != Modifier::Inherit
+            && (repr_for_modifier.is_some() || !is_valid_identifier(name_for_modifier))
+        {
+            ""
+        } else {
+            render_modifier(self.modifier)
+        };
+        write!(w, "{}{}", modifier, render_name)?;
+
+        for arg in self.args() {
+            write!(w, " {}", render_value(arg))?;
+        }
+
+        let mut keyed: Vec<_> = self.attrs().iter().collect();
+        keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (key, values) in keyed {
+            let rendered_key = render_key_with_repr(key, self.attr_repr(key));
+            for value in values {
+                write!(w, " {}={}", rendered_key, render_value(value))?;
+            }
+        }
+
+        if !self.children().is_empty() {
+            writeln!(w, " {{")?;
+            for child in self.children() {
+                child.render(w, &child.name, indent + 1)?;
+                writeln!(w)?;
+            }
+            write_indent(w, indent)?;
+            write!(w, "}}")?;
+        }
+
+        Ok(())
     }
 }
 

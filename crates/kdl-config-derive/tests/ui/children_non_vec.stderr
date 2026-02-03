@@ -1,4 +1,4 @@
-error: children placement requires Vec<T> field type
+error: child/children placement is incompatible with scalar types
  --> tests/ui/children_non_vec.rs:5:5
   |
 5 |     #[kdl(children)]

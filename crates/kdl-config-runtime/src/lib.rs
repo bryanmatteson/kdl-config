@@ -6,13 +6,21 @@ pub mod error;
 pub mod helpers;
 pub mod parse;
 pub mod render;
+pub mod schema;
 pub mod types;
 
-pub use config::{BoolMode, ConflictPolicy, DefaultPlacement, FlagStyle, ParseConfig, StructOverrides, FieldOverrides, EffectiveConfig, resolve_struct, resolve_field};
+pub use config::{
+    BoolMode, ConflictPolicy, DefaultPlacement, EffectiveConfig, FieldOverrides, FlagStyle,
+    ParseConfig, StructOverrides, resolve_field, resolve_struct,
+};
 pub use convert::{FromKdlValue, convert_value, convert_value_checked};
 pub use error::{ErrorKind, KdlConfigError, Placement};
 pub use parse::parse_config;
-pub use render::{NodeRenderer, escape_string, is_valid_identifier, render_key, render_value, render_value_node, render_value_node_scalar, write_indent, insert_arg};
+pub use render::{
+    NodeRenderer, escape_string, insert_arg, is_valid_identifier, render_key, render_key_with_repr,
+    render_value,
+    render_value_node, render_value_node_scalar, write_indent,
+};
 pub use types::{Modifier, Node, Value};
 
 /// Trait for parsing a typed configuration from a KDL Node.
@@ -57,7 +65,21 @@ pub fn parse_str<T: KdlParse>(contents: &str) -> Result<T, KdlConfigError> {
 }
 
 /// Parse a KDL string into a typed configuration using the provided config.
-pub fn parse_str_with_config<T: KdlParse>(contents: &str, config: &ParseConfig) -> Result<T, KdlConfigError> {
+pub fn parse_str_with_config<T: KdlParse>(
+    contents: &str,
+    config: &ParseConfig,
+) -> Result<T, KdlConfigError> {
     let root = parse_config(contents)?;
-    T::from_node(&root, config)
+    let children = root.children();
+    match children.len() {
+        0 => Err(KdlConfigError::custom(
+            "KDL Document",
+            "expected a single top-level node, found none",
+        )),
+        1 => T::from_node(&children[0], config),
+        count => Err(KdlConfigError::custom(
+            "KDL Document",
+            format!("expected a single top-level node, found {count}"),
+        )),
+    }
 }

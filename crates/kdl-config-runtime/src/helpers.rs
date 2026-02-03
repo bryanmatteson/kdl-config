@@ -9,6 +9,8 @@ use crate::types::{Node, Value};
 pub struct UsedKeys {
     attrs: HashSet<String>,
     children: HashSet<String>,
+    args: HashSet<usize>,
+    flags: HashSet<String>,
 }
 
 impl UsedKeys {
@@ -24,6 +26,14 @@ impl UsedKeys {
         self.children.insert(name.to_string());
     }
 
+    pub fn mark_arg(&mut self, index: usize) {
+        self.args.insert(index);
+    }
+
+    pub fn mark_flag(&mut self, token: &str) {
+        self.flags.insert(token.to_string());
+    }
+
     pub fn check_unknowns(&self, node: &Node, struct_name: &str) -> Result<(), KdlConfigError> {
         for key in node.attrs().keys() {
             if !self.attrs.contains(key) {
@@ -35,6 +45,18 @@ impl UsedKeys {
             if !self.children.contains(&child.name) {
                 return Err(KdlConfigError::unknown_child(struct_name, &child.name));
             }
+        }
+
+        for (index, arg) in node.args().iter().enumerate() {
+            if self.args.contains(&index) {
+                continue;
+            }
+            if let Value::String(token) = arg {
+                if self.flags.contains(token) {
+                    continue;
+                }
+            }
+            return Err(KdlConfigError::unknown_argument(struct_name, index));
         }
 
         Ok(())
@@ -56,6 +78,17 @@ pub fn find_flag(
     struct_name: &str,
     field_name: &str,
 ) -> Result<Option<bool>, KdlConfigError> {
+    find_flag_marked(node, pos, neg, struct_name, field_name, None)
+}
+
+fn find_flag_marked(
+    node: &Node,
+    pos: &str,
+    neg: &str,
+    struct_name: &str,
+    field_name: &str,
+    mut used_keys: Option<&mut UsedKeys>,
+) -> Result<Option<bool>, KdlConfigError> {
     let mut found_pos = false;
     let mut found_neg = false;
 
@@ -63,8 +96,14 @@ pub fn find_flag(
         if let Value::String(s) = arg {
             if s == pos {
                 found_pos = true;
+                if let Some(keys) = used_keys.as_deref_mut() {
+                    keys.mark_flag(s);
+                }
             } else if s == neg {
                 found_neg = true;
+                if let Some(keys) = used_keys.as_deref_mut() {
+                    keys.mark_flag(s);
+                }
             }
         }
     }
@@ -86,6 +125,28 @@ pub fn find_flag_with_style(
     struct_name: &str,
     field_name: &str,
 ) -> Result<Option<bool>, KdlConfigError> {
+    find_flag_with_style_marked(
+        node,
+        key,
+        style,
+        custom_pos,
+        custom_neg,
+        struct_name,
+        field_name,
+        None,
+    )
+}
+
+pub fn find_flag_with_style_marked(
+    node: &Node,
+    key: &str,
+    style: FlagStyle,
+    custom_pos: Option<String>,
+    custom_neg: Option<String>,
+    struct_name: &str,
+    field_name: &str,
+    mut used_keys: Option<&mut UsedKeys>,
+) -> Result<Option<bool>, KdlConfigError> {
     if custom_pos.is_some() || custom_neg.is_some() {
         let pos = custom_pos.ok_or_else(|| {
             KdlConfigError::custom(struct_name, "flag override requires both flag and neg_flag")
@@ -93,7 +154,7 @@ pub fn find_flag_with_style(
         let neg = custom_neg.ok_or_else(|| {
             KdlConfigError::custom(struct_name, "flag override requires both flag and neg_flag")
         })?;
-        return find_flag(node, &pos, &neg, struct_name, field_name);
+        return find_flag_marked(node, &pos, &neg, struct_name, field_name, used_keys);
     }
 
     let (pos1, neg1) = match style {
@@ -102,12 +163,76 @@ pub fn find_flag_with_style(
     };
 
     if style != FlagStyle::Both {
-        return find_flag(node, &pos1, &neg1, struct_name, field_name);
+        let (other_pos, other_neg) = match style {
+            FlagStyle::WithWithout => (key.to_string(), format!("no-{}", key)),
+            FlagStyle::ValueNo => (format!("with-{}", key), format!("without-{}", key)),
+            FlagStyle::Both => unreachable!(),
+        };
+
+        for arg in node.args() {
+            if let Value::String(s) = arg {
+                if s == &other_pos || s == &other_neg {
+                    return Err(KdlConfigError::incompatible_placement(
+                        struct_name,
+                        field_name,
+                        "flag token is not valid for the configured flag style",
+                    ));
+                }
+            }
+        }
+
+        return find_flag_marked(node, &pos1, &neg1, struct_name, field_name, used_keys);
     }
 
-    let res1 = find_flag(node, &pos1, &neg1, struct_name, field_name)?;
     let (pos2, neg2) = (format!("with-{}", key), format!("without-{}", key));
-    let res2 = find_flag(node, &pos2, &neg2, struct_name, field_name)?;
+    let mut found_pos1 = false;
+    let mut found_neg1 = false;
+    let mut found_pos2 = false;
+    let mut found_neg2 = false;
+
+    for arg in node.args() {
+        if let Value::String(s) = arg {
+            if s == &pos1 {
+                found_pos1 = true;
+                if let Some(keys) = used_keys.as_deref_mut() {
+                    keys.mark_flag(s);
+                }
+            } else if s == &neg1 {
+                found_neg1 = true;
+                if let Some(keys) = used_keys.as_deref_mut() {
+                    keys.mark_flag(s);
+                }
+            } else if s == &pos2 {
+                found_pos2 = true;
+                if let Some(keys) = used_keys.as_deref_mut() {
+                    keys.mark_flag(s);
+                }
+            } else if s == &neg2 {
+                found_neg2 = true;
+                if let Some(keys) = used_keys.as_deref_mut() {
+                    keys.mark_flag(s);
+                }
+            }
+        }
+    }
+
+    let res1 = match (found_pos1, found_neg1) {
+        (true, true) => {
+            return Err(KdlConfigError::conflicting_flags(struct_name, field_name, &pos1, &neg1));
+        }
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        (false, false) => None,
+    };
+
+    let res2 = match (found_pos2, found_neg2) {
+        (true, true) => {
+            return Err(KdlConfigError::conflicting_flags(struct_name, field_name, &pos2, &neg2));
+        }
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        (false, false) => None,
+    };
 
     match (res1, res2) {
         (Some(_), Some(_)) => Err(KdlConfigError::ambiguous(

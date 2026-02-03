@@ -1,0 +1,5 @@
+error: unknown enum variant attribute
+ --> tests/ui/enum_variant_unknown_attr.rs:5:11
+  |
+5 |     #[kdl(foo)]
+  |           ^^^
