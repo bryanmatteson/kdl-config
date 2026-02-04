@@ -326,6 +326,141 @@ fn parses_registry_keyed_by_first_arg() {
     assert_eq!(parsed.nodes.get("third").unwrap().size, 3);
 }
 
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "indexing")]
+struct IndexingConfig {
+    #[kdl(attr)]
+    chunk_size: i64,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+struct CategoryOverrides {
+    #[kdl(child)]
+    indexing: IndexingConfig,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ChildrenMapByArgConfig {
+    #[kdl(children_map, map_node = "category")]
+    categories: HashMap<String, CategoryOverrides>,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ChildrenMapByNameConfig {
+    #[kdl(children_map)]
+    categories: HashMap<String, CategoryOverrides>,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ChildrenMapKeyAttrConfig {
+    #[kdl(children_map, map_node = "category", key_attr = "name")]
+    categories: HashMap<String, CategoryOverrides>,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ChildrenMapKeyFnConfig {
+    #[kdl(children_map, map_node = "category", key_fn = "registry_key_from_attr")]
+    categories: HashMap<String, CategoryOverrides>,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ChildrenMapVecConfig {
+    #[kdl(children_map, map_node = "category", conflict = "append")]
+    categories: Vec<(String, CategoryOverrides)>,
+}
+
+#[test]
+fn parses_children_map_keyed_by_first_arg() {
+    let parsed = parse_named::<ChildrenMapByArgConfig>(
+        "config {\n  category \"docs\" {\n    indexing chunk_size=3000\n  }\n  category \"code\" {\n    indexing chunk_size=2000\n  }\n}",
+        "config",
+    )
+    .unwrap();
+
+    assert_eq!(
+        parsed.categories.get("docs").unwrap().indexing.chunk_size,
+        3000
+    );
+    assert_eq!(
+        parsed.categories.get("code").unwrap().indexing.chunk_size,
+        2000
+    );
+}
+
+#[test]
+fn parses_children_map_keyed_by_child_name() {
+    let parsed = parse_named::<ChildrenMapByNameConfig>(
+        "config {\n  docs {\n    indexing chunk_size=3000\n  }\n  code {\n    indexing chunk_size=2000\n  }\n}",
+        "config",
+    )
+    .unwrap();
+
+    assert_eq!(
+        parsed.categories.get("docs").unwrap().indexing.chunk_size,
+        3000
+    );
+    assert_eq!(
+        parsed.categories.get("code").unwrap().indexing.chunk_size,
+        2000
+    );
+}
+
+#[test]
+fn parses_children_map_keyed_by_attribute() {
+    let parsed = parse_named::<ChildrenMapKeyAttrConfig>(
+        "config {\n  category name=\"docs\" {\n    indexing chunk_size=3000\n  }\n  category name=\"code\" {\n    indexing chunk_size=2000\n  }\n}",
+        "config",
+    )
+    .unwrap();
+
+    assert_eq!(
+        parsed.categories.get("docs").unwrap().indexing.chunk_size,
+        3000
+    );
+    assert_eq!(
+        parsed.categories.get("code").unwrap().indexing.chunk_size,
+        2000
+    );
+}
+
+#[test]
+fn parses_children_map_keyed_by_fn() {
+    let parsed = parse_named::<ChildrenMapKeyFnConfig>(
+        "config {\n  category key=\"docs\" {\n    indexing chunk_size=3000\n  }\n  category key=\"code\" {\n    indexing chunk_size=2000\n  }\n}",
+        "config",
+    )
+    .unwrap();
+
+    assert_eq!(
+        parsed.categories.get("docs").unwrap().indexing.chunk_size,
+        3000
+    );
+    assert_eq!(
+        parsed.categories.get("code").unwrap().indexing.chunk_size,
+        2000
+    );
+}
+
+#[test]
+fn parses_children_map_vec_append() {
+    let parsed = parse_named::<ChildrenMapVecConfig>(
+        "config {\n  category \"docs\" {\n    indexing chunk_size=3000\n  }\n  category \"docs\" {\n    indexing chunk_size=3500\n  }\n}",
+        "config",
+    )
+    .unwrap();
+
+    assert_eq!(parsed.categories.len(), 2);
+    assert_eq!(parsed.categories[0].0, "docs".to_string());
+    assert_eq!(parsed.categories[0].1.indexing.chunk_size, 3000);
+    assert_eq!(parsed.categories[1].0, "docs".to_string());
+    assert_eq!(parsed.categories[1].1.indexing.chunk_size, 3500);
+}
+
 #[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct RegistryLast {

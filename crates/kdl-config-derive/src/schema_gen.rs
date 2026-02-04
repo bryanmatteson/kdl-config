@@ -5,9 +5,9 @@ use syn::{Attribute, DataEnum, DeriveInput, Expr, ExprLit, ExprUnary, Fields, Li
 
 use crate::attrs::{
     BoolMode, ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle, StructAttrs,
-    SchemaTypeOverride, extract_hashmap_types, extract_inner_type, extract_registry_vec_value,
-    is_bool_type, is_numeric_type, is_option_type, is_string_type, parse_field_attrs,
-    parse_struct_attrs,
+    SchemaTypeOverride, extract_children_map_types, extract_hashmap_types, extract_inner_type,
+    extract_registry_vec_value, is_bool_type, is_numeric_type, is_option_type, is_string_type,
+    parse_field_attrs, parse_struct_attrs,
 };
 
 pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -404,6 +404,58 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         }
     };
 
+    let children_map_child_insert = |val_ty: &Type,
+                                     key_ty: Option<&Type>,
+                                     node_name: &str,
+                                     registry_key: Option<TokenStream>,
+                                     required: bool,
+                                     description: TokenStream|
+     -> TokenStream {
+        let key_schema = key_ty.map(schema_type_expr);
+        quote! {
+            let schema_ref = <#val_ty as ::kdl_config_runtime::schema::KdlSchema>::schema_ref();
+            let mut node_schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
+            node_schema.name = Some(#node_name.to_string());
+            node_schema.description = #description;
+            node_schema.required = Some(#required);
+            if let Some(key_schema) = #key_schema {
+                node_schema.values.push(::kdl_config_runtime::schema::SchemaValue {
+                    ty: key_schema,
+                    required: #required,
+                    description: None,
+                    enum_values: None,
+                });
+            }
+            if let Some(registry_key) = #registry_key {
+                node_schema.registry_key = Some(registry_key);
+            }
+            match schema_ref {
+                ::kdl_config_runtime::schema::SchemaRef::Inline(s) => {
+                    node_schema.props = s.props;
+                    node_schema.values.extend(s.values);
+                    node_schema.children = s.children;
+                }
+                ::kdl_config_runtime::schema::SchemaRef::Ref(r) => {
+                    node_schema.ref_type = Some(r);
+                }
+                ::kdl_config_runtime::schema::SchemaRef::Choice(choices) => {
+                    node_schema.children = Some(::std::boxed::Box::new(
+                        ::kdl_config_runtime::schema::ChildrenSchema {
+                            nodes: vec![::kdl_config_runtime::schema::SchemaRef::Choice(choices)],
+                        },
+                    ));
+                }
+            }
+
+            if children_nodes.is_none() {
+                children_nodes = Some(::kdl_config_runtime::schema::ChildrenSchema { nodes: vec![] });
+            }
+            if let Some(c) = &mut children_nodes {
+                c.nodes.push(::kdl_config_runtime::schema::SchemaRef::Inline(node_schema));
+            }
+        }
+    };
+
     for field in fields {
         if field.is_modifier || field.is_skipped || field.schema.skip {
             continue;
@@ -487,6 +539,37 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             ));
             child_inserts.push(registry_child_insert(
                 val_ty, &container, key_schema, required, desc_expr.clone(),
+            ));
+            continue;
+        }
+
+        if field.children_map {
+            let (_kind, key_ty, val_ty) = extract_children_map_types(&field.ty)
+                .expect("children_map placement requires HashMap<K, V> or Vec<(K, V)>");
+            register_calls.push(quote! {
+                <#val_ty as ::kdl_config_runtime::schema::KdlSchema>::register_definitions(registry);
+            });
+
+            let node_name = field
+                .map_node
+                .clone()
+                .unwrap_or_else(|| "*".to_string());
+            let key_ty = field.map_node.as_ref().map(|_| key_ty);
+            let key_schema = if field.map_node.is_some() {
+                let default_key = crate::attrs::RegistryKey::Arg(0);
+                Some(registry_key_schema_expr(
+                    field.registry_key.as_ref().unwrap_or(&default_key),
+                ))
+            } else {
+                None
+            };
+            child_inserts.push(children_map_child_insert(
+                val_ty,
+                key_ty,
+                &node_name,
+                key_schema,
+                required,
+                desc_expr.clone(),
             ));
             continue;
         }

@@ -5,7 +5,7 @@ use syn::Ident;
 use crate::attrs::{
     BoolMode, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec, FieldInfo, FlagStyle,
     StructAttrs, extract_hashmap_types, extract_inner_type, is_bool_type, is_numeric_type,
-    is_string_type,
+    is_string_type, extract_children_map_types, ChildrenMapKind,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -15,6 +15,7 @@ enum FieldKind {
     Node,
     NodeVec,
     Registry,
+    ChildrenMap,
     Modifier,
 }
 
@@ -144,10 +145,13 @@ pub(crate) fn generate_struct_overrides(struct_attrs: &StructAttrs) -> TokenStre
 }
 
 pub(crate) fn generate_field_parser(field: &FieldInfo, struct_name: &str) -> TokenStream {
-    if field.is_hashmap && !field.placement.registry {
-        return quote! { compile_error!("HashMap fields require #[kdl(registry)]"); };
+    if field.is_hashmap && !field.placement.registry && !field.children_map {
+        return quote! { compile_error!("HashMap fields require #[kdl(registry)] or #[kdl(children_map)]"); };
     }
-    if crate::attrs::extract_registry_vec_value(&field.ty).is_some() && !field.placement.registry {
+    if crate::attrs::extract_registry_vec_value(&field.ty).is_some()
+        && !field.placement.registry
+        && !field.children_map
+    {
         return quote! { compile_error!("Vec<(String, T)> registry fields require #[kdl(registry)]"); };
     }
 
@@ -157,6 +161,9 @@ pub(crate) fn generate_field_parser(field: &FieldInfo, struct_name: &str) -> Tok
     match field_kind(field) {
         FieldKind::Registry => {
             generate_registry_parser(field, struct_name, &field_overrides, mark_usage)
+        }
+        FieldKind::ChildrenMap => {
+            generate_children_map_parser(field, struct_name, &field_overrides, mark_usage)
         }
         FieldKind::NodeVec => {
             generate_node_vec_parser(field, struct_name, &field_overrides, mark_usage)
@@ -219,6 +226,9 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
     if field.placement.registry {
         return FieldKind::Registry;
     }
+    if field.children_map {
+        return FieldKind::ChildrenMap;
+    }
 
     if field.is_vec || field.is_option_vec {
         let inner = if field.is_option_vec {
@@ -255,6 +265,9 @@ fn is_value_type(ty: &syn::Type) -> bool {
 
 fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
     if field.is_modifier {
+        return quote! {};
+    }
+    if field.children_map {
         return quote! {};
     }
     let mut marks = Vec::new();
@@ -309,6 +322,7 @@ fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
             FieldKind::Registry => {
                 marks.push(quote! { used_keys.mark_child(#container); });
             }
+            FieldKind::ChildrenMap => {}
             FieldKind::Modifier => {}
         }
     }
@@ -327,6 +341,23 @@ fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
 pub(crate) fn generate_skip_marks(field: &FieldInfo) -> TokenStream {
     if field.is_modifier {
         return quote! {};
+    }
+    if field.children_map {
+        let map_node = field.map_node.clone();
+        let marks = if let Some(map_node) = map_node {
+            quote! { used_keys.mark_child(#map_node); }
+        } else {
+            quote! {
+                for child in node.children() {
+                    used_keys.mark_child(&child.name);
+                }
+            }
+        };
+        return quote! {
+            if struct_config.deny_unknown {
+                #marks
+            }
+        };
     }
 
     let mut marks = Vec::new();
@@ -385,6 +416,7 @@ pub(crate) fn generate_skip_marks(field: &FieldInfo) -> TokenStream {
             FieldKind::Registry => {
                 marks.push(quote! { used_keys.mark_child(#container); });
             }
+            FieldKind::ChildrenMap => {}
             FieldKind::Modifier => {}
         }
     }
@@ -1539,6 +1571,271 @@ fn generate_registry_parser(
             ));
         }
 
+        #finalize_vec
+    }
+}
+
+fn generate_children_map_parser(
+    field: &FieldInfo,
+    struct_name: &str,
+    field_overrides: &TokenStream,
+    mark_usage: TokenStream,
+) -> TokenStream {
+    let field_ident = &field.ident;
+    let field_name = field.ident.to_string();
+    let kdl_key = &field.kdl_key;
+    let ty = &field.ty;
+    let child_ident = format_ident!("__kdl_child_{}", field_ident);
+    let key_val_ident = format_ident!("__kdl_key_val_{}", field_ident);
+    let key_ident = format_ident!("__kdl_key_{}", field_ident);
+    let value_ident = format_ident!("__kdl_value_{}", field_ident);
+    let node_copy_ident = format_ident!("__kdl_node_copy_{}", field_ident);
+    let existing_idx_ident = format_ident!("__kdl_existing_idx_{}", field_ident);
+    let required = field.required;
+    let map_node = field
+        .map_node
+        .as_ref()
+        .map(|s| quote! { #s });
+
+    let (children_map_kind, key_ty, val_ty) =
+        extract_children_map_types(ty).expect("children_map requires HashMap or Vec<(K, V)>");
+
+    let missing_key = if let Some(map_node) = map_node.as_ref() {
+        quote! { #map_node }
+    } else {
+        quote! { #kdl_key }
+    };
+
+    let duplicate_error = quote! {
+        return Err(::kdl_config_runtime::KdlConfigError {
+            struct_name: #struct_name.to_string(),
+            field_name: Some(#field_name.to_string()),
+            kdl_key: Some(#kdl_key.to_string()),
+            placement: ::kdl_config_runtime::Placement::Children,
+            required: false,
+            kind: ::kdl_config_runtime::ErrorKind::Custom("duplicate map key".to_string()),
+        });
+    };
+
+    let missing_arg_error = quote! {
+        ::kdl_config_runtime::KdlConfigError {
+            struct_name: #struct_name.to_string(),
+            field_name: Some(#field_name.to_string()),
+            kdl_key: Some(#kdl_key.to_string()),
+            placement: ::kdl_config_runtime::Placement::Children,
+            required: false,
+            kind: ::kdl_config_runtime::ErrorKind::Custom("missing map key argument".to_string()),
+        }
+    };
+    let missing_attr_error = quote! {
+        ::kdl_config_runtime::KdlConfigError {
+            struct_name: #struct_name.to_string(),
+            field_name: Some(#field_name.to_string()),
+            kdl_key: Some(#kdl_key.to_string()),
+            placement: ::kdl_config_runtime::Placement::Children,
+            required: false,
+            kind: ::kdl_config_runtime::ErrorKind::Custom("missing map key attribute".to_string()),
+        }
+    };
+
+    let registry_key = field
+        .registry_key
+        .clone()
+        .unwrap_or(crate::attrs::RegistryKey::Arg(0));
+
+    let key_extract = if map_node.is_some() {
+        match registry_key {
+            crate::attrs::RegistryKey::Arg(index) => {
+                quote! {
+                    let #key_val_ident = #child_ident.arg(#index).ok_or_else(|| {
+                        #missing_arg_error
+                    })?;
+                    let #key_ident = ::kdl_config_runtime::convert_value_checked::<#key_ty>(
+                        #key_val_ident,
+                        #struct_name,
+                        #field_name,
+                        #kdl_key,
+                        ::kdl_config_runtime::Placement::Children,
+                    )?;
+                    let #node_copy_ident = #child_ident.without_arg(#index);
+                }
+            }
+            crate::attrs::RegistryKey::Attr(name) => {
+                quote! {
+                    let #key_val_ident = #child_ident.attr_values(#name).ok_or_else(|| {
+                        #missing_attr_error
+                    })?;
+                    if #key_val_ident.len() != 1 {
+                        return Err(::kdl_config_runtime::KdlConfigError {
+                            struct_name: #struct_name.to_string(),
+                            field_name: Some(#field_name.to_string()),
+                            kdl_key: Some(#kdl_key.to_string()),
+                            placement: ::kdl_config_runtime::Placement::Children,
+                            required: false,
+                            kind: ::kdl_config_runtime::ErrorKind::Custom("map key attribute must have a single value".to_string()),
+                        });
+                    }
+                    let #key_ident = ::kdl_config_runtime::convert_value_checked::<#key_ty>(
+                        &#key_val_ident[0],
+                        #struct_name,
+                        #field_name,
+                        #kdl_key,
+                        ::kdl_config_runtime::Placement::Children,
+                    )?;
+                    let #node_copy_ident = #child_ident.without_attr(#name);
+                }
+            }
+            crate::attrs::RegistryKey::Function(path) => {
+                let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
+                    let ident = syn::Ident::new(&path, proc_macro2::Span::call_site());
+                    quote! { #ident }
+                });
+                quote! {
+                    let #key_ident = #key_fn(#child_ident)?;
+                    let #node_copy_ident = #child_ident.clone();
+                }
+            }
+        }
+    } else {
+        quote! {
+            let #key_val_ident = ::kdl_config_runtime::Value::String(#child_ident.name.clone());
+            let #key_ident = ::kdl_config_runtime::convert_value_checked::<#key_ty>(
+                &#key_val_ident,
+                #struct_name,
+                #field_name,
+                #kdl_key,
+                ::kdl_config_runtime::Placement::Children,
+            )?;
+        }
+    };
+
+    let (field_init, map_insert, finalize_vec) = match children_map_kind {
+        ChildrenMapKind::HashMap => (
+            quote! { let mut #field_ident: #ty = ::std::collections::HashMap::new(); },
+            quote! {
+                match field_config.conflict {
+                    ::kdl_config_runtime::ConflictPolicy::Error => {
+                        if #field_ident.contains_key(&#key_ident) {
+                            #duplicate_error
+                        }
+                        #field_ident.insert(#key_ident, #value_ident);
+                    }
+                    ::kdl_config_runtime::ConflictPolicy::First => {
+                        #field_ident.entry(#key_ident).or_insert(#value_ident);
+                    }
+                    ::kdl_config_runtime::ConflictPolicy::Last => {
+                        #field_ident.insert(#key_ident, #value_ident);
+                    }
+                    ::kdl_config_runtime::ConflictPolicy::Append => {
+                        return Err(::kdl_config_runtime::KdlConfigError::incompatible_placement(
+                            #struct_name,
+                            #field_name,
+                            "append conflict policy is not supported for children_map HashMap fields",
+                        ));
+                    }
+                }
+            },
+            quote! {},
+        ),
+        ChildrenMapKind::Vec => (
+            quote! { let mut #field_ident: Vec<(#key_ty, #val_ty)> = Vec::new(); },
+            quote! {
+                match field_config.conflict {
+                    ::kdl_config_runtime::ConflictPolicy::Error => {
+                        if #field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                            #duplicate_error
+                        }
+                        #field_ident.push((#key_ident, #value_ident));
+                    }
+                    ::kdl_config_runtime::ConflictPolicy::First => {
+                        if !#field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                            #field_ident.push((#key_ident, #value_ident));
+                        }
+                    }
+                    ::kdl_config_runtime::ConflictPolicy::Last => {
+                        if let Some(#existing_idx_ident) = #field_ident.iter().position(|(key, _)| key == &#key_ident) {
+                            #field_ident.remove(#existing_idx_ident);
+                        }
+                        #field_ident.push((#key_ident, #value_ident));
+                    }
+                    ::kdl_config_runtime::ConflictPolicy::Append => {
+                        #field_ident.push((#key_ident, #value_ident));
+                    }
+                }
+            },
+            quote! {},
+        ),
+        ChildrenMapKind::OptionVec => (
+            quote! { let mut #field_ident: Vec<(#key_ty, #val_ty)> = Vec::new(); },
+            quote! {
+                match field_config.conflict {
+                    ::kdl_config_runtime::ConflictPolicy::Error => {
+                        if #field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                            #duplicate_error
+                        }
+                        #field_ident.push((#key_ident, #value_ident));
+                    }
+                    ::kdl_config_runtime::ConflictPolicy::First => {
+                        if !#field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                            #field_ident.push((#key_ident, #value_ident));
+                        }
+                    }
+                    ::kdl_config_runtime::ConflictPolicy::Last => {
+                        if let Some(#existing_idx_ident) = #field_ident.iter().position(|(key, _)| key == &#key_ident) {
+                            #field_ident.remove(#existing_idx_ident);
+                        }
+                        #field_ident.push((#key_ident, #value_ident));
+                    }
+                    ::kdl_config_runtime::ConflictPolicy::Append => {
+                        #field_ident.push((#key_ident, #value_ident));
+                    }
+                }
+            },
+            quote! {
+                let #field_ident: #ty = if #field_ident.is_empty() { None } else { Some(#field_ident) };
+            },
+        ),
+    };
+
+    let map_loop = if let Some(map_node) = map_node {
+        quote! {
+            if struct_config.deny_unknown {
+                used_keys.mark_child(#map_node);
+            }
+            for #child_ident in node.children_named(#map_node) {
+                #key_extract
+                let #value_ident = <#val_ty as ::kdl_config_runtime::KdlParse>::from_node(&#node_copy_ident, config)?;
+                #map_insert
+            }
+        }
+    } else {
+        quote! {
+            for #child_ident in node.children() {
+                if struct_config.deny_unknown {
+                    used_keys.mark_child(&#child_ident.name);
+                }
+                #key_extract
+                let #value_ident = <#val_ty as ::kdl_config_runtime::KdlParse>::from_node(#child_ident, config)?;
+                #map_insert
+            }
+        }
+    };
+
+    quote! {
+        #mark_usage
+        let field_config = ::kdl_config_runtime::resolve_field(&struct_config, #field_overrides);
+        #field_init
+
+        #map_loop
+
+        if #required && #field_ident.is_empty() {
+            return Err(::kdl_config_runtime::KdlConfigError::missing_required(
+                #struct_name,
+                #field_name,
+                #missing_key,
+                ::kdl_config_runtime::Placement::Children,
+            ));
+        }
         #finalize_vec
     }
 }

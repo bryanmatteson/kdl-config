@@ -11,6 +11,7 @@ enum FieldKind {
     Node,
     NodeVec,
     Registry,
+    ChildrenMap,
     Modifier,
 }
 
@@ -79,9 +80,14 @@ pub(crate) fn render_body_with_accessor(
     let mut child_fields = Vec::new();
     let mut children_fields = Vec::new();
     let mut registry_fields = Vec::new();
+    let mut children_map_fields = Vec::new();
 
     for field in fields {
         if field.is_modifier || field.is_skipped {
+            continue;
+        }
+        if field.children_map {
+            children_map_fields.push(field);
             continue;
         }
         let kind = field_kind(field);
@@ -111,6 +117,7 @@ pub(crate) fn render_body_with_accessor(
     let child_render = render_child_fields(&child_fields, accessor);
     let children_render = render_children_fields(&children_fields, accessor);
     let registry_render = render_registry_fields(&registry_fields, accessor);
+    let children_map_render = render_children_map_fields(&children_map_fields, accessor);
     let modifier_expr = modifier_expr.unwrap_or_else(|| modifier_expr_for(fields, accessor));
 
     quote! {
@@ -128,6 +135,7 @@ pub(crate) fn render_body_with_accessor(
             #value_render
             #child_render
             #children_render
+            #children_map_render
             #registry_render
 
             value_nodes.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -151,6 +159,9 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
     }
     if field.placement.registry {
         return FieldKind::Registry;
+    }
+    if field.children_map {
+        return FieldKind::ChildrenMap;
     }
 
     if field.is_vec || field.is_option_vec {
@@ -197,6 +208,7 @@ fn render_placement_for(field: &FieldInfo, kind: FieldKind) -> RenderPlacement {
         FieldKind::Node => RenderPlacement::Child,
         FieldKind::NodeVec => RenderPlacement::Children,
         FieldKind::Registry => RenderPlacement::Registry,
+        FieldKind::ChildrenMap => RenderPlacement::Children,
         FieldKind::Modifier => RenderPlacement::Child,
     }
 }
@@ -618,6 +630,120 @@ fn render_registry_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> Fie
                     }
                 }
             });
+        }
+    }
+    quote! { #(#items)* }
+}
+
+fn render_children_map_fields(
+    fields: &[&FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
+    let mut items = Vec::new();
+    for field in fields {
+        let access = accessor(field);
+        let cond = render_condition(field, &access);
+        let reference = &access.reference;
+        let map_node = field.map_node.clone();
+        let map_kind = field.children_map_kind.expect("children_map field kind");
+
+        match (map_node, map_kind) {
+            (Some(map_node), crate::attrs::ChildrenMapKind::HashMap) => {
+                items.push(quote! {
+                    if #cond {
+                        let mut entries: ::std::vec::Vec<(String, &_, &_)> = (#reference)
+                            .iter()
+                            .map(|(name, value)| {
+                                let rendered = ::kdl_config_runtime::render_value(
+                                    &::kdl_config_runtime::Value::from((*name).clone()),
+                                );
+                                (rendered, name, value)
+                            })
+                            .collect();
+                        entries.sort_by(|a, b| a.0.cmp(&b.0));
+                        for (rendered_key, _name, value) in entries {
+                            let mut rendered = ::kdl_config_runtime::to_kdl(value, #map_node);
+                            rendered = ::kdl_config_runtime::insert_arg(&rendered, &rendered_key);
+                            child_nodes.push((#map_node.to_string(), idx, rendered));
+                            idx += 1;
+                        }
+                    }
+                });
+            }
+            (Some(map_node), crate::attrs::ChildrenMapKind::Vec) => {
+                items.push(quote! {
+                    if #cond {
+                        for (name, value) in #reference {
+                            let rendered_key = ::kdl_config_runtime::render_value(
+                                &::kdl_config_runtime::Value::from((*name).clone()),
+                            );
+                            let mut rendered = ::kdl_config_runtime::to_kdl(value, #map_node);
+                            rendered = ::kdl_config_runtime::insert_arg(&rendered, &rendered_key);
+                            child_nodes.push((#map_node.to_string(), idx, rendered));
+                            idx += 1;
+                        }
+                    }
+                });
+            }
+            (Some(map_node), crate::attrs::ChildrenMapKind::OptionVec) => {
+                items.push(quote! {
+                    if #cond {
+                        if let Some(entries) = #reference {
+                            for (name, value) in entries {
+                                let rendered_key = ::kdl_config_runtime::render_value(
+                                    &::kdl_config_runtime::Value::from((*name).clone()),
+                                );
+                                let mut rendered = ::kdl_config_runtime::to_kdl(value, #map_node);
+                                rendered = ::kdl_config_runtime::insert_arg(&rendered, &rendered_key);
+                                child_nodes.push((#map_node.to_string(), idx, rendered));
+                                idx += 1;
+                            }
+                        }
+                    }
+                });
+            }
+            (None, crate::attrs::ChildrenMapKind::HashMap) => {
+                items.push(quote! {
+                    if #cond {
+                        let mut entries: ::std::vec::Vec<(String, &_, &_)> = (#reference)
+                            .iter()
+                            .map(|(name, value)| (name.to_string(), name, value))
+                            .collect();
+                        entries.sort_by(|a, b| a.0.cmp(&b.0));
+                        for (rendered_key, _name, value) in entries {
+                            let rendered = ::kdl_config_runtime::to_kdl(value, &rendered_key);
+                            child_nodes.push((rendered_key, idx, rendered));
+                            idx += 1;
+                        }
+                    }
+                });
+            }
+            (None, crate::attrs::ChildrenMapKind::Vec) => {
+                items.push(quote! {
+                    if #cond {
+                        for (name, value) in #reference {
+                            let rendered_key = name.to_string();
+                            let rendered = ::kdl_config_runtime::to_kdl(value, &rendered_key);
+                            child_nodes.push((rendered_key, idx, rendered));
+                            idx += 1;
+                        }
+                    }
+                });
+            }
+            (None, crate::attrs::ChildrenMapKind::OptionVec) => {
+                items.push(quote! {
+                    if #cond {
+                        if let Some(entries) = #reference {
+                            for (name, value) in entries {
+                                let rendered_key = name.to_string();
+                                let rendered = ::kdl_config_runtime::to_kdl(value, &rendered_key);
+                                child_nodes.push((rendered_key, idx, rendered));
+                                idx += 1;
+                            }
+                        }
+                    }
+                });
+            }
         }
     }
     quote! { #(#items)* }

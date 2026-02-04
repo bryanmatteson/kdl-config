@@ -86,6 +86,8 @@ pub struct FieldAttrs {
     pub required: Option<bool>,
     pub name: Option<String>,
     pub container: Option<String>,
+    pub children_map: bool,
+    pub map_node: Option<String>,
     pub registry_key: Option<RegistryKey>,
     pub default: Option<DefaultSpec>,
     pub skip: bool,
@@ -150,6 +152,13 @@ pub enum RegistryKey {
     Arg(usize),
     Attr(String),
     Function(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildrenMapKind {
+    HashMap,
+    Vec,
+    OptionVec,
 }
 
 impl Default for FieldPlacement {
@@ -486,6 +495,8 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
     let mut required: Option<bool> = None;
     let mut name: Option<String> = None;
     let mut container: Option<String> = None;
+    let mut children_map = false;
+    let mut map_node: Option<String> = None;
     let mut registry_key: Option<RegistryKey> = None;
     let mut default_spec: Option<DefaultSpec> = None;
     let mut default_count: u8 = 0;
@@ -586,6 +597,24 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                     return Err(syn::Error::new(
                         value.span(),
                         "expected string literal for `container`",
+                    ));
+                }
+            } else if meta.path.is_ident("children_map") {
+                children_map = true;
+            } else if meta.path.is_ident("map_node") {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                    if map_node.is_some() {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "map_node is already set",
+                        ));
+                    }
+                    map_node = Some(lit.value());
+                } else {
+                    return Err(syn::Error::new(
+                        value.span(),
+                        "expected string literal for `map_node`",
                     ));
                 }
             } else if meta.path.is_ident("key_arg") {
@@ -920,6 +949,8 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
             render,
             scalar,
             schema: schema.clone(),
+            children_map,
+            map_node,
         }));
     }
 
@@ -929,6 +960,8 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
         required,
         name,
         container,
+        children_map,
+        map_node,
         registry_key,
         default: default_spec,
         skip,
@@ -1105,6 +1138,26 @@ pub fn extract_vec_tuple_types(ty: &Type) -> Option<(&Type, &Type)> {
     None
 }
 
+pub fn extract_children_map_types(ty: &Type) -> Option<(ChildrenMapKind, &Type, &Type)> {
+    if let Some((key_ty, val_ty)) = extract_hashmap_types(ty) {
+        return Some((ChildrenMapKind::HashMap, key_ty, val_ty));
+    }
+
+    if let Some((key_ty, val_ty)) = extract_vec_tuple_types(ty) {
+        return Some((ChildrenMapKind::Vec, key_ty, val_ty));
+    }
+
+    if is_option_type(ty) {
+        if let Some(inner) = extract_inner_type(ty) {
+            if let Some((key_ty, val_ty)) = extract_vec_tuple_types(inner) {
+                return Some((ChildrenMapKind::OptionVec, key_ty, val_ty));
+            }
+        }
+    }
+
+    None
+}
+
 pub fn extract_registry_vec_value(ty: &Type) -> Option<(&Type, bool)> {
     if let Some((key_ty, val_ty)) = extract_vec_tuple_types(ty) {
         if is_string_type(key_ty) {
@@ -1203,6 +1256,9 @@ pub struct FieldInfo {
     pub is_modifier: bool,
     pub is_scalar: bool,
     pub is_skipped: bool,
+    pub children_map: bool,
+    pub map_node: Option<String>,
+    pub children_map_kind: Option<ChildrenMapKind>,
     pub default: Option<DefaultSpec>,
     pub skip_serializing_if: Option<String>,
     pub bool_mode: Option<BoolMode>,
@@ -1264,7 +1320,7 @@ impl FieldInfo {
             Some(true) => true,
             Some(false) => false,
             None => {
-                if is_bool || attrs.placement.registry {
+                if is_bool || attrs.placement.registry || attrs.children_map {
                     false
                 } else {
                     !is_optional && !is_option_vec
@@ -1339,10 +1395,55 @@ impl FieldInfo {
             ));
         }
 
-        if attrs.registry_key.is_some() && !attrs.placement.registry {
+        if attrs.children_map {
+            let children_map_kind = extract_children_map_types(&field.ty);
+            if children_map_kind.is_none() {
+                return Err(syn::Error::new(
+                    err_span,
+                    "children_map placement requires HashMap<K, V> or Vec<(K, V)> field type",
+                ));
+            }
+            if attrs.placement.attr
+                || attrs.placement.keyed
+                || attrs.placement.positional.is_some()
+                || attrs.placement.flag.is_some()
+                || attrs.placement.value
+                || attrs.placement.child
+                || attrs.placement.children
+                || attrs.placement.registry
+                || attrs.placement.modifier
+            {
+                return Err(syn::Error::new(
+                    err_span,
+                    "children_map placement cannot be combined with other placements",
+                ));
+            }
+            if attrs.container.is_some() {
+                return Err(syn::Error::new(
+                    err_span,
+                    "children_map does not support container override",
+                ));
+            }
+            if attrs.registry_key.is_some() && attrs.map_node.is_none() {
+                return Err(syn::Error::new(
+                    err_span,
+                    "children_map key options require map_node",
+                ));
+            }
+        } else if attrs.map_node.is_some() {
             return Err(syn::Error::new(
                 err_span,
-                "registry key options require #[kdl(registry)]",
+                "map_node requires #[kdl(children_map)]",
+            ));
+        }
+
+        if attrs.registry_key.is_some()
+            && !attrs.placement.registry
+            && !(attrs.children_map && attrs.map_node.is_some())
+        {
+            return Err(syn::Error::new(
+                err_span,
+                "registry key options require #[kdl(registry)] or #[kdl(children_map, map_node = ...)]",
             ));
         }
 
@@ -1390,6 +1491,9 @@ impl FieldInfo {
             is_modifier,
             is_scalar,
             is_skipped: attrs.skip,
+            children_map: attrs.children_map,
+            map_node: attrs.map_node,
+            children_map_kind: extract_children_map_types(&field.ty).map(|(kind, _, _)| kind),
             default: attrs.default,
             skip_serializing_if: attrs.skip_serializing_if,
             bool_mode: attrs.bool_mode,
@@ -1419,6 +1523,12 @@ impl FieldInfo {
             return Err(syn::Error::new(
                 err_span,
                 "tuple struct fields only support positional placement without names or registry keys",
+            ));
+        }
+        if attrs.children_map || attrs.map_node.is_some() {
+            return Err(syn::Error::new(
+                err_span,
+                "tuple struct fields do not support children_map",
             ));
         }
 
@@ -1522,6 +1632,9 @@ impl FieldInfo {
             is_modifier,
             is_scalar,
             is_skipped: attrs.skip,
+            children_map: false,
+            map_node: None,
+            children_map_kind: None,
             default: attrs.default,
             skip_serializing_if: attrs.skip_serializing_if,
             bool_mode: attrs.bool_mode,

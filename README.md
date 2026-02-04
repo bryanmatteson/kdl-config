@@ -74,6 +74,66 @@ KDL example for the struct above:
 config enabled no-enabled strict=#true fast
 ```
 
+## Children Maps
+
+Collect map-like child nodes into `HashMap` or `Vec<(K, V)>` with `children_map`.
+
+Key from child name:
+
+```rust
+use std::collections::HashMap;
+use kdl_config::KdlNode;
+
+#[derive(KdlNode)]
+#[kdl(node = "indexing")]
+struct IndexingConfig {
+    #[kdl(attr)]
+    chunk_size: i64,
+}
+
+#[derive(KdlNode)]
+struct CategoryOverrides {
+    #[kdl(child)]
+    indexing: IndexingConfig,
+}
+
+#[derive(KdlNode)]
+#[kdl(node = "config")]
+struct Config {
+    #[kdl(children_map)]
+    categories: HashMap<String, CategoryOverrides>,
+}
+```
+
+```kdl
+config {
+    docs { indexing chunk_size=3000 }
+    code { indexing chunk_size=2000 }
+}
+```
+
+Key from first arg (or `key_attr`/`key_fn`) with `map_node`:
+
+```rust
+#[derive(KdlNode)]
+#[kdl(node = "config")]
+struct Config {
+    #[kdl(children_map, map_node = "category")]
+    categories: Vec<(String, CategoryOverrides)>,
+}
+```
+
+```kdl
+config {
+    category "docs" { indexing chunk_size=3000 }
+    category "code" { indexing chunk_size=2000 }
+}
+```
+
+Notes:
+- `key_arg`/`key_attr`/`key_fn` are only valid when `map_node` is set.
+- `HashMap` renders deterministically (sorted by key); `Vec<(K, V)>` preserves insertion order.
+
 ## Schema Generation
 
 Derive `KdlSchema` (or use `#[derive(Kdl)]` with `#[kdl(schema)]`) to register schema definitions.
