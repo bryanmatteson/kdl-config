@@ -82,67 +82,79 @@ fn parse_kdl_derive_attrs(attrs: &[Attribute]) -> syn::Result<DeriveConfig> {
             continue;
         }
 
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("node") {
-                if meta.input.peek(syn::Token![=]) {
-                    let _: syn::Expr = meta.value()?.parse()?;
-                } else if has_nested_meta(&meta) {
-                    meta.parse_nested_meta(|_| Ok(()))?;
-                } else {
-                    set_mode(&mut config, DeriveMode::Node, meta.path.span())?;
-                }
-                return Ok(());
-            }
-
-            if meta.path.is_ident("choice") {
-                if meta.input.peek(syn::Token![=]) {
-                    return Err(meta.error("choice does not accept a value"));
-                }
-                if has_nested_meta(&meta) {
-                    meta.parse_nested_meta(|_| Ok(()))?;
-                }
-                set_mode(&mut config, DeriveMode::Choice, meta.path.span())?;
-                return Ok(());
-            }
-
-            if meta.path.is_ident("value") {
-                if meta.input.peek(syn::Token![=]) {
-                    return Err(meta.error("value does not accept a value"));
-                }
-                if has_nested_meta(&meta) {
-                    meta.parse_nested_meta(|_| Ok(()))?;
-                }
-                set_mode(&mut config, DeriveMode::Value, meta.path.span())?;
-                return Ok(());
-            }
-
-            if meta.path.is_ident("schema") {
-                if meta.input.peek(syn::Token![=]) {
-                    let lit: syn::LitBool = meta.value()?.parse()?;
-                    config.schema = lit.value;
-                } else if has_nested_meta(&meta) {
-                    meta.parse_nested_meta(|_| Ok(()))?;
-                    config.schema = true;
-                } else {
-                    config.schema = true;
-                }
-                return Ok(());
-            }
-
-            if meta.input.peek(syn::Token![=]) {
-                let _: syn::Expr = meta.value()?.parse()?;
-                return Ok(());
-            }
-
-            if !meta.input.is_empty() {
-                meta.parse_nested_meta(|_| Ok(()))?;
-            }
-
-            Ok(())
-        })?;
+        attr.parse_nested_meta(|meta| apply_kdl_derive_meta(meta, &mut config))?;
     }
 
     Ok(config)
+}
+
+fn apply_kdl_derive_meta(
+    meta: syn::meta::ParseNestedMeta,
+    config: &mut DeriveConfig,
+) -> syn::Result<()> {
+    if meta.path.is_ident("meta") || meta.path.is_ident("group") {
+        if has_nested_meta(&meta) {
+            meta.parse_nested_meta(|nested| apply_kdl_derive_meta(nested, config))?;
+        }
+        return Ok(());
+    }
+
+    if meta.path.is_ident("node") {
+        if meta.input.peek(syn::Token![=]) {
+            let _: syn::Expr = meta.value()?.parse()?;
+        } else if has_nested_meta(&meta) {
+            meta.parse_nested_meta(|_| Ok(()))?;
+        } else {
+            set_mode(config, DeriveMode::Node, meta.path.span())?;
+        }
+        return Ok(());
+    }
+
+    if meta.path.is_ident("choice") {
+        if meta.input.peek(syn::Token![=]) {
+            return Err(meta.error("choice does not accept a value"));
+        }
+        if has_nested_meta(&meta) {
+            meta.parse_nested_meta(|_| Ok(()))?;
+        }
+        set_mode(config, DeriveMode::Choice, meta.path.span())?;
+        return Ok(());
+    }
+
+    if meta.path.is_ident("value") {
+        if meta.input.peek(syn::Token![=]) {
+            return Err(meta.error("value does not accept a value"));
+        }
+        if has_nested_meta(&meta) {
+            meta.parse_nested_meta(|_| Ok(()))?;
+        }
+        set_mode(config, DeriveMode::Value, meta.path.span())?;
+        return Ok(());
+    }
+
+    if meta.path.is_ident("schema") {
+        if meta.input.peek(syn::Token![=]) {
+            let lit: syn::LitBool = meta.value()?.parse()?;
+            config.schema = lit.value;
+        } else if has_nested_meta(&meta) {
+            meta.parse_nested_meta(|_| Ok(()))?;
+            config.schema = true;
+        } else {
+            config.schema = true;
+        }
+        return Ok(());
+    }
+
+    if meta.input.peek(syn::Token![=]) {
+        let _: syn::Expr = meta.value()?.parse()?;
+        return Ok(());
+    }
+
+    if !meta.input.is_empty() {
+        meta.parse_nested_meta(|_| Ok(()))?;
+    }
+
+    Ok(())
 }
 
 fn set_mode(
@@ -164,7 +176,7 @@ fn set_mode(
 }
 
 fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
-    let name = &input.ident;
+    let enum_name = &input.ident;
 
     match &input.data {
         Data::Enum(data) => {
@@ -176,7 +188,7 @@ fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
                 })
                 .collect();
             Ok(quote! {
-                impl ::kdl_config::schema::KdlSchema for #name {
+                impl ::kdl_config::schema::KdlSchema for #enum_name {
                     fn schema_ref() -> ::kdl_config::schema::SchemaRef {
                             ::kdl_config::schema::SchemaRef::Inline(
                                 ::kdl_config::schema::KdlNodeSchema {
@@ -209,7 +221,7 @@ fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
             };
 
             Ok(quote! {
-                impl ::kdl_config::schema::KdlSchema for #name {
+                impl ::kdl_config::schema::KdlSchema for #enum_name {
                     fn schema_ref() -> ::kdl_config::schema::SchemaRef {
                         let schema_ref = <#inner_ty as ::kdl_config::schema::KdlSchema>::schema_ref();
                         let ty = match schema_ref {

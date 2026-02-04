@@ -3,8 +3,8 @@ use quote::quote;
 use syn::Ident;
 
 use crate::attrs::{
-    has_child_placement, has_value_placement, is_value_type, BoolMode, DefaultPlacement, FieldInfo,
-    FlagStyle, RenderPlacement, StructAttrs,
+    BoolMode, DefaultPlacement, FieldInfo, FlagStyle, RenderPlacement, StructAttrs,
+    has_child_placement, has_value_placement, is_value_type,
 };
 
 #[derive(Debug, Clone, Copy)]

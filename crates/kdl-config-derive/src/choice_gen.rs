@@ -252,37 +252,7 @@ fn parse_choice_enum_attrs(attrs: &[Attribute]) -> syn::Result<ChoiceEnumAttrs> 
             continue;
         }
 
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("rename_all") {
-                let lit: syn::LitStr = meta.value()?.parse()?;
-                result.rename_all = match lit.value().as_str() {
-                    "kebab-case" => RenameStrategy::KebabCase,
-                    "snake_case" => RenameStrategy::SnakeCase,
-                    "lowercase" => RenameStrategy::Lowercase,
-                    "UPPERCASE" => RenameStrategy::Uppercase,
-                    "none" => RenameStrategy::None,
-                    other => {
-                        return Err(syn::Error::new(
-                            lit.span(),
-                            format!("unknown rename_all value: '{other}'"),
-                        ));
-                    }
-                };
-                result.rename_all_explicit = true;
-            } else if meta.path.is_ident("choice") || meta.path.is_ident("schema") {
-                if meta.input.peek(syn::Token![=]) {
-                    let _: syn::Expr = meta.value()?.parse()?;
-                } else if !meta.input.is_empty() {
-                    meta.parse_nested_meta(|_| Ok(()))?;
-                }
-            } else {
-                return Err(syn::Error::new(
-                    meta.path.span(),
-                    "unknown enum attribute for KdlChoice",
-                ));
-            }
-            Ok(())
-        })?;
+        attr.parse_nested_meta(|meta| apply_choice_enum_meta(meta, &mut result))?;
     }
 
     if !result.rename_all_explicit {
@@ -292,6 +262,49 @@ fn parse_choice_enum_attrs(attrs: &[Attribute]) -> syn::Result<ChoiceEnumAttrs> 
     }
 
     Ok(result)
+}
+
+fn apply_choice_enum_meta(
+    meta: syn::meta::ParseNestedMeta,
+    result: &mut ChoiceEnumAttrs,
+) -> syn::Result<()> {
+    if meta.path.is_ident("meta") || meta.path.is_ident("group") {
+        if !meta.input.is_empty() {
+            meta.parse_nested_meta(|nested| apply_choice_enum_meta(nested, result))?;
+        }
+        return Ok(());
+    }
+
+    if meta.path.is_ident("rename_all") {
+        let lit: syn::LitStr = meta.value()?.parse()?;
+        result.rename_all = match lit.value().as_str() {
+            "kebab-case" => RenameStrategy::KebabCase,
+            "snake_case" => RenameStrategy::SnakeCase,
+            "lowercase" => RenameStrategy::Lowercase,
+            "UPPERCASE" => RenameStrategy::Uppercase,
+            "none" => RenameStrategy::None,
+            other => {
+                return Err(syn::Error::new(
+                    lit.span(),
+                    format!("unknown rename_all value: '{other}'"),
+                ));
+            }
+        };
+        result.rename_all_explicit = true;
+    } else if meta.path.is_ident("choice") || meta.path.is_ident("schema") {
+        if meta.input.peek(syn::Token![=]) {
+            let _: syn::Expr = meta.value()?.parse()?;
+        } else if !meta.input.is_empty() {
+            meta.parse_nested_meta(|_| Ok(()))?;
+        }
+    } else {
+        return Err(syn::Error::new(
+            meta.path.span(),
+            "unknown enum attribute for KdlChoice",
+        ));
+    }
+
+    Ok(())
 }
 
 fn parse_choice_variant_attrs(attrs: &[Attribute]) -> syn::Result<ChoiceVariantAttrs> {

@@ -302,11 +302,8 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
                 Ok(())
             }
 
-            fn render_node(&self, _name: &str) -> ::kdl_config::Node {
-                let rendered = match self {
-                    #(#render_arms)*
-                };
-                ::kdl_config::parse_node(&rendered).expect("rendered enum node is invalid KDL")
+            fn render_node(&self, name: &str) -> ::kdl_config::Node {
+                ::kdl_config::render_child_node(self, name)
             }
         }
     })

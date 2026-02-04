@@ -3,10 +3,10 @@ use quote::{format_ident, quote};
 use syn::Ident;
 
 use crate::attrs::{
-    extract_children_map_types, extract_hashmap_types, extract_inner_type, has_child_placement,
-    has_value_placement, is_bool_type, is_numeric_type, is_string_type, is_value_type, BoolMode,
-    ChildrenMapKind, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec, FieldInfo,
-    FlagStyle, StructAttrs,
+    BoolMode, ChildrenMapKind, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec,
+    FieldInfo, FlagStyle, StructAttrs, extract_children_map_types, extract_hashmap_types,
+    extract_inner_type, has_child_placement, has_value_placement, is_bool_type, is_numeric_type,
+    is_string_type, is_value_type,
 };
 
 #[derive(Debug, Clone, Copy)]

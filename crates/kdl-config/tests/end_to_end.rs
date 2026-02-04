@@ -764,9 +764,9 @@ fn positional_list_parses_all_args() {
 }
 
 #[derive(Debug, PartialEq, Kdl)]
-#[kdl(node = "config")]
+#[kdl(node = "config", schema)]
 struct PositionalListRender {
-    #[kdl(attr, positional = "*")]
+    #[kdl(attr, positional = "rest")]
     #[kdl(render = "attr")]
     values: Vec<String>,
 }
@@ -1012,18 +1012,18 @@ fn explicit_keyed_disables_flags() {
     assert!(parsed.enabled);
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
-#[kdl(node = "test", rename_all = "kebab-case")]
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node, rename_all = "kebab-case")]
 enum MixedEnum {
     Value,
     WithStructType(NewStruct),
     WithStruct {
-        #[kdl(value, render = "value")]
+        #[kdl(value)]
         key: String,
     },
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
+#[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "pair")]
 struct Pair(i64, String);
 
@@ -1119,8 +1119,8 @@ fn invalid_enum_variant_is_error() {
     assert!(parse_named::<MixedEnum>("test unknown", "test").is_err());
 }
 
-#[derive(Debug, PartialEq, KdlNode)]
-#[kdl(node = "choice", rename_all = "kebab-case")]
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node, rename_all = "kebab-case")]
 enum TaggedEnum {
     #[kdl(tag = 1)]
     Pair(i64, String),

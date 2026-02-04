@@ -1,3 +1,5 @@
+use std::mem::MaybeUninit;
+
 use proc_macro2::{Span, TokenStream};
 use syn::spanned::Spanned;
 use syn::{
@@ -374,7 +376,7 @@ fn apply_struct_meta(
         } else if has_nested_meta(&meta) {
             meta.parse_nested_meta(|_| Ok(()))?;
         } else {
-            result.node_name_default = true;
+            result.node_name_default = false;
         }
     } else if meta.path.is_ident("rename_all") {
         let value: Expr = meta.value()?.parse()?;
@@ -391,7 +393,9 @@ fn apply_struct_meta(
                 other => {
                     return Err(syn::Error::new(
                         lit.span(),
-                        format!("unknown rename_all value: '{other}'. expected 'kebab-case', 'snake_case', 'lowercase', 'UPPERCASE', or 'none'"),
+                        format!(
+                            "unknown rename_all value: '{other}'. expected 'kebab-case', 'snake_case', 'lowercase', 'UPPERCASE', or 'none'"
+                        ),
                     ));
                 }
             };
@@ -647,14 +651,6 @@ fn apply_field_meta(
         return Ok(());
     }
 
-    let mut set_registry_key = |value: RegistryKey, span: Span| -> syn::Result<()> {
-        if registry_key.is_some() {
-            return Err(syn::Error::new(span, "registry key is already set"));
-        }
-        *registry_key = Some(value);
-        Ok(())
-    };
-
     if meta.path.is_ident("attr") {
         placement.attr = true;
     } else if meta.path.is_ident("keyed") {
@@ -771,7 +767,10 @@ fn apply_field_meta(
             ..
         }) = value
         {
-            set_registry_key(RegistryKey::Arg(lit.base10_parse()?), value.span())?;
+            if registry_key.is_some() {
+                return Err(syn::Error::new(value.span(), "registry key is already set"));
+            }
+            *registry_key = Some(RegistryKey::Arg(lit.base10_parse()?));
         } else {
             return Err(syn::Error::new(
                 value.span(),
@@ -785,7 +784,10 @@ fn apply_field_meta(
             ..
         }) = value
         {
-            set_registry_key(RegistryKey::Attr(lit.value()), value.span())?;
+            if registry_key.is_some() {
+                return Err(syn::Error::new(value.span(), "registry key is already set"));
+            }
+            *registry_key = Some(RegistryKey::Attr(lit.value()));
         } else {
             return Err(syn::Error::new(
                 value.span(),
@@ -799,7 +801,10 @@ fn apply_field_meta(
             ..
         }) = value
         {
-            set_registry_key(RegistryKey::Function(lit.value()), value.span())?;
+            if registry_key.is_some() {
+                return Err(syn::Error::new(value.span(), "registry key is already set"));
+            }
+            *registry_key = Some(RegistryKey::Function(lit.value()));
         } else {
             return Err(syn::Error::new(
                 value.span(),
@@ -1122,13 +1127,14 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
         has_kdl_attr = true;
         primary_span = attr.span();
 
-        let mut set_registry_key = |value: RegistryKey, span: Span| -> syn::Result<()> {
-            if registry_key.is_some() {
-                return Err(syn::Error::new(span, "registry key is already set"));
-            }
-            registry_key = Some(value);
-            Ok(())
-        };
+        let set_registry_key =
+            |value: RegistryKey, key: &mut Option<RegistryKey>, span: Span| -> syn::Result<()> {
+                if key.is_some() {
+                    return Err(syn::Error::new(span, "registry key is already set"));
+                }
+                Option::<RegistryKey>::get_or_insert_with(key, || value);
+                Ok(())
+            };
 
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("meta") || meta.path.is_ident("group") {
@@ -1284,7 +1290,11 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                     ..
                 }) = value
                 {
-                    set_registry_key(RegistryKey::Arg(lit.base10_parse()?), value.span())?;
+                    set_registry_key(
+                        RegistryKey::Arg(lit.base10_parse()?),
+                        &mut registry_key,
+                        value.span(),
+                    )?;
                 } else {
                     return Err(syn::Error::new(
                         value.span(),
@@ -1298,7 +1308,11 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                     ..
                 }) = value
                 {
-                    set_registry_key(RegistryKey::Attr(lit.value()), value.span())?;
+                    set_registry_key(
+                        RegistryKey::Attr(lit.value()),
+                        &mut registry_key,
+                        value.span(),
+                    )?;
                 } else {
                     return Err(syn::Error::new(
                         value.span(),
@@ -1312,7 +1326,11 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                     ..
                 }) = value
                 {
-                    set_registry_key(RegistryKey::Function(lit.value()), value.span())?;
+                    set_registry_key(
+                        RegistryKey::Function(lit.value()),
+                        &mut registry_key,
+                        value.span(),
+                    )?;
                 } else {
                     return Err(syn::Error::new(
                         value.span(),

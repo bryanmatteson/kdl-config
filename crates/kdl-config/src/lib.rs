@@ -34,7 +34,7 @@ pub use newtypes::{Duration, DurationParseError, Weight, WeightError};
 pub use parse::parse_config;
 pub use parse::parse_node;
 pub use render::{
-    escape_string, insert_arg, is_valid_identifier, render_flatten, render_key,
+    escape_string, insert_arg, is_valid_identifier, render_child_node, render_flatten, render_key,
     render_key_with_repr, render_node, render_value, render_value_node, render_value_node_scalar,
     render_value_with_repr, value_node, write_indent, NodeRenderer,
 };
@@ -52,7 +52,10 @@ pub trait KdlParse: Sized {
 pub trait KdlRender {
     fn render<W: std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> std::fmt::Result;
 
-    fn render_node(&self, name: &str) -> Node {
+    fn render_node(&self, name: &str) -> Node
+    where
+        Self: Sized,
+    {
         crate::render::render_child_node(self, name)
     }
 }

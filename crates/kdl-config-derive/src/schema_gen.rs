@@ -4,11 +4,11 @@ use syn::spanned::Spanned;
 use syn::{Attribute, DataEnum, DeriveInput, Expr, ExprLit, ExprUnary, Fields, Lit, Type, UnOp};
 
 use crate::attrs::{
-    extract_children_map_types, extract_hashmap_types, extract_inner_type,
+    BoolMode, ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle, SchemaTypeOverride,
+    StructAttrs, extract_children_map_types, extract_hashmap_types, extract_inner_type,
     extract_registry_vec_value, has_child_placement, has_value_placement, is_bool_type,
     is_numeric_type, is_option_type, is_string_type, is_value_type, parse_field_attrs,
-    parse_struct_attrs, serde_rename_from_attrs, BoolMode, ConflictPolicy, DefaultPlacement,
-    FieldInfo, FlagStyle, SchemaTypeOverride, StructAttrs,
+    parse_struct_attrs, serde_rename_from_attrs,
 };
 
 pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {

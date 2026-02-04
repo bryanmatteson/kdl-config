@@ -3,7 +3,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Data, DataEnum, DeriveInput, Fields};
 
-use crate::attrs::{serde_rename_all_from_attrs, serde_rename_from_attrs, RenameStrategy};
+use crate::attrs::{RenameStrategy, serde_rename_all_from_attrs, serde_rename_from_attrs};
 
 #[derive(Debug, Default)]
 struct EnumAttrs {
@@ -22,48 +22,7 @@ fn parse_enum_attrs(attrs: &[syn::Attribute]) -> syn::Result<EnumAttrs> {
         if !attr.path().is_ident("kdl") {
             continue;
         }
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("rename_all") {
-                let value: syn::Expr = meta.value()?.parse()?;
-                if let syn::Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Str(lit),
-                    ..
-                }) = value
-                {
-                    result.rename_all = match lit.value().as_str() {
-                        "kebab-case" => RenameStrategy::KebabCase,
-                        "snake_case" => RenameStrategy::SnakeCase,
-                        "lowercase" => RenameStrategy::Lowercase,
-                        "UPPERCASE" => RenameStrategy::Uppercase,
-                        "none" => RenameStrategy::None,
-                        other => {
-                            return Err(syn::Error::new(
-                                lit.span(),
-                                format!("unknown rename_all value: '{other}'"),
-                            ));
-                        }
-                    };
-                    result.rename_all_explicit = true;
-                } else {
-                    return Err(syn::Error::new(
-                        value.span(),
-                        "expected string literal for `rename_all`",
-                    ));
-                }
-            } else if meta.path.is_ident("value") || meta.path.is_ident("schema") {
-                if meta.input.peek(syn::Token![=]) {
-                    let _: syn::Expr = meta.value()?.parse()?;
-                } else if !meta.input.is_empty() {
-                    meta.parse_nested_meta(|_| Ok(()))?;
-                }
-            } else {
-                return Err(syn::Error::new(
-                    meta.path.span(),
-                    "unknown enum attribute for KdlValue",
-                ));
-            }
-            Ok(())
-        })?;
+        attr.parse_nested_meta(|meta| apply_value_enum_meta(meta, &mut result))?;
     }
     if !result.rename_all_explicit {
         if let Some(rename_all) = serde_rename_all_from_attrs(attrs)? {
@@ -71,6 +30,60 @@ fn parse_enum_attrs(attrs: &[syn::Attribute]) -> syn::Result<EnumAttrs> {
         }
     }
     Ok(result)
+}
+
+fn apply_value_enum_meta(
+    meta: syn::meta::ParseNestedMeta,
+    result: &mut EnumAttrs,
+) -> syn::Result<()> {
+    if meta.path.is_ident("meta") || meta.path.is_ident("group") {
+        if !meta.input.is_empty() {
+            meta.parse_nested_meta(|nested| apply_value_enum_meta(nested, result))?;
+        }
+        return Ok(());
+    }
+
+    if meta.path.is_ident("rename_all") {
+        let value: syn::Expr = meta.value()?.parse()?;
+        if let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(lit),
+            ..
+        }) = value
+        {
+            result.rename_all = match lit.value().as_str() {
+                "kebab-case" => RenameStrategy::KebabCase,
+                "snake_case" => RenameStrategy::SnakeCase,
+                "lowercase" => RenameStrategy::Lowercase,
+                "UPPERCASE" => RenameStrategy::Uppercase,
+                "none" => RenameStrategy::None,
+                other => {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!("unknown rename_all value: '{other}'"),
+                    ));
+                }
+            };
+            result.rename_all_explicit = true;
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `rename_all`",
+            ));
+        }
+    } else if meta.path.is_ident("value") || meta.path.is_ident("schema") {
+        if meta.input.peek(syn::Token![=]) {
+            let _: syn::Expr = meta.value()?.parse()?;
+        } else if !meta.input.is_empty() {
+            meta.parse_nested_meta(|_| Ok(()))?;
+        }
+    } else {
+        return Err(syn::Error::new(
+            meta.path.span(),
+            "unknown enum attribute for KdlValue",
+        ));
+    }
+
+    Ok(())
 }
 
 fn parse_variant_attrs(attrs: &[syn::Attribute]) -> syn::Result<VariantAttrs> {
