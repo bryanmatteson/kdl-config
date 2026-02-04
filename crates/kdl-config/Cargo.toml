@@ -12,9 +12,9 @@
     serde   = ["dep:serde"]
 
 [dependencies]
-    kdl.workspace = true
-    serde         = { version = "1", features = ["derive"], optional = true }
+    kdl.workspace               = true
+    kdl-config-derive.workspace = true
+    serde                       = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
-    kdl-config-derive.workspace = true
-    proptest                    = "1"
+    proptest = "1"

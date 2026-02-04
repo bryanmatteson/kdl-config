@@ -101,3 +101,6 @@ pub fn parse_str_with_config<T: KdlParse>(
         )),
     }
 }
+
+// Re-export derive macros so users only need to depend on `kdl-config`
+pub use kdl_config_derive::{Kdl, KdlChoice, KdlNode, KdlSchema, KdlValue};
