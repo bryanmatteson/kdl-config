@@ -52,6 +52,8 @@ pub trait KdlRender {
     fn render<W: std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> std::fmt::Result;
 }
 
+pub trait KdlValueMarker {}
+
 impl<T: KdlParse> KdlParse for Box<T> {
     fn from_node(node: &Node, config: &ParseConfig) -> Result<Self, KdlConfigError> {
         T::from_node(node, config).map(Box::new)
@@ -84,6 +86,8 @@ impl<T: KdlRender> KdlRender for Box<T> {
         (**self).render(w, name, indent)
     }
 }
+
+impl<T: FromKdlValue> KdlValueMarker for T {}
 
 /// Convenience to render a type to a KDL string.
 pub fn to_kdl<T: KdlRender + ?Sized>(value: &T, name: &str) -> String {

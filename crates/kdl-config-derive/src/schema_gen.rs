@@ -486,22 +486,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                     };
 
                     if let Some(other) = inline {
-                        for (key, prop) in other.props {
-                            schema.props.entry(key).or_insert(prop);
-                        }
-                        if !other.values.is_empty() {
-                            schema.values.extend(other.values);
-                        }
-                        if let Some(children) = other.children {
-                            if let Some(existing) = schema.children.as_mut() {
-                                existing.nodes.extend(children.nodes);
-                            } else {
-                                schema.children = Some(children);
-                            }
-                        }
-                        if schema.registry_key.is_none() {
-                            schema.registry_key = other.registry_key;
-                        }
+                        schema.merge_from(other).expect("flatten schema merge conflict");
                     }
                 }
             });

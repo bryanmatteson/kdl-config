@@ -1113,7 +1113,7 @@ pub fn serde_rename_from_attrs(attrs: &[Attribute]) -> syn::Result<Option<String
     Ok(rename)
 }
 
-fn parse_serde_string_value(mut meta: syn::meta::ParseNestedMeta) -> syn::Result<Option<String>> {
+fn parse_serde_string_value(meta: syn::meta::ParseNestedMeta) -> syn::Result<Option<String>> {
     if meta.input.peek(syn::Token![=]) {
         let value: Expr = meta.value()?.parse()?;
         if let Expr::Lit(ExprLit {

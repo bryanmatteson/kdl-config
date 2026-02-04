@@ -157,6 +157,38 @@ pub struct KdlNodeSchema {
     pub registry_key: Option<RegistryKeySchema>,
 }
 
+impl KdlNodeSchema {
+    pub fn merge_from(&mut self, other: KdlNodeSchema) -> Result<(), String> {
+        for (key, prop) in other.props {
+            if let Some(existing) = self.props.get(&key) {
+                if existing != &prop {
+                    return Err(format!("conflicting schema prop for '{key}'"));
+                }
+                continue;
+            }
+            self.props.insert(key, prop);
+        }
+
+        if !other.values.is_empty() {
+            self.values.extend(other.values);
+        }
+
+        if let Some(children) = other.children {
+            if let Some(existing) = self.children.as_mut() {
+                existing.nodes.extend(children.nodes);
+            } else {
+                self.children = Some(children);
+            }
+        }
+
+        if self.registry_key.is_none() {
+            self.registry_key = other.registry_key;
+        }
+
+        Ok(())
+    }
+}
+
 impl KdlRender for KdlNodeSchema {
     fn render<W: std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> std::fmt::Result {
         crate::write_indent(w, indent)?;

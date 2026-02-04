@@ -192,6 +192,7 @@ fn generate_kdl_value_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Re
                 }
             }
         }
+
     })
 }
 
@@ -227,5 +228,6 @@ fn generate_kdl_value_struct_impl(
                 ::kdl_config::Value::from(val.0)
             }
         }
+
     })
 }

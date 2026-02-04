@@ -3,10 +3,10 @@ use quote::{format_ident, quote};
 use syn::Ident;
 
 use crate::attrs::{
-    extract_children_map_types, extract_hashmap_types, extract_inner_type, has_child_placement,
-    has_value_placement, is_bool_type, is_numeric_type, is_string_type, is_value_type, BoolMode,
-    ChildrenMapKind, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec, FieldInfo,
-    FlagStyle, StructAttrs,
+    BoolMode, ChildrenMapKind, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec,
+    FieldInfo, FlagStyle, StructAttrs, extract_children_map_types, extract_hashmap_types,
+    extract_inner_type, has_child_placement, has_value_placement, is_bool_type, is_numeric_type,
+    is_string_type, is_value_type,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -597,11 +597,7 @@ fn generate_value_scalar_parser(
     let attr_value_ident = format_ident!("__kdl_attr_value_{}", field_ident);
     let arg_value_ident = format_ident!("__kdl_arg_value_{}", field_ident);
     let child_ident = format_ident!("__kdl_child_{}", field_ident);
-    let child_iter = if field.placement.children_any {
-        quote! { node.children() }
-    } else {
-        quote! { node.children_named(#kdl_key) }
-    };
+
     let child_arg_ident = format_ident!("__kdl_child_arg_{}", field_ident);
 
     let is_optional = field.is_optional;
@@ -1315,6 +1311,11 @@ fn generate_node_parser(
         ty
     };
     let child_ident = format_ident!("__kdl_child_{}", field_ident);
+    let child_iter = if field.placement.children_any {
+        quote! { node.children() }
+    } else {
+        quote! { node.children_named(#kdl_key) }
+    };
 
     let default_expr = generate_missing_expr(
         field,
