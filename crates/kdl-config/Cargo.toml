@@ -7,6 +7,10 @@
     repository.workspace  = true
     description.workspace = true
 
+[features]
+    default = []
+    serde   = ["kdl-config-runtime/serde"]
+
 [dependencies]
     kdl-config-runtime.workspace = true
     kdl-config-derive.workspace  = true
