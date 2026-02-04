@@ -29,7 +29,7 @@ pub use layer::{
     LayerMerge, merge_layers, merge_layers_with, parse_layered, parse_layered_with_config,
 };
 pub use loader::{KdlLoader, LoadError, load_kdl_file};
-pub use merge::DeepMerge;
+pub use merge::{DeepMerge, MergeOption, PartialConfig};
 pub use newtypes::{Duration, DurationParseError, Weight, WeightError};
 pub use parse::parse_config;
 pub use render::{
