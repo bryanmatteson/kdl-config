@@ -2,8 +2,13 @@
 
 pub mod config;
 pub mod convert;
+pub mod deep_merge;
 pub mod error;
+pub mod formatter;
 pub mod helpers;
+pub mod layer;
+pub mod loader;
+pub mod newtypes;
 pub mod parse;
 pub mod round_trip;
 pub mod render;
@@ -14,8 +19,16 @@ pub use config::{
     BoolMode, ConflictPolicy, DefaultPlacement, EffectiveConfig, FieldOverrides, FlagStyle,
     ParseConfig, StructOverrides, resolve_field, resolve_struct,
 };
-pub use convert::{FromKdlValue, convert_value, convert_value_checked};
+pub use convert::{
+    ConvertContext, FromKdlValue, ValueConvertExt, convert_value, convert_value_checked,
+    convert_value_checked_ctx, convert_value_ctx,
+};
+pub use deep_merge::DeepMerge;
 pub use error::{ErrorKind, KdlConfigError, Placement};
+pub use formatter::KdlFormatter;
+pub use layer::{LayerMerge, merge_layers, merge_layers_with, parse_layered, parse_layered_with_config};
+pub use loader::{KdlLoader, LoadError, load_kdl_file};
+pub use newtypes::{Duration, DurationParseError, Weight, WeightError};
 pub use parse::parse_config;
 pub use round_trip::{parse_str_roundtrip, parse_str_with_config_roundtrip, RoundTrip, RoundTripMut};
 pub use render::{
@@ -23,7 +36,7 @@ pub use render::{
     render_value,
     render_value_node, render_value_node_scalar, write_indent,
 };
-pub use types::{Modifier, Node, Value};
+pub use types::{MergeModifierPolicy, Modifier, Node, Value};
 
 /// Trait for parsing a typed configuration from a KDL Node.
 pub trait KdlParse: Sized {

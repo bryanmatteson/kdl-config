@@ -7,6 +7,64 @@ pub trait FromKdlValue: Sized {
     fn from_value(value: &Value) -> Option<Self>;
 }
 
+/// Context for converting a KDL value into a typed field.
+#[derive(Debug, Clone, Copy)]
+pub struct ConvertContext<'a> {
+    pub struct_name: &'a str,
+    pub field_name: &'a str,
+    pub kdl_key: &'a str,
+    pub placement: Placement,
+}
+
+impl<'a> ConvertContext<'a> {
+    pub fn new(struct_name: &'a str, field_name: &'a str) -> Self {
+        Self {
+            struct_name,
+            field_name,
+            kdl_key: field_name,
+            placement: Placement::Unknown,
+        }
+    }
+
+    pub fn key(mut self, kdl_key: &'a str) -> Self {
+        self.kdl_key = kdl_key;
+        self
+    }
+
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    pub fn attr(self) -> Self {
+        self.placement(Placement::AttrKeyed)
+    }
+
+    pub fn positional(self) -> Self {
+        self.placement(Placement::AttrPositional)
+    }
+
+    pub fn flag(self) -> Self {
+        self.placement(Placement::AttrFlag)
+    }
+
+    pub fn value(self) -> Self {
+        self.placement(Placement::Value)
+    }
+
+    pub fn child(self) -> Self {
+        self.placement(Placement::Child)
+    }
+
+    pub fn children(self) -> Self {
+        self.placement(Placement::Children)
+    }
+
+    pub fn registry(self) -> Self {
+        self.placement(Placement::Registry)
+    }
+}
+
 impl FromKdlValue for String {
     const TYPE_NAME: &'static str = "string";
 
@@ -205,4 +263,40 @@ pub fn convert_value_checked<T: FromKdlValue>(
     }
 
     convert_value(value, struct_name, field_name, kdl_key, placement)
+}
+
+pub fn convert_value_ctx<T: FromKdlValue>(
+    value: &Value,
+    ctx: ConvertContext<'_>,
+) -> Result<T, KdlConfigError> {
+    convert_value(value, ctx.struct_name, ctx.field_name, ctx.kdl_key, ctx.placement)
+}
+
+pub fn convert_value_checked_ctx<T: FromKdlValue>(
+    value: &Value,
+    ctx: ConvertContext<'_>,
+) -> Result<T, KdlConfigError> {
+    convert_value_checked(value, ctx.struct_name, ctx.field_name, ctx.kdl_key, ctx.placement)
+}
+
+/// Convenience methods on `Value` for context-aware conversion.
+pub trait ValueConvertExt {
+    fn convert_with<T: FromKdlValue>(&self, ctx: ConvertContext<'_>) -> Result<T, KdlConfigError>;
+    fn convert_with_checked<T: FromKdlValue>(
+        &self,
+        ctx: ConvertContext<'_>,
+    ) -> Result<T, KdlConfigError>;
+}
+
+impl ValueConvertExt for Value {
+    fn convert_with<T: FromKdlValue>(&self, ctx: ConvertContext<'_>) -> Result<T, KdlConfigError> {
+        convert_value_ctx(self, ctx)
+    }
+
+    fn convert_with_checked<T: FromKdlValue>(
+        &self,
+        ctx: ConvertContext<'_>,
+    ) -> Result<T, KdlConfigError> {
+        convert_value_checked_ctx(self, ctx)
+    }
 }

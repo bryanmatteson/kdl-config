@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use kdl_config::derive::KdlNode;
-use kdl_config::runtime::parse_str;
+use kdl_config::parse_str;
 
 #[derive(Debug, PartialEq, KdlNode)]
 struct Config {
@@ -21,6 +21,6 @@ fn test_pathbuf_render() {
     let config = Config {
         config_path: PathBuf::from("/home/user/file.txt"),
     };
-    let rendered = kdl_config::runtime::to_kdl(&config, "config");
+    let rendered = kdl_config::to_kdl(&config, "config");
     assert!(rendered.contains("/home/user/file.txt"));
 }

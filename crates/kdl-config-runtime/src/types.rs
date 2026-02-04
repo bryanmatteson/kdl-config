@@ -10,6 +10,12 @@ pub enum Modifier {
     Remove,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeModifierPolicy {
+    Consume,
+    Preserve,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Null,
@@ -310,5 +316,103 @@ impl Node {
         copy.attrs.remove(key);
         copy.attr_reprs.remove(key);
         copy
+    }
+
+    /// Remove all children with the provided name. Returns the number removed.
+    pub fn remove_children_named(&mut self, name: &str) -> usize {
+        let before = self.children.len();
+        self.children.retain(|c| c.name != name);
+        before - self.children.len()
+    }
+
+    /// Merge another node into this one, appending values and children.
+    ///
+    /// If names differ and this node already has a name, the other node is added
+    /// as a child instead of merging.
+    pub fn merge(&mut self, other: Node) {
+        self.merge_with(other, MergeModifierPolicy::Consume);
+    }
+
+    /// Merge a child node by name, or append if no matching child exists.
+    pub fn merge_child_by_name(&mut self, child: Node) {
+        self.merge_child_by_name_with(child, MergeModifierPolicy::Consume);
+    }
+
+    /// Merge another node into this one, optionally preserving modifiers.
+    pub fn merge_with(&mut self, other: Node, policy: MergeModifierPolicy) {
+        if self.name.is_empty() {
+            self.name = other.name.clone();
+        } else if !other.name.is_empty() && self.name != other.name {
+            self.merge_child_by_name_with(other, policy);
+            return;
+        }
+
+        if other.modifier == Modifier::Replace {
+            let mut replaced = other;
+            if matches!(policy, MergeModifierPolicy::Consume) {
+                replaced.modifier = Modifier::Inherit;
+            }
+            *self = replaced;
+            return;
+        }
+
+        let mut other = other;
+        if matches!(policy, MergeModifierPolicy::Consume) {
+            other.modifier = Modifier::Inherit;
+        }
+
+        if other.name_repr.is_some() {
+            self.name_repr = other.name_repr.clone();
+        }
+
+        if matches!(policy, MergeModifierPolicy::Preserve) {
+            self.modifier = Modifier::Inherit;
+        }
+
+        self.args.extend(other.args);
+
+        for (key, values) in other.attrs {
+            self.attrs.entry(key).or_default().extend(values);
+        }
+
+        for (key, repr) in other.attr_reprs {
+            self.attr_reprs.insert(key, repr);
+        }
+
+        for child in other.children {
+            self.merge_child_by_name_with(child, policy);
+        }
+    }
+
+    /// Merge a child node by name, optionally preserving modifiers.
+    pub fn merge_child_by_name_with(&mut self, mut child: Node, policy: MergeModifierPolicy) {
+        match child.modifier {
+            Modifier::Remove => {
+                self.remove_children_named(&child.name);
+            }
+            Modifier::Replace => {
+                self.remove_children_named(&child.name);
+                if matches!(policy, MergeModifierPolicy::Consume) {
+                    child.modifier = Modifier::Inherit;
+                }
+                self.children.push(child);
+            }
+            Modifier::Append => {
+                if matches!(policy, MergeModifierPolicy::Consume) {
+                    child.modifier = Modifier::Inherit;
+                }
+                self.children.push(child);
+            }
+            Modifier::Inherit => {
+                if let Some(existing) = self.children.iter_mut().find(|c| c.name == child.name) {
+                    existing.merge_with(child, policy);
+                } else {
+                    if matches!(policy, MergeModifierPolicy::Consume) {
+                        child.modifier = Modifier::Inherit;
+                    }
+                    self.children.push(child);
+                }
+            }
+        }
     }
 }
