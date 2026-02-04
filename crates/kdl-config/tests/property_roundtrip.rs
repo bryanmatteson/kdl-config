@@ -1,5 +1,5 @@
 use kdl_config_derive::KdlNode;
-use kdl_config_runtime::{parse_config, KdlParse, ParseConfig};
+use kdl_config::{parse_config, KdlParse, ParseConfig};
 use proptest::prelude::*;
 
 #[derive(Debug, PartialEq, KdlNode)]
@@ -15,7 +15,7 @@ struct RoundTripConfig {
     tags: Vec<String>,
 }
 
-fn parse_named<T: KdlParse>(kdl: &str, name: &str) -> Result<T, kdl_config_runtime::KdlConfigError> {
+fn parse_named<T: KdlParse>(kdl: &str, name: &str) -> Result<T, kdl_config::KdlConfigError> {
     let root = parse_config(kdl)?;
     let node = root.child(name).expect("missing node");
     T::from_node(node, &ParseConfig::default())
@@ -34,7 +34,7 @@ prop_compose! {
 proptest! {
     #[test]
     fn roundtrip_render_parse(value in arb_config()) {
-        let kdl = kdl_config_runtime::to_kdl(&value, "config");
+        let kdl = kdl_config::to_kdl(&value, "config");
         let parsed = parse_named::<RoundTripConfig>(&kdl, "config").unwrap();
         prop_assert_eq!(parsed, value);
     }

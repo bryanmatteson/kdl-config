@@ -15,7 +15,7 @@
     quote       = "1"
     syn         = { version = "2", features = ["full", "extra-traits"] }
 
-    kdl-config-runtime.workspace = true
+    kdl-config.workspace = true
 
 [dev-dependencies]
     trybuild = "1"

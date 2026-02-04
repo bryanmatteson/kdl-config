@@ -109,19 +109,19 @@ fn generate_kdl_value_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Re
     let render_arms: Vec<_> = variants
         .iter()
         .map(|(ident, name)| {
-            quote! { #enum_name::#ident => ::kdl_config_runtime::Value::String(#name.to_string()), }
+            quote! { #enum_name::#ident => ::kdl_config::Value::String(#name.to_string()), }
         })
         .collect();
 
     let variants_const: Vec<_> = variants.iter().map(|(_, name)| name.as_str()).collect();
 
     Ok(quote! {
-        impl ::kdl_config_runtime::FromKdlValue for #enum_name {
+        impl ::kdl_config::FromKdlValue for #enum_name {
             const TYPE_NAME: &'static str = "string";
 
-            fn from_value(value: &::kdl_config_runtime::Value) -> ::core::option::Option<Self> {
+            fn from_value(value: &::kdl_config::Value) -> ::core::option::Option<Self> {
                 match value {
-                    ::kdl_config_runtime::Value::String(s) => match s.as_str() {
+                    ::kdl_config::Value::String(s) => match s.as_str() {
                         #(#parse_arms)*
                         _ => None,
                     },
@@ -134,7 +134,7 @@ fn generate_kdl_value_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Re
             pub const VARIANTS: &'static [&'static str] = &[#(#variants_const),*];
         }
 
-        impl ::core::convert::From<#enum_name> for ::kdl_config_runtime::Value {
+        impl ::core::convert::From<#enum_name> for ::kdl_config::Value {
             fn from(val: #enum_name) -> Self {
                 match val {
                     #(#render_arms)*
@@ -155,17 +155,17 @@ fn generate_kdl_value_struct_impl(input: &DeriveInput, data: &syn::DataStruct) -
     };
 
     Ok(quote! {
-        impl ::kdl_config_runtime::FromKdlValue for #struct_name {
-            const TYPE_NAME: &'static str = <#inner_type as ::kdl_config_runtime::FromKdlValue>::TYPE_NAME;
+        impl ::kdl_config::FromKdlValue for #struct_name {
+            const TYPE_NAME: &'static str = <#inner_type as ::kdl_config::FromKdlValue>::TYPE_NAME;
 
-            fn from_value(value: &::kdl_config_runtime::Value) -> ::core::option::Option<Self> {
-                <#inner_type as ::kdl_config_runtime::FromKdlValue>::from_value(value).map(Self)
+            fn from_value(value: &::kdl_config::Value) -> ::core::option::Option<Self> {
+                <#inner_type as ::kdl_config::FromKdlValue>::from_value(value).map(Self)
             }
         }
 
-        impl ::core::convert::From<#struct_name> for ::kdl_config_runtime::Value {
+        impl ::core::convert::From<#struct_name> for ::kdl_config::Value {
             fn from(val: #struct_name) -> Self {
-                ::kdl_config_runtime::Value::from(val.0)
+                ::kdl_config::Value::from(val.0)
             }
         }
     })

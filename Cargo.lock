@@ -118,29 +118,21 @@ dependencies = [
 name = "kdl-config"
 version = "0.1.0"
 dependencies = [
+ "kdl",
  "kdl-config-derive",
- "kdl-config-runtime",
+ "proptest",
+ "serde",
 ]
 
 [[package]]
 name = "kdl-config-derive"
 version = "0.1.0"
 dependencies = [
- "kdl-config-runtime",
+ "kdl-config",
  "proc-macro2",
  "quote",
  "syn",
  "trybuild",
-]
-
-[[package]]
-name = "kdl-config-runtime"
-version = "0.1.0"
-dependencies = [
- "kdl",
- "kdl-config-derive",
- "proptest",
- "serde",
 ]
 
 [[package]]

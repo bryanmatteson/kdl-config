@@ -195,7 +195,7 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
     let validate_name = if let Some(ref node_name) = struct_attrs.node_name {
         quote! {
             if node.name != #node_name {
-                return Err(::kdl_config_runtime::KdlConfigError::node_name_mismatch(
+                return Err(::kdl_config::KdlConfigError::node_name_mismatch(
                     #enum_name_str,
                     #node_name,
                     &node.name,
@@ -224,13 +224,13 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
         .collect();
 
     Ok(quote! {
-        impl ::kdl_config_runtime::KdlParse for #enum_name {
-            fn from_node(node: &::kdl_config_runtime::Node, config: &::kdl_config_runtime::ParseConfig) -> ::core::result::Result<Self, ::kdl_config_runtime::KdlConfigError> {
+        impl ::kdl_config::KdlParse for #enum_name {
+            fn from_node(node: &::kdl_config::Node, config: &::kdl_config::ParseConfig) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
                 #validate_name
 
                 let struct_overrides = #struct_overrides;
-                let struct_config = ::kdl_config_runtime::resolve_struct(config, struct_overrides);
-                let enum_config = ::kdl_config_runtime::ParseConfig {
+                let struct_config = ::kdl_config::resolve_struct(config, struct_overrides);
+                let enum_config = ::kdl_config::ParseConfig {
                     default_placement: struct_config.default_placement,
                     default_bool: struct_config.bool_mode,
                     default_flag_style: struct_config.flag_style,
@@ -241,22 +241,22 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
                 let discr = match node.arg(0) {
                     Some(value) => value,
                     None => {
-                        return Err(::kdl_config_runtime::KdlConfigError::missing_required(
+                        return Err(::kdl_config::KdlConfigError::missing_required(
                             #enum_name_str,
                             "variant",
                             "arg[0]",
-                            ::kdl_config_runtime::Placement::AttrPositional,
+                            ::kdl_config::Placement::AttrPositional,
                         ));
                     }
                 };
                 let discr_display = match discr {
-                    ::kdl_config_runtime::Value::String(s) => s.clone(),
-                    _ => ::kdl_config_runtime::render_value(discr),
+                    ::kdl_config::Value::String(s) => s.clone(),
+                    _ => ::kdl_config::render_value(discr),
                 };
 
                 #(#parse_arms)*
 
-                Err(::kdl_config_runtime::KdlConfigError::invalid_variant(
+                Err(::kdl_config::KdlConfigError::invalid_variant(
                     #enum_name_str,
                     discr_display,
                     vec![#(#valid_variants_tokens),*],
@@ -264,7 +264,7 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
             }
         }
 
-        impl ::kdl_config_runtime::KdlRender for #enum_name {
+        impl ::kdl_config::KdlRender for #enum_name {
             fn render<W: ::std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> ::std::fmt::Result {
                 let rendered = match self {
                     #(#render_arms)*
@@ -272,7 +272,7 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
 
                 let mut iter = rendered.lines().peekable();
                 while let Some(line) = iter.next() {
-                    ::kdl_config_runtime::write_indent(w, indent)?;
+                    ::kdl_config::write_indent(w, indent)?;
                     w.write_str(line)?;
                     if iter.peek().is_some() {
                         w.write_str("\n")?;
@@ -299,7 +299,7 @@ fn generate_parse_arm(
             quote! {
                 let variant_node = node.without_first_arg();
                 if !variant_node.args().is_empty() || !variant_node.attrs().is_empty() || !variant_node.children().is_empty() {
-                    return Err(::kdl_config_runtime::KdlConfigError::custom(
+                    return Err(::kdl_config::KdlConfigError::custom(
                         #enum_name_str,
                         format!("variant '{}' does not accept values", #kdl_name),
                     ));
@@ -311,7 +311,7 @@ fn generate_parse_arm(
             quote! {
                 let mut variant_node = node.without_first_arg();
                 variant_node.name = #kdl_name.to_string();
-                let value = <#inner_ty as ::kdl_config_runtime::KdlParse>::from_node(&variant_node, &enum_config)?;
+                let value = <#inner_ty as ::kdl_config::KdlParse>::from_node(&variant_node, &enum_config)?;
                 Ok(Self::#variant_ident(value))
             }
         }
@@ -338,11 +338,11 @@ fn generate_parse_arm(
                     quote! { None }
                 } else {
                     quote! {
-                        return Err(::kdl_config_runtime::KdlConfigError::missing_required(
+                        return Err(::kdl_config::KdlConfigError::missing_required(
                             #enum_name_str,
                             "variant",
                             #arg_key,
-                            ::kdl_config_runtime::Placement::AttrPositional,
+                            ::kdl_config::Placement::AttrPositional,
                         ));
                     }
                 };
@@ -355,12 +355,12 @@ fn generate_parse_arm(
 
                 parse_values.push(quote! {
                     let #value_ident: #ty_tokens = if let Some(#arg_ident) = #args_ident.get(#arg_index) {
-                        ::kdl_config_runtime::convert_value_checked::<#ty_tokens>(
+                        ::kdl_config::convert_value_checked::<#ty_tokens>(
                             #arg_ident,
                             #enum_name_str,
                             "variant",
                             #arg_key,
-                            ::kdl_config_runtime::Placement::AttrPositional,
+                            ::kdl_config::Placement::AttrPositional,
                         )?
                     } else {
                         #missing_expr
@@ -372,14 +372,14 @@ fn generate_parse_arm(
             quote! {
                 let variant_node = node.without_first_arg();
                 if !variant_node.attrs().is_empty() || !variant_node.children().is_empty() {
-                    return Err(::kdl_config_runtime::KdlConfigError::custom(
+                    return Err(::kdl_config::KdlConfigError::custom(
                         #enum_name_str,
                         format!("variant '{}' does not accept attributes or children", #kdl_name),
                     ));
                 }
                 let #args_ident = variant_node.args();
                 if #args_ident.len() > #tuple_len {
-                    return Err(::kdl_config_runtime::KdlConfigError::custom(
+                    return Err(::kdl_config::KdlConfigError::custom(
                         #enum_name_str,
                         format!("variant '{}' expected {tuple_len} values, found {}", #args_ident.len(), tuple_len = #tuple_len),
                     ));
@@ -409,7 +409,7 @@ fn generate_parse_arm(
                 let mut variant_node = node.without_first_arg();
                 variant_node.name = #kdl_name.to_string();
                 let node = &variant_node;
-                let mut used_keys = ::kdl_config_runtime::helpers::UsedKeys::new();
+                let mut used_keys = ::kdl_config::helpers::UsedKeys::new();
 
                 #(#field_parsers)*
                 #(#skip_marks)*
@@ -438,8 +438,8 @@ fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> Tok
         VariantKind::Unit => {
             quote! {
                 Self::#variant_ident => {
-                    let rendered = ::kdl_config_runtime::render_key(name);
-                    ::kdl_config_runtime::insert_arg(&rendered, &#tag_render)
+                    let rendered = ::kdl_config::render_key(name);
+                    ::kdl_config::insert_arg(&rendered, &#tag_render)
                 }
             }
         }
@@ -448,7 +448,7 @@ fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> Tok
                 Self::#variant_ident(inner) => {
                     let mut rendered = String::new();
                     inner.render(&mut rendered, name, 0)?;
-                    ::kdl_config_runtime::insert_arg(&rendered, &#tag_render)
+                    ::kdl_config::insert_arg(&rendered, &#tag_render)
                 }
             }
         }
@@ -464,22 +464,22 @@ fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> Tok
                 if is_option_type(ty) {
                     positional.push(quote! {
                         let value = match #binding {
-                            Some(val) => ::kdl_config_runtime::Value::from(val.clone()),
-                            None => ::kdl_config_runtime::Value::Null,
+                            Some(val) => ::kdl_config::Value::from(val.clone()),
+                            None => ::kdl_config::Value::Null,
                         };
-                        renderer.positional_raw(#pos_index, ::kdl_config_runtime::render_value(&value));
+                        renderer.positional_raw(#pos_index, ::kdl_config::render_value(&value));
                     });
                 } else {
                     positional.push(quote! {
-                        let value = ::kdl_config_runtime::Value::from(#binding.clone());
-                        renderer.positional_raw(#pos_index, ::kdl_config_runtime::render_value(&value));
+                        let value = ::kdl_config::Value::from(#binding.clone());
+                        renderer.positional_raw(#pos_index, ::kdl_config::render_value(&value));
                     });
                 }
             }
 
             quote! {
                 Self::#variant_ident(#(#bindings),*) => {
-                    let mut renderer = ::kdl_config_runtime::NodeRenderer::new(name.to_string(), ::kdl_config_runtime::Modifier::Inherit);
+                    let mut renderer = ::kdl_config::NodeRenderer::new(name.to_string(), ::kdl_config::Modifier::Inherit);
                     renderer.positional_raw(0, #tag_render);
                     #(#positional)*
                     renderer.render()
@@ -499,7 +499,7 @@ fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> Tok
             quote! {
                 Self::#variant_ident { #(#bindings),* } => {
                     let rendered = #render_body;
-                    ::kdl_config_runtime::insert_arg(&rendered, &#tag_render)
+                    ::kdl_config::insert_arg(&rendered, &#tag_render)
                 }
             }
         }
@@ -508,13 +508,13 @@ fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> Tok
 
 fn tag_value_expr(tag: &VariantTag) -> TokenStream {
     match tag {
-        VariantTag::String(s) => quote! { ::kdl_config_runtime::Value::String(#s.to_string()) },
-        VariantTag::Literal(LiteralTag::Int(n)) => quote! { ::kdl_config_runtime::Value::Int(#n) },
+        VariantTag::String(s) => quote! { ::kdl_config::Value::String(#s.to_string()) },
+        VariantTag::Literal(LiteralTag::Int(n)) => quote! { ::kdl_config::Value::Int(#n) },
         VariantTag::Literal(LiteralTag::Float(f)) => {
-            quote! { ::kdl_config_runtime::Value::Float(#f) }
+            quote! { ::kdl_config::Value::Float(#f) }
         }
         VariantTag::Literal(LiteralTag::Bool(b)) => {
-            quote! { ::kdl_config_runtime::Value::Bool(#b) }
+            quote! { ::kdl_config::Value::Bool(#b) }
         }
     }
 }
@@ -522,7 +522,7 @@ fn tag_value_expr(tag: &VariantTag) -> TokenStream {
 fn tag_match_expr(tag: &VariantTag) -> TokenStream {
     match tag {
         VariantTag::String(s) => {
-            quote! { matches!(discr, ::kdl_config_runtime::Value::String(val) if val == #s) }
+            quote! { matches!(discr, ::kdl_config::Value::String(val) if val == #s) }
         }
         VariantTag::Literal(_) => {
             let value_expr = tag_value_expr(tag);
@@ -533,10 +533,10 @@ fn tag_match_expr(tag: &VariantTag) -> TokenStream {
 
 fn tag_render_expr(tag: &VariantTag) -> TokenStream {
     match tag {
-        VariantTag::String(s) => quote! { ::kdl_config_runtime::render_key(#s) },
+        VariantTag::String(s) => quote! { ::kdl_config::render_key(#s) },
         VariantTag::Literal(_) => {
             let value_expr = tag_value_expr(tag);
-            quote! { ::kdl_config_runtime::render_value(&#value_expr) }
+            quote! { ::kdl_config::render_value(&#value_expr) }
         }
     }
 }
@@ -546,7 +546,7 @@ fn tag_display_expr(tag: &VariantTag) -> TokenStream {
         VariantTag::String(s) => quote! { #s.to_string() },
         VariantTag::Literal(_) => {
             let value_expr = tag_value_expr(tag);
-            quote! { ::kdl_config_runtime::render_value(&#value_expr) }
+            quote! { ::kdl_config::render_value(&#value_expr) }
         }
     }
 }

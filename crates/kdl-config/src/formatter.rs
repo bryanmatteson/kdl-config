@@ -118,21 +118,21 @@ mod tests {
 
     #[test]
     fn replace_existing_block() {
-        let input = "config {\\n    name \\\"demo\\\"\\n}\\n";
-        let output = KdlFormatter::replace_block(input, "config", Some("name \\\"new\\\""));
-        assert!(output.contains("config {\\n    name \\\"new\\\"\\n}"));
+        let input = "config {\n    name \"demo\"\n}\n";
+        let output = KdlFormatter::replace_block(input, "config", Some("name \"new\""));
+        assert!(output.contains("config {\n    name \"new\"\n}"));
     }
 
     #[test]
     fn append_block_when_missing() {
-        let input = "root {}\\n";
-        let output = KdlFormatter::replace_block(input, "config", Some("name \\\"demo\\\""));
-        assert!(output.contains("config {\\n    name \\\"demo\\\"\\n}"));
+        let input = "root {}\n";
+        let output = KdlFormatter::replace_block(input, "config", Some("name \"demo\""));
+        assert!(output.contains("config {\n    name \"demo\"\n}"));
     }
 
     #[test]
     fn remove_block() {
-        let input = "config {\\n    name \\\"demo\\\"\\n}\\nother {}\\n";
+        let input = "config {\n    name \"demo\"\n}\nother {}\n";
         let output = KdlFormatter::replace_block(input, "config", None);
         assert!(!output.contains("config {"));
         assert!(output.contains("other {}"));

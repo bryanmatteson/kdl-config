@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use kdl_config_derive::{Kdl, KdlNode, KdlValue};
-use kdl_config_runtime::{
+use kdl_config::{
     BoolMode, DefaultPlacement, KdlParse, ParseConfig, parse_config, parse_str,
 };
 
 fn parse_named<T: KdlParse>(
     kdl: &str,
     name: &str,
-) -> Result<T, kdl_config_runtime::KdlConfigError> {
+) -> Result<T, kdl_config::KdlConfigError> {
     let root = parse_config(kdl)?;
     let node = root.child(name).expect("missing node");
     T::from_node(node, &ParseConfig::default())
@@ -18,7 +18,7 @@ fn parse_named_with_config<T: KdlParse>(
     kdl: &str,
     name: &str,
     config: &ParseConfig,
-) -> Result<T, kdl_config_runtime::KdlConfigError> {
+) -> Result<T, kdl_config::KdlConfigError> {
     let root = parse_config(kdl)?;
     let node = root.child(name).expect("missing node");
     T::from_node(node, config)
@@ -607,47 +607,47 @@ fn parses_signal_modifiers() {
         .map(|child| child.modifier)
         .collect::<Vec<_>>();
 
-    assert!(modifiers.contains(&kdl_config_runtime::Modifier::Append));
-    assert!(modifiers.contains(&kdl_config_runtime::Modifier::Remove));
-    assert!(modifiers.contains(&kdl_config_runtime::Modifier::Replace));
+    assert!(modifiers.contains(&kdl_config::Modifier::Append));
+    assert!(modifiers.contains(&kdl_config::Modifier::Remove));
+    assert!(modifiers.contains(&kdl_config::Modifier::Replace));
 }
 
 #[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct ModifierConfig {
     #[kdl(modifier)]
-    modifier: kdl_config_runtime::Modifier,
+    modifier: kdl_config::Modifier,
 }
 
 #[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]
 struct OptionalModifierConfig {
     #[kdl(modifier)]
-    modifier: Option<kdl_config_runtime::Modifier>,
+    modifier: Option<kdl_config::Modifier>,
 }
 
 #[test]
 fn parses_node_modifiers_into_fields() {
     let parsed = parse_named::<ModifierConfig>("+config", "config").unwrap();
-    assert_eq!(parsed.modifier, kdl_config_runtime::Modifier::Append);
+    assert_eq!(parsed.modifier, kdl_config::Modifier::Append);
 
     let parsed = parse_named::<OptionalModifierConfig>("config", "config").unwrap();
     assert_eq!(parsed.modifier, None);
 
     let parsed = parse_named::<OptionalModifierConfig>("!config", "config").unwrap();
-    assert_eq!(parsed.modifier, Some(kdl_config_runtime::Modifier::Replace));
+    assert_eq!(parsed.modifier, Some(kdl_config::Modifier::Replace));
 }
 
 #[test]
 fn renders_node_modifiers_from_fields() {
     let config = ModifierConfig {
-        modifier: kdl_config_runtime::Modifier::Remove,
+        modifier: kdl_config::Modifier::Remove,
     };
-    let rendered = kdl_config_runtime::to_kdl(&config, "config");
+    let rendered = kdl_config::to_kdl(&config, "config");
     assert_eq!(rendered.trim(), "-config");
 
     let config = OptionalModifierConfig { modifier: None };
-    let rendered = kdl_config_runtime::to_kdl(&config, "config");
+    let rendered = kdl_config::to_kdl(&config, "config");
     assert_eq!(rendered.trim(), "config");
 }
 
@@ -663,7 +663,7 @@ struct RenderConfig {
 #[test]
 fn render_is_deterministic() {
     let config = RenderConfig { a: 1, b: 2 };
-    let rendered = kdl_config_runtime::to_kdl(&config, "config");
+    let rendered = kdl_config::to_kdl(&config, "config");
     assert_eq!(rendered.trim(), "config a=1 b=2");
 }
 
@@ -677,7 +677,7 @@ struct VecAttrRender {
 #[test]
 fn renders_repeated_attrs_for_vecs() {
     let config = VecAttrRender { values: vec![1, 2] };
-    let rendered = kdl_config_runtime::to_kdl(&config, "config");
+    let rendered = kdl_config::to_kdl(&config, "config");
     let trimmed = rendered.trim();
     assert!(trimmed.starts_with("config "));
     assert_eq!(trimmed.matches("values=").count(), 2);
@@ -695,7 +695,7 @@ struct RenderBoolFalse {
 #[test]
 fn render_bool_false_emits_negative_flag() {
     let config = RenderBoolFalse { enabled: false };
-    let rendered = kdl_config_runtime::to_kdl(&config, "config");
+    let rendered = kdl_config::to_kdl(&config, "config");
     assert_eq!(rendered.trim(), "config no-enabled");
 }
 
@@ -708,7 +708,7 @@ struct OptionalPresenceOnlyRender {
 
 #[test]
 fn presence_only_optional_renders_only_positive_flag() {
-    let rendered = kdl_config_runtime::to_kdl(
+    let rendered = kdl_config::to_kdl(
         &OptionalPresenceOnlyRender {
             enabled: Some(true),
         },
@@ -716,7 +716,7 @@ fn presence_only_optional_renders_only_positive_flag() {
     );
     assert_eq!(rendered.trim(), "config enabled");
 
-    let rendered = kdl_config_runtime::to_kdl(
+    let rendered = kdl_config::to_kdl(
         &OptionalPresenceOnlyRender {
             enabled: Some(false),
         },
@@ -725,7 +725,7 @@ fn presence_only_optional_renders_only_positive_flag() {
     assert_eq!(rendered.trim(), "config");
 
     let rendered =
-        kdl_config_runtime::to_kdl(&OptionalPresenceOnlyRender { enabled: None }, "config");
+        kdl_config::to_kdl(&OptionalPresenceOnlyRender { enabled: None }, "config");
     assert_eq!(rendered.trim(), "config");
 }
 
@@ -941,13 +941,13 @@ fn registry_key_arg_uses_custom_index() {
 }
 
 fn registry_key_from_attr(
-    node: &kdl_config_runtime::Node,
-) -> Result<String, kdl_config_runtime::KdlConfigError> {
+    node: &kdl_config::Node,
+) -> Result<String, kdl_config::KdlConfigError> {
     node.attr("key")
         .and_then(|value| value.as_str())
         .map(|val| val.to_string())
         .ok_or_else(|| {
-            kdl_config_runtime::KdlConfigError::custom("registry key", "missing key attribute")
+            kdl_config::KdlConfigError::custom("registry key", "missing key attribute")
         })
 }
 
@@ -1040,7 +1040,7 @@ fn raw_parse_preserves_identifier_quoting() {
     assert_eq!(node.name_repr(), Some("\"+config\""));
     assert_eq!(node.attr_repr("+attr"), Some("\"+attr\""));
 
-    let rendered = kdl_config_runtime::to_kdl(node, &node.name);
+    let rendered = kdl_config::to_kdl(node, &node.name);
     assert_eq!(rendered.trim(), "\"+config\" \"+attr\"=1");
 }
 
@@ -1052,7 +1052,7 @@ fn raw_parse_preserves_raw_string_quoting() {
     assert_eq!(node.name_repr(), Some("#\"+config\"#"));
     assert_eq!(node.attr_repr("+attr"), Some("#\"+attr\"#"));
 
-    let rendered = kdl_config_runtime::to_kdl(node, &node.name);
+    let rendered = kdl_config::to_kdl(node, &node.name);
     assert_eq!(rendered.trim(), "#\"+config\"# #\"+attr\"#=1");
 }
 
@@ -1085,10 +1085,10 @@ test with-struct { key \"\" }\n";
 
 #[test]
 fn renders_enum_variants_inline() {
-    let rendered = kdl_config_runtime::to_kdl(&MixedEnum::Value, "test");
+    let rendered = kdl_config::to_kdl(&MixedEnum::Value, "test");
     assert_eq!(rendered.trim(), "test value");
 
-    let rendered = kdl_config_runtime::to_kdl(&MixedEnum::WithStruct { key: "ok".into() }, "test");
+    let rendered = kdl_config::to_kdl(&MixedEnum::WithStruct { key: "ok".into() }, "test");
     assert_eq!(rendered.trim(), "test with-struct {\n    key \"ok\"\n}");
 }
 
@@ -1117,9 +1117,9 @@ fn parses_enum_tuple_variants_and_non_string_tags() {
 
 #[test]
 fn renders_enum_tuple_variants_and_non_string_tags() {
-    let rendered = kdl_config_runtime::to_kdl(&TaggedEnum::Pair(10, "ok".into()), "choice");
+    let rendered = kdl_config::to_kdl(&TaggedEnum::Pair(10, "ok".into()), "choice");
     assert_eq!(rendered.trim(), "choice 1 10 \"ok\"");
 
-    let rendered = kdl_config_runtime::to_kdl(&TaggedEnum::Enabled, "choice");
+    let rendered = kdl_config::to_kdl(&TaggedEnum::Enabled, "choice");
     assert_eq!(rendered.trim(), "choice #true");
 }

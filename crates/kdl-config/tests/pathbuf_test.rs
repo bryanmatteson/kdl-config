@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use kdl_config::derive::KdlNode;
 use kdl_config::parse_str;
+use kdl_config_derive::KdlNode;
 
 #[derive(Debug, PartialEq, KdlNode)]
 struct Config {

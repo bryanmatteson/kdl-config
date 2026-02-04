@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use kdl_config::{KdlConfigError, KdlParse, Modifier, parse_config};
 use kdl_config_derive::KdlNode;
-use kdl_config_runtime::{KdlConfigError, KdlParse, Modifier, parse_config};
 
 const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
@@ -160,7 +160,7 @@ fn golden_kitchen_sink_roundtrip() {
     let input = read_fixture("kitchen-sink.kdl");
     let parsed = parse_named::<KitchenSink>(&input, "config").expect("parse kitchen sink");
 
-    let rendered = kdl_config_runtime::to_kdl(&parsed, "config");
+    let rendered = kdl_config::to_kdl(&parsed, "config");
     let expected = read_fixture("kitchen-sink.golden.kdl");
     assert_eq!(rendered.trim(), expected.trim());
 

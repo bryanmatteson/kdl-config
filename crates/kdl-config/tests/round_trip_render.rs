@@ -1,5 +1,5 @@
 use kdl_config_derive::KdlNode;
-use kdl_config_runtime::parse_str_roundtrip;
+use kdl_config::parse_str_roundtrip;
 
 #[derive(Debug, PartialEq, KdlNode)]
 #[kdl(node = "config")]

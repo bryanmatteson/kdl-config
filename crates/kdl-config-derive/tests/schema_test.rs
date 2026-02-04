@@ -1,5 +1,5 @@
 use kdl_config_derive::{KdlChoice, KdlNode, KdlSchema, KdlValue};
-use kdl_config_runtime::schema::{KdlSchema, SchemaLiteral, SchemaRef, SchemaType};
+use kdl_config::schema::{KdlSchema, SchemaLiteral, SchemaRef, SchemaType};
 
 #[derive(KdlSchema)]
 #[allow(unused)]
@@ -104,7 +104,7 @@ union UnionChoice {
 
 #[test]
 fn test_schema_generation() {
-    let mut registry = kdl_config_runtime::schema::SchemaRegistry::default();
+    let mut registry = kdl_config::schema::SchemaRegistry::default();
     Config::register_definitions(&mut registry);
 
     let config_schema = registry
@@ -160,7 +160,7 @@ fn test_schema_generation() {
 
 #[test]
 fn test_scalar_schema_generation() {
-    let mut registry = kdl_config_runtime::schema::SchemaRegistry::default();
+    let mut registry = kdl_config::schema::SchemaRegistry::default();
     ScalarSchemaConfig::register_definitions(&mut registry);
 
     let schema = registry
@@ -173,7 +173,7 @@ fn test_scalar_schema_generation() {
 
 #[test]
 fn test_tuple_schema_override() {
-    let mut registry = kdl_config_runtime::schema::SchemaRegistry::default();
+    let mut registry = kdl_config::schema::SchemaRegistry::default();
     TupleSchemaOverride::register_definitions(&mut registry);
 
     let schema = registry
@@ -186,7 +186,7 @@ fn test_tuple_schema_override() {
 
 #[test]
 fn test_enum_schema_generation() {
-    let mut registry = kdl_config_runtime::schema::SchemaRegistry::default();
+    let mut registry = kdl_config::schema::SchemaRegistry::default();
     Choice::register_definitions(&mut registry);
 
     let choice_schema = registry
@@ -263,7 +263,7 @@ fn test_choice_schema_generation() {
 
 #[test]
 fn test_schema_overrides() {
-    let mut registry = kdl_config_runtime::schema::SchemaRegistry::default();
+    let mut registry = kdl_config::schema::SchemaRegistry::default();
     OverrideConfig::register_definitions(&mut registry);
 
     let config_schema = registry

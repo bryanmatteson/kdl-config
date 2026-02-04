@@ -55,10 +55,10 @@ pub fn generate_render_impl(
     );
 
     quote! {
-        impl ::kdl_config_runtime::KdlRender for #struct_name {
+        impl ::kdl_config::KdlRender for #struct_name {
             fn render<W: ::std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> ::std::fmt::Result {
                 let rendered = #render_body;
-                ::kdl_config_runtime::write_indent(w, indent)?;
+                ::kdl_config::write_indent(w, indent)?;
                 w.write_str(&rendered)?;
                 Ok(())
             }
@@ -122,7 +122,7 @@ pub(crate) fn render_body_with_accessor(
 
     quote! {
         {
-            let mut renderer = ::kdl_config_runtime::NodeRenderer::new(#name_expr, #modifier_expr);
+            let mut renderer = ::kdl_config::NodeRenderer::new(#name_expr, #modifier_expr);
 
             #positional_render
             #flag_render
@@ -221,13 +221,13 @@ fn modifier_expr_for(fields: &[FieldInfo], accessor: fn(&FieldInfo) -> FieldAcce
         let access = accessor(field);
         if field.is_optional {
             let reference = &access.reference;
-            quote! { (#reference).as_ref().cloned().unwrap_or(::kdl_config_runtime::Modifier::Inherit) }
+            quote! { (#reference).as_ref().cloned().unwrap_or(::kdl_config::Modifier::Inherit) }
         } else {
             let value = &access.value;
             quote! { #value }
         }
     } else {
-        quote! { ::kdl_config_runtime::Modifier::Inherit }
+        quote! { ::kdl_config::Modifier::Inherit }
     }
 }
 
@@ -255,13 +255,13 @@ fn render_positional_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> F
             let reference = &access.reference;
             quote! {
                 if let Some(value) = #reference {
-                    renderer.positional_raw(#idx, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::from(value.clone())));
+                    renderer.positional_raw(#idx, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
                 }
             }
         } else {
             let value = &access.value;
             quote! {
-                renderer.positional_raw(#idx, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::from(#value.clone())));
+                renderer.positional_raw(#idx, ::kdl_config::render_value(&::kdl_config::Value::from(#value.clone())));
             }
         };
 
@@ -287,7 +287,7 @@ fn render_keyed_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldA
                 quote! {
                     if let Some(values) = #reference {
                         for value in values {
-                            renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::from(value.clone())));
+                            renderer.keyed_raw(#key, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
                         }
                     }
                 }
@@ -295,7 +295,7 @@ fn render_keyed_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldA
                 let reference = &access.reference;
                 quote! {
                     for value in #reference {
-                        renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::from(value.clone())));
+                        renderer.keyed_raw(#key, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
                     }
                 }
             }
@@ -303,13 +303,13 @@ fn render_keyed_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldA
             let reference = &access.reference;
             quote! {
                 if let Some(value) = #reference {
-                    renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::from(value.clone())));
+                    renderer.keyed_raw(#key, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
                 }
             }
         } else {
             let value = &access.value;
             quote! {
-                renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::from(#value.clone())));
+                renderer.keyed_raw(#key, ::kdl_config::render_value(&::kdl_config::Value::from(#value.clone())));
             }
         };
 
@@ -355,15 +355,15 @@ fn render_flag_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, accesso
             quote! {
                 if let Some(value) = #reference {
                     match #bool_mode_tokens {
-                        ::kdl_config_runtime::BoolMode::ValueOnly => {
-                            renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::Bool(*value)));
+                        ::kdl_config::BoolMode::ValueOnly => {
+                            renderer.keyed_raw(#key, ::kdl_config::render_value(&::kdl_config::Value::Bool(*value)));
                         }
-                        ::kdl_config_runtime::BoolMode::PresenceOnly => {
+                        ::kdl_config::BoolMode::PresenceOnly => {
                             if *value {
                                 renderer.flag(#pos_flag_lit);
                             }
                         }
-                        ::kdl_config_runtime::BoolMode::PresenceAndValue => {
+                        ::kdl_config::BoolMode::PresenceAndValue => {
                             if *value {
                                 renderer.flag(#pos_flag_lit);
                             } else {
@@ -377,15 +377,15 @@ fn render_flag_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, accesso
             let bool_value = &access.bool_value;
             quote! {
                 match #bool_mode_tokens {
-                    ::kdl_config_runtime::BoolMode::ValueOnly => {
-                        renderer.keyed_raw(#key, ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::Bool(#bool_value)));
+                    ::kdl_config::BoolMode::ValueOnly => {
+                        renderer.keyed_raw(#key, ::kdl_config::render_value(&::kdl_config::Value::Bool(#bool_value)));
                     }
-                    ::kdl_config_runtime::BoolMode::PresenceOnly => {
+                    ::kdl_config::BoolMode::PresenceOnly => {
                         if #bool_value {
                             renderer.flag(#pos_flag_lit);
                         }
                     }
-                    ::kdl_config_runtime::BoolMode::PresenceAndValue => {
+                    ::kdl_config::BoolMode::PresenceAndValue => {
                         if #bool_value {
                             renderer.flag(#pos_flag_lit);
                         } else {
@@ -424,7 +424,7 @@ fn render_value_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, access
                 quote! {
                     if let Some(values) = #reference {
                         if !values.is_empty() {
-                            let rendered = ::kdl_config_runtime::render_value_node(#key, &values.iter().cloned().map(::kdl_config_runtime::Value::from).collect::<::std::vec::Vec<_>>());
+                            let rendered = ::kdl_config::render_value_node(#key, &values.iter().cloned().map(::kdl_config::Value::from).collect::<::std::vec::Vec<_>>());
                             value_nodes.push((#key.to_string(), idx, rendered));
                             idx += 1;
                         }
@@ -434,7 +434,7 @@ fn render_value_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, access
                 let reference = &access.reference;
                 quote! {
                     if !(#reference).is_empty() {
-                        let rendered = ::kdl_config_runtime::render_value_node(#key, &(#reference).iter().cloned().map(::kdl_config_runtime::Value::from).collect::<::std::vec::Vec<_>>());
+                        let rendered = ::kdl_config::render_value_node(#key, &(#reference).iter().cloned().map(::kdl_config::Value::from).collect::<::std::vec::Vec<_>>());
                         value_nodes.push((#key.to_string(), idx, rendered));
                         idx += 1;
                     }
@@ -446,15 +446,15 @@ fn render_value_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, access
                 quote! {
                     if let Some(value) = #reference {
                         match #bool_mode_tokens {
-                            ::kdl_config_runtime::BoolMode::PresenceOnly => {
+                            ::kdl_config::BoolMode::PresenceOnly => {
                                 if *value {
-                                    let rendered = ::kdl_config_runtime::render_key(#key);
+                                    let rendered = ::kdl_config::render_key(#key);
                                     value_nodes.push((#key.to_string(), idx, rendered));
                                     idx += 1;
                                 }
                             }
                             _ => {
-                                let rendered = ::kdl_config_runtime::render_value_node_scalar(#key, &::kdl_config_runtime::Value::Bool(*value));
+                                let rendered = ::kdl_config::render_value_node_scalar(#key, &::kdl_config::Value::Bool(*value));
                                 value_nodes.push((#key.to_string(), idx, rendered));
                                 idx += 1;
                             }
@@ -465,15 +465,15 @@ fn render_value_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, access
                 let bool_value = &access.bool_value;
                 quote! {
                     match #bool_mode_tokens {
-                        ::kdl_config_runtime::BoolMode::PresenceOnly => {
+                        ::kdl_config::BoolMode::PresenceOnly => {
                             if #bool_value {
-                                let rendered = ::kdl_config_runtime::render_key(#key);
+                                let rendered = ::kdl_config::render_key(#key);
                                 value_nodes.push((#key.to_string(), idx, rendered));
                                 idx += 1;
                             }
                         }
                         _ => {
-                            let rendered = ::kdl_config_runtime::render_value_node_scalar(#key, &::kdl_config_runtime::Value::Bool(#bool_value));
+                            let rendered = ::kdl_config::render_value_node_scalar(#key, &::kdl_config::Value::Bool(#bool_value));
                             value_nodes.push((#key.to_string(), idx, rendered));
                             idx += 1;
                         }
@@ -484,7 +484,7 @@ fn render_value_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, access
             let reference = &access.reference;
             quote! {
                 if let Some(value) = #reference {
-                    let rendered = ::kdl_config_runtime::render_value_node_scalar(#key, &::kdl_config_runtime::Value::from(value.clone()));
+                    let rendered = ::kdl_config::render_value_node_scalar(#key, &::kdl_config::Value::from(value.clone()));
                     value_nodes.push((#key.to_string(), idx, rendered));
                     idx += 1;
                 }
@@ -492,7 +492,7 @@ fn render_value_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, access
         } else {
             let value = &access.value;
             quote! {
-                let rendered = ::kdl_config_runtime::render_value_node_scalar(#key, &::kdl_config_runtime::Value::from(#value.clone()));
+                let rendered = ::kdl_config::render_value_node_scalar(#key, &::kdl_config::Value::from(#value.clone()));
                 value_nodes.push((#key.to_string(), idx, rendered));
                 idx += 1;
             }
@@ -518,7 +518,7 @@ fn render_child_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldA
             let reference = &access.reference;
             quote! {
                 if let Some(value) = #reference {
-                    let rendered = ::kdl_config_runtime::to_kdl(value, #key);
+                    let rendered = ::kdl_config::to_kdl(value, #key);
                     child_nodes.push((#key.to_string(), idx, rendered));
                     idx += 1;
                 }
@@ -526,7 +526,7 @@ fn render_child_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldA
         } else {
             let reference = &access.reference;
             quote! {
-                let rendered = ::kdl_config_runtime::to_kdl(#reference, #key);
+                let rendered = ::kdl_config::to_kdl(#reference, #key);
                 child_nodes.push((#key.to_string(), idx, rendered));
                 idx += 1;
             }
@@ -553,7 +553,7 @@ fn render_children_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> Fie
             quote! {
                 if let Some(values) = #reference {
                     for child in values {
-                        let rendered = ::kdl_config_runtime::to_kdl(child, #key);
+                        let rendered = ::kdl_config::to_kdl(child, #key);
                         child_nodes.push((#key.to_string(), idx, rendered));
                         idx += 1;
                     }
@@ -563,7 +563,7 @@ fn render_children_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> Fie
             let reference = &access.reference;
             quote! {
                 for child in #reference {
-                    let rendered = ::kdl_config_runtime::to_kdl(child, #key);
+                    let rendered = ::kdl_config::to_kdl(child, #key);
                     child_nodes.push((#key.to_string(), idx, rendered));
                     idx += 1;
                 }
@@ -594,9 +594,9 @@ fn render_registry_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> Fie
                     if #cond {
                         if let Some(entries) = #reference {
                             for (name, value) in entries {
-                                let mut rendered = ::kdl_config_runtime::to_kdl(value, #container);
-                                let key_rendered = ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::String(name.clone()));
-                                rendered = ::kdl_config_runtime::insert_arg(&rendered, &key_rendered);
+                                let mut rendered = ::kdl_config::to_kdl(value, #container);
+                                let key_rendered = ::kdl_config::render_value(&::kdl_config::Value::String(name.clone()));
+                                rendered = ::kdl_config::insert_arg(&rendered, &key_rendered);
                                 child_nodes.push((#container.to_string(), idx, rendered));
                                 idx += 1;
                             }
@@ -607,9 +607,9 @@ fn render_registry_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> Fie
                 items.push(quote! {
                     if #cond {
                         for (name, value) in #reference {
-                            let mut rendered = ::kdl_config_runtime::to_kdl(value, #container);
-                            let key_rendered = ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::String(name.clone()));
-                            rendered = ::kdl_config_runtime::insert_arg(&rendered, &key_rendered);
+                            let mut rendered = ::kdl_config::to_kdl(value, #container);
+                            let key_rendered = ::kdl_config::render_value(&::kdl_config::Value::String(name.clone()));
+                            rendered = ::kdl_config::insert_arg(&rendered, &key_rendered);
                             child_nodes.push((#container.to_string(), idx, rendered));
                             idx += 1;
                         }
@@ -622,9 +622,9 @@ fn render_registry_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> Fie
                     let mut entries: ::std::vec::Vec<(&String, &_)> = (#reference).iter().collect();
                     entries.sort_by(|a, b| a.0.cmp(b.0));
                     for (name, value) in entries {
-                        let mut rendered = ::kdl_config_runtime::to_kdl(value, #container);
-                        let key_rendered = ::kdl_config_runtime::render_value(&::kdl_config_runtime::Value::String(name.clone()));
-                        rendered = ::kdl_config_runtime::insert_arg(&rendered, &key_rendered);
+                        let mut rendered = ::kdl_config::to_kdl(value, #container);
+                        let key_rendered = ::kdl_config::render_value(&::kdl_config::Value::String(name.clone()));
+                        rendered = ::kdl_config::insert_arg(&rendered, &key_rendered);
                         child_nodes.push((#container.to_string(), idx, rendered));
                         idx += 1;
                     }
@@ -654,16 +654,16 @@ fn render_children_map_fields(
                         let mut entries: ::std::vec::Vec<(String, &_, &_)> = (#reference)
                             .iter()
                             .map(|(name, value)| {
-                                let rendered = ::kdl_config_runtime::render_value(
-                                    &::kdl_config_runtime::Value::from((*name).clone()),
+                                let rendered = ::kdl_config::render_value(
+                                    &::kdl_config::Value::from((*name).clone()),
                                 );
                                 (rendered, name, value)
                             })
                             .collect();
                         entries.sort_by(|a, b| a.0.cmp(&b.0));
                         for (rendered_key, _name, value) in entries {
-                            let mut rendered = ::kdl_config_runtime::to_kdl(value, #map_node);
-                            rendered = ::kdl_config_runtime::insert_arg(&rendered, &rendered_key);
+                            let mut rendered = ::kdl_config::to_kdl(value, #map_node);
+                            rendered = ::kdl_config::insert_arg(&rendered, &rendered_key);
                             child_nodes.push((#map_node.to_string(), idx, rendered));
                             idx += 1;
                         }
@@ -674,11 +674,11 @@ fn render_children_map_fields(
                 items.push(quote! {
                     if #cond {
                         for (name, value) in #reference {
-                            let rendered_key = ::kdl_config_runtime::render_value(
-                                &::kdl_config_runtime::Value::from((*name).clone()),
+                            let rendered_key = ::kdl_config::render_value(
+                                &::kdl_config::Value::from((*name).clone()),
                             );
-                            let mut rendered = ::kdl_config_runtime::to_kdl(value, #map_node);
-                            rendered = ::kdl_config_runtime::insert_arg(&rendered, &rendered_key);
+                            let mut rendered = ::kdl_config::to_kdl(value, #map_node);
+                            rendered = ::kdl_config::insert_arg(&rendered, &rendered_key);
                             child_nodes.push((#map_node.to_string(), idx, rendered));
                             idx += 1;
                         }
@@ -690,11 +690,11 @@ fn render_children_map_fields(
                     if #cond {
                         if let Some(entries) = #reference {
                             for (name, value) in entries {
-                                let rendered_key = ::kdl_config_runtime::render_value(
-                                    &::kdl_config_runtime::Value::from((*name).clone()),
+                                let rendered_key = ::kdl_config::render_value(
+                                    &::kdl_config::Value::from((*name).clone()),
                                 );
-                                let mut rendered = ::kdl_config_runtime::to_kdl(value, #map_node);
-                                rendered = ::kdl_config_runtime::insert_arg(&rendered, &rendered_key);
+                                let mut rendered = ::kdl_config::to_kdl(value, #map_node);
+                                rendered = ::kdl_config::insert_arg(&rendered, &rendered_key);
                                 child_nodes.push((#map_node.to_string(), idx, rendered));
                                 idx += 1;
                             }
@@ -711,7 +711,7 @@ fn render_children_map_fields(
                             .collect();
                         entries.sort_by(|a, b| a.0.cmp(&b.0));
                         for (rendered_key, _name, value) in entries {
-                            let rendered = ::kdl_config_runtime::to_kdl(value, &rendered_key);
+                            let rendered = ::kdl_config::to_kdl(value, &rendered_key);
                             child_nodes.push((rendered_key, idx, rendered));
                             idx += 1;
                         }
@@ -723,7 +723,7 @@ fn render_children_map_fields(
                     if #cond {
                         for (name, value) in #reference {
                             let rendered_key = name.to_string();
-                            let rendered = ::kdl_config_runtime::to_kdl(value, &rendered_key);
+                            let rendered = ::kdl_config::to_kdl(value, &rendered_key);
                             child_nodes.push((rendered_key, idx, rendered));
                             idx += 1;
                         }
@@ -736,7 +736,7 @@ fn render_children_map_fields(
                         if let Some(entries) = #reference {
                             for (name, value) in entries {
                                 let rendered_key = name.to_string();
-                                let rendered = ::kdl_config_runtime::to_kdl(value, &rendered_key);
+                                let rendered = ::kdl_config::to_kdl(value, &rendered_key);
                                 child_nodes.push((rendered_key, idx, rendered));
                                 idx += 1;
                             }
@@ -751,8 +751,8 @@ fn render_children_map_fields(
 
 fn bool_mode_tokens(mode: BoolMode) -> TokenStream {
     match mode {
-        BoolMode::PresenceAndValue => quote! { ::kdl_config_runtime::BoolMode::PresenceAndValue },
-        BoolMode::ValueOnly => quote! { ::kdl_config_runtime::BoolMode::ValueOnly },
-        BoolMode::PresenceOnly => quote! { ::kdl_config_runtime::BoolMode::PresenceOnly },
+        BoolMode::PresenceAndValue => quote! { ::kdl_config::BoolMode::PresenceAndValue },
+        BoolMode::ValueOnly => quote! { ::kdl_config::BoolMode::ValueOnly },
+        BoolMode::PresenceOnly => quote! { ::kdl_config::BoolMode::PresenceOnly },
     }
 }

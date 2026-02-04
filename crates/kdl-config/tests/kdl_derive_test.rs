@@ -1,5 +1,5 @@
-use kdl_config::derive::{Kdl, KdlNode};
 use kdl_config::parse_str;
+use kdl_config_derive::{Kdl, KdlNode};
 
 #[derive(Debug, PartialEq, Kdl)]
 #[kdl(node = "config")]

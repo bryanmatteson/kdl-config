@@ -1,4 +1,4 @@
-use kdl_config_runtime::{convert_value, convert_value_checked, ErrorKind, Placement, Value};
+use kdl_config::{ErrorKind, Placement, Value, convert_value, convert_value_checked};
 
 #[test]
 fn type_mismatch_reports_error() {

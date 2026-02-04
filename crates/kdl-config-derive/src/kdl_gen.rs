@@ -164,12 +164,12 @@ fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
 
     match &input.data {
         Data::Enum(_) => Ok(quote! {
-            impl ::kdl_config_runtime::schema::KdlSchema for #name {
-                fn schema_ref() -> ::kdl_config_runtime::schema::SchemaRef {
-                        ::kdl_config_runtime::schema::SchemaRef::Inline(
-                            ::kdl_config_runtime::schema::KdlNodeSchema {
-                                values: vec![::kdl_config_runtime::schema::SchemaValue {
-                                    ty: ::kdl_config_runtime::schema::SchemaType::String,
+            impl ::kdl_config::schema::KdlSchema for #name {
+                fn schema_ref() -> ::kdl_config::schema::SchemaRef {
+                        ::kdl_config::schema::SchemaRef::Inline(
+                            ::kdl_config::schema::KdlNodeSchema {
+                                values: vec![::kdl_config::schema::SchemaValue {
+                                    ty: ::kdl_config::schema::SchemaType::String,
                                     required: true,
                                     description: None,
                                     enum_values: None,
@@ -179,7 +179,7 @@ fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
                         )
                     }
 
-                fn register_definitions(_registry: &mut ::kdl_config_runtime::schema::SchemaRegistry) {}
+                fn register_definitions(_registry: &mut ::kdl_config::schema::SchemaRegistry) {}
             }
         }),
         Data::Struct(data) => {
@@ -196,22 +196,22 @@ fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
             };
 
             Ok(quote! {
-                impl ::kdl_config_runtime::schema::KdlSchema for #name {
-                    fn schema_ref() -> ::kdl_config_runtime::schema::SchemaRef {
-                        let schema_ref = <#inner_ty as ::kdl_config_runtime::schema::KdlSchema>::schema_ref();
+                impl ::kdl_config::schema::KdlSchema for #name {
+                    fn schema_ref() -> ::kdl_config::schema::SchemaRef {
+                        let schema_ref = <#inner_ty as ::kdl_config::schema::KdlSchema>::schema_ref();
                         let ty = match schema_ref {
-                            ::kdl_config_runtime::schema::SchemaRef::Inline(s) => {
+                            ::kdl_config::schema::SchemaRef::Inline(s) => {
                                 s.values
                                     .first()
                                     .map(|value| value.ty.clone())
-                                    .unwrap_or(::kdl_config_runtime::schema::SchemaType::String)
+                                    .unwrap_or(::kdl_config::schema::SchemaType::String)
                             }
-                            _ => ::kdl_config_runtime::schema::SchemaType::String,
+                            _ => ::kdl_config::schema::SchemaType::String,
                         };
 
-                        ::kdl_config_runtime::schema::SchemaRef::Inline(
-                            ::kdl_config_runtime::schema::KdlNodeSchema {
-                                values: vec![::kdl_config_runtime::schema::SchemaValue {
+                        ::kdl_config::schema::SchemaRef::Inline(
+                            ::kdl_config::schema::KdlNodeSchema {
+                                values: vec![::kdl_config::schema::SchemaValue {
                                     ty,
                                     required: true,
                                     description: None,
@@ -222,8 +222,8 @@ fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
                         )
                     }
 
-                    fn register_definitions(registry: &mut ::kdl_config_runtime::schema::SchemaRegistry) {
-                        <#inner_ty as ::kdl_config_runtime::schema::KdlSchema>::register_definitions(registry);
+                    fn register_definitions(registry: &mut ::kdl_config::schema::SchemaRegistry) {
+                        <#inner_ty as ::kdl_config::schema::KdlSchema>::register_definitions(registry);
                     }
                 }
             })

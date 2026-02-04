@@ -1,5 +1,5 @@
-use kdl_config::derive::{KdlChoice, KdlNode, KdlSchema};
 use kdl_config::parse_str;
+use kdl_config_derive::{KdlChoice, KdlNode, KdlSchema};
 
 #[derive(Debug, PartialEq, KdlNode, KdlSchema)]
 struct PrefixFilter {

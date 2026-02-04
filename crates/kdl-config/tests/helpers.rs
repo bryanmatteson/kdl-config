@@ -1,4 +1,4 @@
-use kdl_config_runtime::{helpers, ErrorKind, FlagStyle, Modifier, Node, Placement, Value};
+use kdl_config::{helpers, ErrorKind, FlagStyle, Modifier, Node, Placement, Value};
 
 fn node_with_flags(flags: &[&str]) -> Node {
     let mut node = Node::named("config").with_modifier(Modifier::Inherit);
@@ -75,7 +75,7 @@ fn custom_flags_require_both_overrides() {
 fn resolve_scalar_first_last_append_behavior() {
     let mut current = None;
     helpers::resolve_scalar(
-        kdl_config_runtime::ConflictPolicy::First,
+        kdl_config::ConflictPolicy::First,
         &mut current,
         1,
         "Test",
@@ -85,7 +85,7 @@ fn resolve_scalar_first_last_append_behavior() {
     )
     .unwrap();
     helpers::resolve_scalar(
-        kdl_config_runtime::ConflictPolicy::First,
+        kdl_config::ConflictPolicy::First,
         &mut current,
         2,
         "Test",
@@ -97,7 +97,7 @@ fn resolve_scalar_first_last_append_behavior() {
     assert_eq!(current, Some(1));
 
     helpers::resolve_scalar(
-        kdl_config_runtime::ConflictPolicy::Last,
+        kdl_config::ConflictPolicy::Last,
         &mut current,
         3,
         "Test",
@@ -109,7 +109,7 @@ fn resolve_scalar_first_last_append_behavior() {
     assert_eq!(current, Some(3));
 
     let err = helpers::resolve_scalar(
-        kdl_config_runtime::ConflictPolicy::Append,
+        kdl_config::ConflictPolicy::Append,
         &mut current,
         4,
         "Test",
@@ -129,7 +129,7 @@ fn resolve_scalar_first_last_append_behavior() {
 fn resolve_vec_append_behavior() {
     let mut current = None;
     helpers::resolve_vec(
-        kdl_config_runtime::ConflictPolicy::Append,
+        kdl_config::ConflictPolicy::Append,
         &mut current,
         vec![1, 2],
         "Test",
@@ -139,7 +139,7 @@ fn resolve_vec_append_behavior() {
     )
     .unwrap();
     helpers::resolve_vec(
-        kdl_config_runtime::ConflictPolicy::Append,
+        kdl_config::ConflictPolicy::Append,
         &mut current,
         vec![3],
         "Test",

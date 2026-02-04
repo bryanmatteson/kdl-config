@@ -82,7 +82,7 @@ pub fn generate_kdl_choice_impl(
                 VariantKind::Newtype(ty) => {
                     quote! {
                         #kdl_name => {
-                            let inner = <#ty as ::kdl_config_runtime::KdlParse>::from_node(node, config)?;
+                            let inner = <#ty as ::kdl_config::KdlParse>::from_node(node, config)?;
                             return Ok(Self::#ident(inner));
                         }
                     }
@@ -91,7 +91,7 @@ pub fn generate_kdl_choice_impl(
                     quote! {
                         #kdl_name => {
                             if !node.args().is_empty() || !node.attrs().is_empty() || !node.children().is_empty() {
-                                return Err(::kdl_config_runtime::KdlConfigError::custom(
+                                return Err(::kdl_config::KdlConfigError::custom(
                                     #enum_name_str,
                                     format!("choice '{}' does not accept values", #kdl_name),
                                 ));
@@ -120,10 +120,10 @@ pub fn generate_kdl_choice_impl(
                 VariantKind::Unit => {
                     quote! {
                         Self::#ident => {
-                            ::kdl_config_runtime::write_indent(w, indent)?;
-                            let rendered = ::kdl_config_runtime::NodeRenderer::new(
+                            ::kdl_config::write_indent(w, indent)?;
+                            let rendered = ::kdl_config::NodeRenderer::new(
                                 #kdl_name.to_string(),
-                                ::kdl_config_runtime::Modifier::Inherit,
+                                ::kdl_config::Modifier::Inherit,
                             ).render();
                             w.write_str(&rendered)?;
                             Ok(())
@@ -142,36 +142,36 @@ pub fn generate_kdl_choice_impl(
                 VariantKind::Newtype(ty) => {
                     quote! {
                         {
-                            let schema_ref = <#ty as ::kdl_config_runtime::schema::KdlSchema>::schema_ref();
-                            let mut node_schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
+                            let schema_ref = <#ty as ::kdl_config::schema::KdlSchema>::schema_ref();
+                            let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
                             node_schema.name = Some(#kdl_name.to_string());
                             match schema_ref {
-                                ::kdl_config_runtime::schema::SchemaRef::Ref(r) => {
+                                ::kdl_config::schema::SchemaRef::Ref(r) => {
                                     node_schema.ref_type = Some(r);
                                 }
-                                ::kdl_config_runtime::schema::SchemaRef::Inline(s) => {
+                                ::kdl_config::schema::SchemaRef::Inline(s) => {
                                     node_schema.props = s.props;
                                     node_schema.values = s.values;
                                     node_schema.children = s.children;
                                 }
-                                ::kdl_config_runtime::schema::SchemaRef::Choice(choices) => {
+                                ::kdl_config::schema::SchemaRef::Choice(choices) => {
                                     node_schema.children = Some(::std::boxed::Box::new(
-                                        ::kdl_config_runtime::schema::ChildrenSchema {
-                                            nodes: vec![::kdl_config_runtime::schema::SchemaRef::Choice(choices)],
+                                        ::kdl_config::schema::ChildrenSchema {
+                                            nodes: vec![::kdl_config::schema::SchemaRef::Choice(choices)],
                                         },
                                     ));
                                 }
                             }
-                            ::kdl_config_runtime::schema::SchemaRef::Inline(node_schema)
+                            ::kdl_config::schema::SchemaRef::Inline(node_schema)
                         }
                     }
                 }
                 VariantKind::Unit => {
                     quote! {
                         {
-                            let mut node_schema = ::kdl_config_runtime::schema::KdlNodeSchema::default();
+                            let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
                             node_schema.name = Some(#kdl_name.to_string());
-                            ::kdl_config_runtime::schema::SchemaRef::Inline(node_schema)
+                            ::kdl_config::schema::SchemaRef::Inline(node_schema)
                         }
                     }
                 }
@@ -183,7 +183,7 @@ pub fn generate_kdl_choice_impl(
         .iter()
         .filter_map(|variant| match &variant.kind {
             VariantKind::Newtype(ty) => Some(quote! {
-                <#ty as ::kdl_config_runtime::schema::KdlSchema>::register_definitions(registry);
+                <#ty as ::kdl_config::schema::KdlSchema>::register_definitions(registry);
             }),
             VariantKind::Unit => None,
         })
@@ -191,14 +191,14 @@ pub fn generate_kdl_choice_impl(
 
     let schema_impl = if include_schema {
         quote! {
-            impl ::kdl_config_runtime::schema::KdlSchema for #enum_name {
-                fn schema_ref() -> ::kdl_config_runtime::schema::SchemaRef {
-                    ::kdl_config_runtime::schema::SchemaRef::Choice(vec![
+            impl ::kdl_config::schema::KdlSchema for #enum_name {
+                fn schema_ref() -> ::kdl_config::schema::SchemaRef {
+                    ::kdl_config::schema::SchemaRef::Choice(vec![
                         #(#schema_choices),*
                     ])
                 }
 
-                fn register_definitions(registry: &mut ::kdl_config_runtime::schema::SchemaRegistry) {
+                fn register_definitions(registry: &mut ::kdl_config::schema::SchemaRegistry) {
                     #(#schema_register_calls)*
                 }
             }
@@ -208,18 +208,18 @@ pub fn generate_kdl_choice_impl(
     };
 
     Ok(quote! {
-        impl ::kdl_config_runtime::KdlParse for #enum_name {
+        impl ::kdl_config::KdlParse for #enum_name {
             fn from_node(
-                node: &::kdl_config_runtime::Node,
-                config: &::kdl_config_runtime::ParseConfig,
-            ) -> ::core::result::Result<Self, ::kdl_config_runtime::KdlConfigError> {
+                node: &::kdl_config::Node,
+                config: &::kdl_config::ParseConfig,
+            ) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
                 let node_name = node.name.as_str();
                 match node_name {
                     #(#parse_arms)*
                     _ => {}
                 }
 
-                Err(::kdl_config_runtime::KdlConfigError::no_matching_choice(
+                Err(::kdl_config::KdlConfigError::no_matching_choice(
                     #enum_name_str,
                     node_name,
                     &[#(#valid_variant_names),*],
@@ -227,7 +227,7 @@ pub fn generate_kdl_choice_impl(
             }
         }
 
-        impl ::kdl_config_runtime::KdlRender for #enum_name {
+        impl ::kdl_config::KdlRender for #enum_name {
             fn render<W: ::std::fmt::Write>(
                 &self,
                 w: &mut W,

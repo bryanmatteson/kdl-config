@@ -97,7 +97,7 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                         let struct_name_str = struct_name.to_string();
                         quote::quote! {
                             if node.name != #node_name {
-                                return Err(::kdl_config_runtime::KdlConfigError::node_name_mismatch(
+                                return Err(::kdl_config::KdlConfigError::node_name_mismatch(
                                     #struct_name_str,
                                     #node_name,
                                     &node.name,
@@ -137,11 +137,11 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                             .collect();
 
                         quote::quote! {
-                            impl ::kdl_config_runtime::KdlRender for #struct_name {
+                            impl ::kdl_config::KdlRender for #struct_name {
                                 fn render<W: ::std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> ::std::fmt::Result {
                                     #(#binding_defs)*
                                     let rendered = #render_body;
-                                    ::kdl_config_runtime::write_indent(w, indent)?;
+                                    ::kdl_config::write_indent(w, indent)?;
                                     w.write_str(&rendered)?;
                                     Ok(())
                                 }
@@ -150,12 +150,12 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     };
 
                     let parse_impl = quote::quote! {
-                        impl ::kdl_config_runtime::KdlParse for #struct_name {
-                            fn from_node(node: &::kdl_config_runtime::Node, config: &::kdl_config_runtime::ParseConfig) -> ::core::result::Result<Self, ::kdl_config_runtime::KdlConfigError> {
+                        impl ::kdl_config::KdlParse for #struct_name {
+                            fn from_node(node: &::kdl_config::Node, config: &::kdl_config::ParseConfig) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
                                 #validate_name
                                 let struct_overrides = #struct_overrides;
-                                let struct_config = ::kdl_config_runtime::resolve_struct(config, struct_overrides);
-                                let mut used_keys = ::kdl_config_runtime::helpers::UsedKeys::new();
+                                let struct_config = ::kdl_config::resolve_struct(config, struct_overrides);
+                                let mut used_keys = ::kdl_config::helpers::UsedKeys::new();
 
                                 #(#field_parsers)*
                                 #(#skip_marks)*
@@ -179,7 +179,7 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     let validate_name = if let Some(ref node_name) = struct_attrs.node_name {
                         quote::quote! {
                             if node.name != #node_name {
-                                return Err(::kdl_config_runtime::KdlConfigError::node_name_mismatch(
+                                return Err(::kdl_config::KdlConfigError::node_name_mismatch(
                                     #struct_name_str,
                                     #node_name,
                                     &node.name,
@@ -191,11 +191,11 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     };
 
                     let parse_impl = quote::quote! {
-                        impl ::kdl_config_runtime::KdlParse for #struct_name {
-                            fn from_node(node: &::kdl_config_runtime::Node, _config: &::kdl_config_runtime::ParseConfig) -> ::core::result::Result<Self, ::kdl_config_runtime::KdlConfigError> {
+                        impl ::kdl_config::KdlParse for #struct_name {
+                            fn from_node(node: &::kdl_config::Node, _config: &::kdl_config::ParseConfig) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
                                 #validate_name
                                 if !node.args().is_empty() || !node.attrs().is_empty() || !node.children().is_empty() {
-                                    return Err(::kdl_config_runtime::KdlConfigError::custom(
+                                    return Err(::kdl_config::KdlConfigError::custom(
                                         #struct_name_str,
                                         "unit structs do not accept values",
                                     ));
@@ -206,10 +206,10 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     };
 
                     let render_impl = quote::quote! {
-                        impl ::kdl_config_runtime::KdlRender for #struct_name {
+                        impl ::kdl_config::KdlRender for #struct_name {
                             fn render<W: ::std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> ::std::fmt::Result {
-                                let rendered = ::kdl_config_runtime::NodeRenderer::new(name.to_string(), ::kdl_config_runtime::Modifier::Inherit).render();
-                                ::kdl_config_runtime::write_indent(w, indent)?;
+                                let rendered = ::kdl_config::NodeRenderer::new(name.to_string(), ::kdl_config::Modifier::Inherit).render();
+                                ::kdl_config::write_indent(w, indent)?;
                                 w.write_str(&rendered)?;
                                 Ok(())
                             }
