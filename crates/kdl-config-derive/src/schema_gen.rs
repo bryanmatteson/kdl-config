@@ -360,6 +360,10 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                                  required: bool,
                                  description: TokenStream|
      -> TokenStream {
+        let key_schema_assign = match key_schema {
+            Some(ks) => quote! { node_schema.registry_key = Some(#ks); },
+            None => quote! {},
+        };
         quote! {
             let schema_ref = <#val_ty as ::kdl_config::schema::KdlSchema>::schema_ref();
             let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
@@ -372,9 +376,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 enum_values: None,
             });
             node_schema.required = Some(#required);
-            if let Some(key_schema) = #key_schema {
-                node_schema.registry_key = Some(key_schema);
-            }
+            #key_schema_assign
             match schema_ref {
                 ::kdl_config::schema::SchemaRef::Inline(s) => {
                     node_schema.props = s.props;
@@ -409,24 +411,29 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                                      required: bool,
                                      description: TokenStream|
      -> TokenStream {
-        let key_schema = key_ty.map(schema_type_expr);
+        let key_value_insert = match key_ty.map(schema_type_expr) {
+            Some(ks) => quote! {
+                node_schema.values.push(::kdl_config::schema::SchemaValue {
+                    ty: #ks,
+                    required: #required,
+                    description: None,
+                    enum_values: None,
+                });
+            },
+            None => quote! {},
+        };
+        let registry_key_assign = match registry_key {
+            Some(rk) => quote! { node_schema.registry_key = Some(#rk); },
+            None => quote! {},
+        };
         quote! {
             let schema_ref = <#val_ty as ::kdl_config::schema::KdlSchema>::schema_ref();
             let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
             node_schema.name = Some(#node_name.to_string());
             node_schema.description = #description;
             node_schema.required = Some(#required);
-            if let Some(key_schema) = #key_schema {
-                node_schema.values.push(::kdl_config::schema::SchemaValue {
-                    ty: key_schema,
-                    required: #required,
-                    description: None,
-                    enum_values: None,
-                });
-            }
-            if let Some(registry_key) = #registry_key {
-                node_schema.registry_key = Some(registry_key);
-            }
+            #key_value_insert
+            #registry_key_assign
             match schema_ref {
                 ::kdl_config::schema::SchemaRef::Inline(s) => {
                     node_schema.props = s.props;

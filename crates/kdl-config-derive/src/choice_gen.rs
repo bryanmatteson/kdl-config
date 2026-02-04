@@ -291,7 +291,11 @@ fn apply_choice_enum_meta(
             }
         };
         result.rename_all_explicit = true;
-    } else if meta.path.is_ident("choice") || meta.path.is_ident("schema") {
+    } else if meta.path.is_ident("choice")
+        || meta.path.is_ident("schema")
+        || meta.path.is_ident("node")
+        || meta.path.is_ident("value")
+    {
         if meta.input.peek(syn::Token![=]) {
             let _: syn::Expr = meta.value()?.parse()?;
         } else if !meta.input.is_empty() {

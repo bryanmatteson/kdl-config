@@ -3,7 +3,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Data, DataEnum, DeriveInput, Fields};
 
-use crate::attrs::{RenameStrategy, serde_rename_all_from_attrs, serde_rename_from_attrs};
+use crate::attrs::{serde_rename_all_from_attrs, serde_rename_from_attrs, RenameStrategy};
 
 #[derive(Debug, Default)]
 struct EnumAttrs {
@@ -70,7 +70,11 @@ fn apply_value_enum_meta(
                 "expected string literal for `rename_all`",
             ));
         }
-    } else if meta.path.is_ident("value") || meta.path.is_ident("schema") {
+    } else if meta.path.is_ident("value")
+        || meta.path.is_ident("schema")
+        || meta.path.is_ident("node")
+        || meta.path.is_ident("choice")
+    {
         if meta.input.peek(syn::Token![=]) {
             let _: syn::Expr = meta.value()?.parse()?;
         } else if !meta.input.is_empty() {
