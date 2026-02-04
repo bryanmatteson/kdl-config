@@ -1,5 +1,5 @@
 error: registry placement requires HashMap<String, V> or Vec<(String, V)> field type
- --> tests/ui/registry_non_hashmap.rs:5:5
+ --> tests/ui/registry_non_hashmap.rs:5:6
   |
 5 |     #[kdl(registry)]
-  |     ^
+  |      ^^^^^^^^^^^^^^^

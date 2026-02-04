@@ -1,4 +1,4 @@
-error: unknown field attribute: unknown_attr
+error: unknown kdl attribute: `unknown_attr`
  --> tests/ui/unknown_attr.rs:5:11
   |
 5 |     #[kdl(unknown_attr)]

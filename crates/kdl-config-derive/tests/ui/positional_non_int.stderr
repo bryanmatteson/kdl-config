@@ -1,4 +1,4 @@
-error: expected integer literal or "rest"/"*" for `positional`
+error: expected integer or "rest"/"*", got "foo"
  --> tests/ui/positional_non_int.rs:5:30
   |
 5 |     #[kdl(attr, positional = "foo")]

@@ -1,5 +1,5 @@
 error: append conflict policy is only valid for Vec<T> fields
-  --> tests/ui/append_on_registry.rs:12:5
+  --> tests/ui/append_on_registry.rs:12:6
    |
 12 |     #[kdl(registry, conflict = "append")]
-   |     ^
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -4,11 +4,10 @@ use syn::spanned::Spanned;
 use syn::{Attribute, DataEnum, DeriveInput, Expr, ExprLit, ExprUnary, Fields, Lit, Type, UnOp};
 
 use crate::attrs::{
-    BoolMode, ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle, SchemaTypeOverride,
-    StructAttrs, extract_children_map_types, extract_hashmap_types, extract_inner_type,
-    extract_registry_vec_value, has_child_placement, has_value_placement, is_bool_type,
-    is_numeric_type, is_option_type, is_string_type, is_value_type, parse_field_attrs,
-    parse_struct_attrs, serde_rename_from_attrs,
+    extract_children_map_types, extract_hashmap_types, extract_inner_type,
+    extract_registry_vec_value, has_child_placement, has_value_placement, is_option_type,
+    is_value_type, parse_field_attrs, parse_struct_attrs, serde_rename_from_attrs, BoolMode,
+    ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle, SchemaTypeOverride, StructAttrs,
 };
 
 pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -492,7 +491,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             });
             continue;
         }
-        let required = field.schema.required.unwrap_or(field.required);
+        let required = field.schema.resolved_required().unwrap_or(field.required);
         let bool_mode = field
             .bool_mode
             .clone()
@@ -538,26 +537,26 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         };
 
         let ty = &field.ty;
-        let kdl_key = field
-            .schema
-            .name
-            .clone()
+        let resolved_name = field.schema.resolved_name();
+        let resolved_kind = field.schema.resolved_kind();
+        let kdl_key = resolved_name
+            .cloned()
             .unwrap_or_else(|| field.kdl_key.clone());
-        let desc_expr = schema_desc_expr(field.schema.description.as_ref());
-        let type_expr = if field.is_scalar && field.schema.ty.is_none() {
+        let desc_expr = schema_desc_expr(field.schema.resolved_description());
+        let type_expr = if field.is_scalar && resolved_kind.is_none() {
             quote! { ::kdl_config::schema::SchemaType::String }
         } else {
-            schema_type_expr_with_override(ty, field.schema.ty.as_ref())
+            schema_type_expr_with_override(ty, resolved_kind.as_ref())
         };
 
-        if field.schema.ty.is_none() && !field.is_scalar {
+        if resolved_kind.is_none() && !field.is_scalar {
             register_calls.push(quote! {
                 <#ty as ::kdl_config::schema::KdlSchema>::register_definitions(registry);
             });
         }
 
         if field.placement.registry {
-            let container = if field.schema.name.is_some() {
+            let container = if resolved_name.is_some() {
                 kdl_key.clone()
             } else {
                 field.container.clone().unwrap_or_else(|| kdl_key.clone())
@@ -817,14 +816,14 @@ fn generate_schema_builder(
 
     let deny_unknown = match struct_attrs
         .schema
-        .deny_unknown
+        .resolved_deny_unknown()
         .or(struct_attrs.deny_unknown)
     {
         Some(val) => quote! { Some(#val) },
         None => quote! { Some(false) },
     };
 
-    let schema_description = schema_desc_expr(struct_attrs.schema.description.as_ref());
+    let schema_description = schema_desc_expr(struct_attrs.schema.resolved_description());
 
     let default_placement = match struct_attrs.default_placement {
         Some(DefaultPlacement::Exhaustive) => {
@@ -1224,14 +1223,14 @@ fn generate_schema_enum_impl(
 
     let deny_unknown = match struct_attrs
         .schema
-        .deny_unknown
+        .resolved_deny_unknown()
         .or(struct_attrs.deny_unknown)
     {
         Some(val) => quote! { Some(#val) },
         None => quote! { Some(false) },
     };
 
-    let schema_description = schema_desc_expr(struct_attrs.schema.description.as_ref());
+    let schema_description = schema_desc_expr(struct_attrs.schema.resolved_description());
 
     let default_placement = match struct_attrs.default_placement {
         Some(DefaultPlacement::Exhaustive) => {
@@ -1487,10 +1486,10 @@ fn generate_schema_union_impl(
             continue;
         }
 
-        if attrs.schema.ty.is_some() && !is_value_type(&field.ty) && !attrs.scalar {
+        if attrs.schema.kind.is_some() && !is_value_type(&field.ty) && !attrs.scalar {
             return Err(syn::Error::new(
                 field.span(),
-                "schema(type = ...) is only valid for scalar value fields",
+                "schema(kind = ...) is only valid for scalar value fields",
             ));
         }
 
@@ -1505,7 +1504,7 @@ fn generate_schema_union_impl(
             quote! {}
         };
 
-        let override_block = if let Some(override_ty) = attrs.schema.ty.as_ref() {
+        let override_block = if let Some(override_ty) = attrs.schema.kind.as_ref() {
             let override_expr = schema_type_override_expr(override_ty);
             let required_value = attrs.schema.required.unwrap_or(true);
             quote! {
@@ -1540,7 +1539,7 @@ fn generate_schema_union_impl(
         };
 
         let ty = &field.ty;
-        if !attrs.scalar && attrs.schema.ty.is_none() {
+        if !attrs.scalar && attrs.schema.kind.is_none() {
             register_calls.push(quote! {
                 <#ty as ::kdl_config::schema::KdlSchema>::register_definitions(registry);
             });

@@ -1,5 +1,5 @@
-use kdl_config_derive::{KdlChoice, KdlNode, KdlSchema, KdlValue};
 use kdl_config::schema::{KdlSchema, SchemaLiteral, SchemaRef, SchemaType};
+use kdl_config_derive::{KdlChoice, KdlNode, KdlSchema, KdlValue};
 
 #[derive(KdlSchema)]
 #[allow(unused)]
@@ -54,7 +54,7 @@ enum ScalarMode {
 #[derive(KdlSchema)]
 #[allow(dead_code)]
 #[kdl(node = "tuple")]
-struct TupleSchemaOverride(#[kdl(schema(type = "string"))] i64);
+struct TupleSchemaOverride(#[kdl(schema(kind = "string"))] i64);
 
 #[derive(KdlSchema)]
 #[allow(dead_code)]
@@ -66,14 +66,17 @@ struct ScalarSchemaConfig {
 
 #[derive(KdlSchema)]
 #[allow(dead_code)]
-#[kdl(node = "config", schema(name = "config_schema", description = "Config schema", deny_unknown))]
+#[kdl(
+    node = "config",
+    schema(name = "config_schema", description = "Config schema", deny_unknown)
+)]
 struct OverrideConfig {
     #[kdl(attr)]
     #[kdl(schema(name = "title", description = "Title", optional))]
     name: String,
 
     #[kdl(positional = 0)]
-    #[kdl(schema(type = "integer", description = "Primary count"))]
+    #[kdl(schema(kind = "integer", description = "Primary count"))]
     count: i64,
 
     #[kdl(child)]
@@ -98,7 +101,7 @@ struct Leaf {
 union UnionChoice {
     #[kdl(schema(name = "leaf-node", description = "Leaf choice"))]
     leaf: Leaf,
-    #[kdl(schema(name = "count", type = "integer"))]
+    #[kdl(schema(name = "count", kind = "integer"))]
     count: i64,
 }
 
@@ -325,10 +328,7 @@ fn test_union_schema_generation() {
                             assert_eq!(node.values[0].ty, SchemaType::Integer);
                         }
                         if node.name.as_deref() == Some("leaf-node") {
-                            assert_eq!(
-                                node.description.as_deref(),
-                                Some("Leaf choice")
-                            );
+                            assert_eq!(node.description.as_deref(), Some("Leaf choice"));
                         }
                     }
                     other => panic!("Unexpected schema ref: {other:?}"),

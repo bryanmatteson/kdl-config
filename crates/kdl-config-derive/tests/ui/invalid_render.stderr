@@ -1,4 +1,4 @@
-error: unknown render placement: 'nope'
+error: invalid render placement "nope", expected one of: attr, value, child, children, registry
  --> tests/ui/invalid_render.rs:5:20
   |
 5 |     #[kdl(render = "nope")]

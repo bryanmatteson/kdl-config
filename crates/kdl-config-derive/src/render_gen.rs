@@ -3,8 +3,8 @@ use quote::quote;
 use syn::Ident;
 
 use crate::attrs::{
-    BoolMode, DefaultPlacement, FieldInfo, FlagStyle, RenderPlacement, StructAttrs,
-    has_child_placement, has_value_placement, is_value_type,
+    has_child_placement, has_value_placement, is_value_type, BoolMode, DefaultPlacement, FieldInfo,
+    FlagStyle, RenderPlacement, StructAttrs,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -126,7 +126,24 @@ pub(crate) fn render_body_with_accessor(
                     keyed_fields.push(field);
                 }
             }
-            RenderPlacement::Value => value_fields.push(field),
+            RenderPlacement::Value => {
+                // Presence-only booleans should render inline as flags, not as child value nodes
+                let is_presence_only = field.is_bool
+                    && matches!(
+                        field.bool_mode.as_ref().unwrap_or(
+                            &struct_attrs
+                                .default_bool
+                                .clone()
+                                .unwrap_or(BoolMode::PresenceAndValue)
+                        ),
+                        BoolMode::PresenceOnly
+                    );
+                if is_presence_only {
+                    flag_fields.push(field);
+                } else {
+                    value_fields.push(field);
+                }
+            }
             RenderPlacement::Child => child_fields.push(field),
             RenderPlacement::Children => children_fields.push(field),
             RenderPlacement::Registry => registry_fields.push(field),
@@ -363,7 +380,10 @@ fn render_placement_for(
     if field.placement.children {
         return RenderPlacement::Children;
     }
-    if field.placement.value {
+    // For scalar fields with both attr and value, prefer attr for compact rendering
+    // For Vec fields, prefer value to avoid repeated attrs with same key
+    let is_vec_field = field.is_vec || field.is_option_vec;
+    if field.placement.value && is_vec_field {
         return RenderPlacement::Value;
     }
     if field.placement.attr
@@ -374,16 +394,18 @@ fn render_placement_for(
     {
         return RenderPlacement::Attr;
     }
+    if field.placement.value {
+        return RenderPlacement::Value;
+    }
 
     let default_placement = struct_attrs
         .default_placement
         .clone()
         .unwrap_or(DefaultPlacement::Exhaustive);
     match kind {
-        FieldKind::ValueScalar => match default_placement {
-            DefaultPlacement::Attr | DefaultPlacement::Exhaustive => RenderPlacement::Attr,
-            DefaultPlacement::Value | DefaultPlacement::Child => RenderPlacement::Value,
-        },
+        // For scalar values, always render as attrs for compact inline format
+        // The default_placement primarily affects parsing, not rendering
+        FieldKind::ValueScalar => RenderPlacement::Attr,
         FieldKind::ValueVec => match default_placement {
             DefaultPlacement::Attr => RenderPlacement::Attr,
             DefaultPlacement::Exhaustive | DefaultPlacement::Value | DefaultPlacement::Child => {

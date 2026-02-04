@@ -1,5 +1,5 @@
 error: child/children placement is incompatible with scalar types
- --> tests/ui/children_non_vec.rs:5:5
+ --> tests/ui/children_non_vec.rs:5:6
   |
 5 |     #[kdl(children)]
-  |     ^
+  |      ^^^^^^^^^^^^^^^

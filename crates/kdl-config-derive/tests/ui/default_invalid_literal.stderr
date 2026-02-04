@@ -1,4 +1,4 @@
-error: default value must be a literal or negated literal
+error: default value must be a literal (integer, float, boolean, or string)
  --> tests/ui/default_invalid_literal.rs:5:21
   |
 5 |     #[kdl(default = [1, 2, 3])]
