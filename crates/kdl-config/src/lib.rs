@@ -62,7 +62,10 @@ impl<T: KdlParse> KdlParse for Box<T> {
 
 impl KdlParse for String {
     fn from_node(node: &Node, _config: &ParseConfig) -> Result<Self, KdlConfigError> {
-        Ok(node.name.as_str().to_string())
+        node.value()
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or(KdlConfigError::custom("Node", "expected a string value"))
     }
 }
 
