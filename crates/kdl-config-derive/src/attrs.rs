@@ -7,7 +7,9 @@ use syn::{
 #[derive(Debug, Default)]
 pub struct StructAttrs {
     pub node_name: Option<String>,
+    pub node_name_default: bool,
     pub rename_all: RenameStrategy,
+    pub rename_all_explicit: bool,
     pub default_placement: Option<DefaultPlacement>,
     pub default_bool: Option<BoolMode>,
     pub default_flag_style: Option<FlagStyle>,
@@ -216,6 +218,18 @@ impl RenameStrategy {
     }
 }
 
+impl StructAttrs {
+    pub fn resolved_node_name(&self, type_name: &str) -> Option<String> {
+        if let Some(name) = &self.node_name {
+            Some(name.clone())
+        } else if self.node_name_default {
+            Some(type_name.to_string())
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::RenameStrategy;
@@ -311,9 +325,12 @@ pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
                     let value: Expr = meta.value()?.parse()?;
                     if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
                         result.node_name = Some(lit.value());
+                        result.node_name_default = false;
                     } else {
                         return Err(syn::Error::new(value.span(), "expected string literal for `node`"));
                     }
+                } else if meta.input.is_empty() {
+                    result.node_name_default = true;
                 } else if !meta.input.is_empty() {
                     meta.parse_nested_meta(|_| Ok(()))?;
                 }
@@ -333,6 +350,7 @@ pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
                             ));
                         }
                     };
+                    result.rename_all_explicit = true;
                 } else {
                     return Err(syn::Error::new(value.span(), "expected string literal for `rename_all`"));
                 }
@@ -487,6 +505,19 @@ pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
             }
             Ok(())
         })?;
+    }
+
+    if !result.rename_all_explicit {
+        if let Some(rename_all) = serde_rename_all_from_attrs(attrs)? {
+            result.rename_all = rename_all;
+        }
+    }
+
+    if result.node_name_default && result.node_name.is_none() {
+        if let Some(rename) = serde_rename_from_attrs(attrs)? {
+            result.node_name = Some(rename);
+            result.node_name_default = false;
+        }
     }
 
     Ok(result)
@@ -960,6 +991,12 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
         })?;
     }
 
+    if name.is_none() && field.ident.is_some() {
+        if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
+            name = Some(rename);
+        }
+    }
+
     if default_count > 1 {
         return Err(syn::Error::new(
             primary_span,
@@ -1008,6 +1045,95 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
         scalar,
         schema,
     }))
+}
+
+pub fn serde_rename_all_from_attrs(attrs: &[Attribute]) -> syn::Result<Option<RenameStrategy>> {
+    let mut rename_all: Option<RenameStrategy> = None;
+
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename_all") {
+                if let Some(value) = parse_serde_string_value(meta)? {
+                    if let Some(strategy) = serde_rename_strategy(value.as_str()) {
+                        rename_all = Some(strategy);
+                    }
+                }
+            }
+            Ok(())
+        })?;
+    }
+
+    Ok(rename_all)
+}
+
+pub fn serde_rename_from_attrs(attrs: &[Attribute]) -> syn::Result<Option<String>> {
+    let mut rename: Option<String> = None;
+
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                if let Some(value) = parse_serde_string_value(meta)? {
+                    rename.get_or_insert(value);
+                }
+            }
+            Ok(())
+        })?;
+    }
+
+    Ok(rename)
+}
+
+fn parse_serde_string_value(mut meta: syn::meta::ParseNestedMeta) -> syn::Result<Option<String>> {
+    if meta.input.peek(syn::Token![=]) {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            return Ok(Some(lit.value()));
+        }
+        return Ok(None);
+    }
+
+    if meta.input.is_empty() {
+        return Ok(None);
+    }
+
+    let mut value: Option<String> = None;
+    meta.parse_nested_meta(|m| {
+        let is_serialize = m.path.is_ident("serialize");
+        let is_deserialize = m.path.is_ident("deserialize");
+        if is_serialize || is_deserialize {
+            let rename = parse_serde_string_value(m)?;
+            if let Some(rename) = rename {
+                if value.is_none() || is_serialize {
+                    value = Some(rename);
+                }
+            }
+        }
+        Ok(())
+    })?;
+
+    Ok(value)
+}
+
+fn serde_rename_strategy(value: &str) -> Option<RenameStrategy> {
+    match value {
+        "kebab-case" => Some(RenameStrategy::KebabCase),
+        "snake_case" => Some(RenameStrategy::SnakeCase),
+        "lowercase" => Some(RenameStrategy::Lowercase),
+        "UPPERCASE" => Some(RenameStrategy::Uppercase),
+        "none" => Some(RenameStrategy::None),
+        _ => None,
+    }
 }
 
 fn parse_default_expr(expr: &Expr) -> syn::Result<DefaultLiteral> {

@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{KdlConfigError, KdlParse, Node, ParseConfig, parse_config};
-use crate::layer::{parse_layered_with_config, merge_layers};
+use crate::layer::{merge_layers, parse_layered_with_config};
+use crate::{parse_config, KdlConfigError, KdlParse, Node, ParseConfig};
 
 /// Errors that can occur while loading config layers.
 #[derive(Debug)]
@@ -94,7 +94,7 @@ impl KdlLoader {
 
 #[cfg(test)]
 mod tests {
-    use super::{KdlLoader, load_kdl_file};
+    use super::{load_kdl_file, KdlLoader};
     use std::fs;
     use std::path::PathBuf;
 
@@ -106,7 +106,12 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        path.push(format!("kdl_config_{}_{}_{}.kdl", std::process::id(), name, stamp));
+        path.push(format!(
+            "kdl_config_{}_{}_{}.kdl",
+            std::process::id(),
+            name,
+            stamp
+        ));
         fs::write(&path, contents).unwrap();
         path
     }

@@ -27,6 +27,7 @@ pub fn generate_parse_impl(
     skipped_infos: &[FieldInfo],
 ) -> TokenStream {
     let struct_name_str = struct_name.to_string();
+    let expected_node_name = struct_attrs.resolved_node_name(&struct_name_str);
 
     let positional_list_fields: Vec<&FieldInfo> = fields
         .iter()
@@ -44,7 +45,7 @@ pub fn generate_parse_impl(
         return quote! { compile_error!("positional list fields cannot be combined with indexed positional fields"); };
     }
 
-    let validate_name = if let Some(ref node_name) = struct_attrs.node_name {
+    let validate_name = if let Some(ref node_name) = expected_node_name {
         quote! {
             if node.name != #node_name {
                 return Err(::kdl_config::KdlConfigError::node_name_mismatch(

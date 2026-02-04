@@ -3,14 +3,16 @@ use crate::types::{Modifier, Node, Value};
 use kdl::{KdlDocument, KdlNode, KdlValue};
 
 pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
-    let document: KdlDocument = contents.parse().map_err(|e: kdl::KdlError| KdlConfigError {
-        struct_name: "KDL Document".into(),
-        field_name: None,
-        kdl_key: None,
-        placement: Placement::Unknown,
-        required: true,
-        kind: ErrorKind::Parse(e.to_string()),
-    })?;
+    let document: KdlDocument = contents
+        .parse()
+        .map_err(|e: kdl::KdlError| KdlConfigError {
+            struct_name: "KDL Document".into(),
+            field_name: None,
+            kdl_key: None,
+            placement: Placement::Unknown,
+            required: true,
+            kind: ErrorKind::Parse(e.to_string()),
+        })?;
 
     let mut root = Node::new();
 
@@ -28,7 +30,10 @@ fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
     let repr = name_ident.repr();
     let is_quoted = repr
         .map(|repr| {
-            repr.starts_with('"') || repr.starts_with('#') || repr.starts_with('r') || repr.is_empty()
+            repr.starts_with('"')
+                || repr.starts_with('#')
+                || repr.starts_with('r')
+                || repr.is_empty()
         })
         .unwrap_or(false);
     let (name, modifier) = if is_quoted {

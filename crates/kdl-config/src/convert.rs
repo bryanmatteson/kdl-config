@@ -269,14 +269,26 @@ pub fn convert_value_ctx<T: FromKdlValue>(
     value: &Value,
     ctx: ConvertContext<'_>,
 ) -> Result<T, KdlConfigError> {
-    convert_value(value, ctx.struct_name, ctx.field_name, ctx.kdl_key, ctx.placement)
+    convert_value(
+        value,
+        ctx.struct_name,
+        ctx.field_name,
+        ctx.kdl_key,
+        ctx.placement,
+    )
 }
 
 pub fn convert_value_checked_ctx<T: FromKdlValue>(
     value: &Value,
     ctx: ConvertContext<'_>,
 ) -> Result<T, KdlConfigError> {
-    convert_value_checked(value, ctx.struct_name, ctx.field_name, ctx.kdl_key, ctx.placement)
+    convert_value_checked(
+        value,
+        ctx.struct_name,
+        ctx.field_name,
+        ctx.kdl_key,
+        ctx.placement,
+    )
 }
 
 /// Convenience methods on `Value` for context-aware conversion.

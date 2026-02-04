@@ -1,8 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::{
-    BoolMode, ConflictPolicy, DefaultPlacement, FlagStyle, KdlRender,
-};
+use crate::{BoolMode, ConflictPolicy, DefaultPlacement, FlagStyle, KdlRender};
 
 /// Trait for types that can describe their own KDL schema.
 pub trait KdlSchema {
@@ -17,6 +15,16 @@ pub trait KdlSchema {
     /// If this type is a primitive, this usually does nothing.
     /// If it is a struct/enum, it should add itself to `defs` and recurse.
     fn register_definitions(registry: &mut SchemaRegistry);
+}
+
+impl<T: KdlSchema> KdlSchema for Box<T> {
+    fn schema_ref() -> SchemaRef {
+        T::schema_ref()
+    }
+
+    fn register_definitions(registry: &mut SchemaRegistry) {
+        T::register_definitions(registry);
+    }
 }
 
 /// A registry of reusable schema definitions.
@@ -539,6 +547,16 @@ impl RegistryKeySchema {
         }
         writeln!(w)?;
         Ok(())
+    }
+}
+
+impl<T: KdlSchema> KdlSchema for HashSet<T> {
+    fn schema_ref() -> SchemaRef {
+        T::schema_ref()
+    }
+
+    fn register_definitions(registry: &mut SchemaRegistry) {
+        T::register_definitions(registry);
     }
 }
 

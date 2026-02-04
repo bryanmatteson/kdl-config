@@ -1,18 +1,18 @@
 mod attrs;
 mod choice_gen;
-mod kdl_gen;
 mod enum_gen;
+mod kdl_gen;
 mod parse_gen;
 mod render_gen;
 mod schema_gen;
 mod value_gen;
 
 use proc_macro::TokenStream;
-use syn::{Data, DeriveInput, Fields, parse_macro_input};
+use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
-use attrs::{FieldInfo, parse_struct_attrs};
+use attrs::{parse_struct_attrs, FieldInfo};
 use parse_gen::{generate_field_parser, generate_parse_impl, generate_struct_overrides};
-use render_gen::{FieldAccessor, generate_render_impl, render_body_with_accessor};
+use render_gen::{generate_render_impl, render_body_with_accessor, FieldAccessor};
 
 #[proc_macro_derive(KdlNode, attributes(kdl))]
 pub fn derive_kdl_node(input: TokenStream) -> TokenStream {
@@ -65,7 +65,8 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                         &skipped_fields,
                         &skipped_infos,
                     );
-                    let render_impl = generate_render_impl(struct_name, &struct_attrs, &field_infos);
+                    let render_impl =
+                        generate_render_impl(struct_name, &struct_attrs, &field_infos);
 
                     Ok(quote::quote! {
                         #parse_impl
@@ -82,7 +83,8 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                             Some(info) => {
                                 if info.is_skipped {
                                     skipped_infos.push(info.clone());
-                                    tuple_values.push(quote::quote! { ::std::default::Default::default() });
+                                    tuple_values
+                                        .push(quote::quote! { ::std::default::Default::default() });
                                 } else {
                                     let ident = &info.ident;
                                     tuple_values.push(quote::quote! { #ident });
@@ -93,8 +95,9 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                         }
                     }
 
-                    let validate_name = if let Some(ref node_name) = struct_attrs.node_name {
-                        let struct_name_str = struct_name.to_string();
+                    let struct_name_str = struct_name.to_string();
+                    let expected_node_name = struct_attrs.resolved_node_name(&struct_name_str);
+                    let validate_name = if let Some(ref node_name) = expected_node_name {
                         quote::quote! {
                             if node.name != #node_name {
                                 return Err(::kdl_config::KdlConfigError::node_name_mismatch(
@@ -109,7 +112,6 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     };
 
                     let struct_overrides = generate_struct_overrides(&struct_attrs);
-                    let struct_name_str = struct_name.to_string();
                     let field_parsers: Vec<proc_macro2::TokenStream> = field_infos
                         .iter()
                         .map(|field| generate_field_parser(field, &struct_name_str))
@@ -130,7 +132,10 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
 
                         let binding_defs: Vec<proc_macro2::TokenStream> = (0..tuple_values.len())
                             .map(|i| {
-                                let ident = syn::Ident::new(&format!("__kdl_field_{}", i), proc_macro2::Span::call_site());
+                                let ident = syn::Ident::new(
+                                    &format!("__kdl_field_{}", i),
+                                    proc_macro2::Span::call_site(),
+                                );
                                 let index = syn::Index::from(i);
                                 quote::quote! { let #ident = &self.#index; }
                             })
@@ -176,7 +181,8 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                 }
                 Fields::Unit => {
                     let struct_name_str = struct_name.to_string();
-                    let validate_name = if let Some(ref node_name) = struct_attrs.node_name {
+                    let expected_node_name = struct_attrs.resolved_node_name(&struct_name_str);
+                    let validate_name = if let Some(ref node_name) = expected_node_name {
                         quote::quote! {
                             if node.name != #node_name {
                                 return Err(::kdl_config::KdlConfigError::node_name_mismatch(

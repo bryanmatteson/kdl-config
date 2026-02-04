@@ -6,8 +6,8 @@ use syn::{Attribute, DataEnum, DeriveInput, Expr, ExprLit, ExprUnary, Fields, Li
 use crate::attrs::{
     extract_children_map_types, extract_hashmap_types, extract_inner_type,
     extract_registry_vec_value, is_bool_type, is_numeric_type, is_option_type, is_string_type,
-    parse_field_attrs, parse_struct_attrs, BoolMode, ConflictPolicy, DefaultPlacement, FieldInfo,
-    FlagStyle, SchemaTypeOverride, StructAttrs,
+    parse_field_attrs, parse_struct_attrs, serde_rename_from_attrs, BoolMode, ConflictPolicy,
+    DefaultPlacement, FieldInfo, FlagStyle, SchemaTypeOverride, StructAttrs,
 };
 
 pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -749,11 +749,12 @@ fn generate_schema_builder(
 ) -> TokenStream {
     let name_str = struct_name.to_string();
     let parts = collect_schema_parts(fields, struct_attrs);
+    let default_node_name = struct_attrs.resolved_node_name(&name_str);
     let node_name_assign = if let Some(n) = struct_attrs
         .schema
         .name
         .as_ref()
-        .or(struct_attrs.node_name.as_ref())
+        .or(default_node_name.as_ref())
     {
         quote! { schema.name = Some(#n.to_string()); }
     } else {
@@ -885,6 +886,11 @@ fn parse_variant_attrs(attrs: &[Attribute]) -> syn::Result<VariantAttrs> {
             }
             Ok(())
         })?;
+    }
+    if result.name.is_none() {
+        if let Some(rename) = serde_rename_from_attrs(attrs)? {
+            result.name = Some(rename);
+        }
     }
     Ok(result)
 }
@@ -1063,6 +1069,7 @@ fn generate_schema_enum_impl(
     struct_attrs: &StructAttrs,
 ) -> syn::Result<TokenStream> {
     let enum_name = &input.ident;
+    let enum_name_str = enum_name.to_string();
 
     let mut variants: Vec<VariantSchemaInfo> = Vec::new();
     let mut tag_values: Vec<VariantTag> = Vec::new();
@@ -1115,11 +1122,12 @@ fn generate_schema_enum_impl(
     let tag_value_expr = tag_schema_expr(&tag_values);
     let enum_literals: Vec<TokenStream> = tag_values.iter().map(variant_tag_literal_expr).collect();
 
+    let default_node_name = struct_attrs.resolved_node_name(&enum_name_str);
     let node_name_assign = if let Some(n) = struct_attrs
         .schema
         .name
         .as_ref()
-        .or(struct_attrs.node_name.as_ref())
+        .or(default_node_name.as_ref())
     {
         quote! { enum_schema.name = Some(#n.to_string()); }
     } else {
@@ -1211,7 +1219,7 @@ fn generate_schema_enum_impl(
         .schema
         .name
         .as_ref()
-        .or(struct_attrs.node_name.as_ref())
+        .or(default_node_name.as_ref())
     {
         quote! { schema.name = Some(#n.to_string()); }
     } else {

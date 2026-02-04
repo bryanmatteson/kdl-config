@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use crate::config::FlagStyle;
 use crate::config::ConflictPolicy;
+use crate::config::FlagStyle;
 use crate::error::{KdlConfigError, Placement};
 use crate::types::{Node, Value};
 
@@ -109,7 +109,12 @@ fn find_flag_marked(
     }
 
     match (found_pos, found_neg) {
-        (true, true) => Err(KdlConfigError::conflicting_flags(struct_name, field_name, pos, neg)),
+        (true, true) => Err(KdlConfigError::conflicting_flags(
+            struct_name,
+            field_name,
+            pos,
+            neg,
+        )),
         (true, false) => Ok(Some(true)),
         (false, true) => Ok(Some(false)),
         (false, false) => Ok(None),
@@ -218,7 +223,12 @@ pub fn find_flag_with_style_marked(
 
     let res1 = match (found_pos1, found_neg1) {
         (true, true) => {
-            return Err(KdlConfigError::conflicting_flags(struct_name, field_name, &pos1, &neg1));
+            return Err(KdlConfigError::conflicting_flags(
+                struct_name,
+                field_name,
+                &pos1,
+                &neg1,
+            ));
         }
         (true, false) => Some(true),
         (false, true) => Some(false),
@@ -227,7 +237,12 @@ pub fn find_flag_with_style_marked(
 
     let res2 = match (found_pos2, found_neg2) {
         (true, true) => {
-            return Err(KdlConfigError::conflicting_flags(struct_name, field_name, &pos2, &neg2));
+            return Err(KdlConfigError::conflicting_flags(
+                struct_name,
+                field_name,
+                &pos2,
+                &neg2,
+            ));
         }
         (true, false) => Some(true),
         (false, true) => Some(false),

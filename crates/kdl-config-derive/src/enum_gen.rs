@@ -6,10 +6,11 @@ use syn::{
 };
 
 use crate::attrs::{
-    FieldInfo, StructAttrs, extract_inner_type, is_option_type, parse_struct_attrs,
+    extract_inner_type, is_option_type, parse_struct_attrs, serde_rename_from_attrs, FieldInfo,
+    StructAttrs,
 };
 use crate::parse_gen::{generate_field_parser, generate_skip_marks, generate_struct_overrides};
-use crate::render_gen::{FieldAccessor, render_body_with_accessor};
+use crate::render_gen::{render_body_with_accessor, FieldAccessor};
 
 #[derive(Debug)]
 enum LiteralTag {
@@ -62,6 +63,11 @@ fn parse_variant_attrs(attrs: &[Attribute]) -> syn::Result<VariantAttrs> {
             }
             Ok(())
         })?;
+    }
+    if result.name.is_none() {
+        if let Some(rename) = serde_rename_from_attrs(attrs)? {
+            result.name = Some(rename);
+        }
     }
     Ok(result)
 }
@@ -192,7 +198,8 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
         });
     }
 
-    let validate_name = if let Some(ref node_name) = struct_attrs.node_name {
+    let expected_node_name = struct_attrs.resolved_node_name(&enum_name_str);
+    let validate_name = if let Some(ref node_name) = expected_node_name {
         quote! {
             if node.name != #node_name {
                 return Err(::kdl_config::KdlConfigError::node_name_mismatch(
@@ -388,7 +395,11 @@ fn generate_parse_arm(
                 Ok(Self::#variant_ident(#(#value_idents),*))
             }
         }
-        VariantKind::Struct { fields, skipped, skipped_infos } => {
+        VariantKind::Struct {
+            fields,
+            skipped,
+            skipped_infos,
+        } => {
             let struct_name_str = format!("{}::{}", enum_name, variant_ident);
             let field_parsers: Vec<TokenStream> = fields
                 .iter()

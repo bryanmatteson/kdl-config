@@ -76,10 +76,16 @@ pub struct EffectiveConfig {
 
 pub fn resolve_struct(config: &ParseConfig, overrides: StructOverrides) -> EffectiveConfig {
     EffectiveConfig {
-        default_placement: overrides.default_placement.unwrap_or(config.default_placement),
+        default_placement: overrides
+            .default_placement
+            .unwrap_or(config.default_placement),
         bool_mode: overrides.default_bool.unwrap_or(config.default_bool),
-        flag_style: overrides.default_flag_style.unwrap_or(config.default_flag_style),
-        conflict: overrides.default_conflict.unwrap_or(config.default_conflict),
+        flag_style: overrides
+            .default_flag_style
+            .unwrap_or(config.default_flag_style),
+        conflict: overrides
+            .default_conflict
+            .unwrap_or(config.default_conflict),
         deny_unknown: overrides.deny_unknown.unwrap_or(config.deny_unknown),
     }
 }

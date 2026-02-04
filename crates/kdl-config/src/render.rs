@@ -166,7 +166,11 @@ impl NodeRenderer {
             render_modifier(self.modifier)
         };
         let name_repr = self.name_repr.as_deref();
-        let name = format!("{}{}", modifier, render_key_with_repr(&self.name, name_repr));
+        let name = format!(
+            "{}{}",
+            modifier,
+            render_key_with_repr(&self.name, name_repr)
+        );
         result.push_str(&name);
 
         let mut positional = self.positional.clone();

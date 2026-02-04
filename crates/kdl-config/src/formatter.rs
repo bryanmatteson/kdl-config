@@ -108,7 +108,11 @@ impl KdlFormatter {
             }
         }
 
-        if depth == 0 { Some(pos) } else { None }
+        if depth == 0 {
+            Some(pos)
+        } else {
+            None
+        }
     }
 }
 

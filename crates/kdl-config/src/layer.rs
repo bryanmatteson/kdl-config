@@ -43,7 +43,10 @@ pub fn merge_layers_with(layers: &[Node], mode: LayerMerge) -> Node {
         mode,
         LayerMerge::ByNamePreserveModifiers | LayerMerge::AppendPreserveModifiers
     );
-    let by_name = matches!(mode, LayerMerge::ByName | LayerMerge::ByNamePreserveModifiers);
+    let by_name = matches!(
+        mode,
+        LayerMerge::ByName | LayerMerge::ByNamePreserveModifiers
+    );
     let policy = if preserve {
         crate::MergeModifierPolicy::Preserve
     } else {
@@ -120,7 +123,7 @@ pub fn parse_layered_with_config<T: KdlParse>(
 
 #[cfg(test)]
 mod tests {
-    use super::{LayerMerge, merge_layers_with};
+    use super::{merge_layers_with, LayerMerge};
     use crate::{Node, Value};
 
     #[test]

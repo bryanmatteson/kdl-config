@@ -16,28 +16,28 @@ pub mod schema;
 pub mod types;
 
 pub use config::{
-    BoolMode, ConflictPolicy, DefaultPlacement, EffectiveConfig, FieldOverrides, FlagStyle,
-    ParseConfig, StructOverrides, resolve_field, resolve_struct,
+    resolve_field, resolve_struct, BoolMode, ConflictPolicy, DefaultPlacement, EffectiveConfig,
+    FieldOverrides, FlagStyle, ParseConfig, StructOverrides,
 };
 pub use convert::{
-    ConvertContext, FromKdlValue, ValueConvertExt, convert_value, convert_value_checked,
-    convert_value_checked_ctx, convert_value_ctx,
+    convert_value, convert_value_checked, convert_value_checked_ctx, convert_value_ctx,
+    ConvertContext, FromKdlValue, ValueConvertExt,
 };
 pub use error::{ErrorKind, KdlConfigError, Placement};
 pub use formatter::KdlFormatter;
 pub use layer::{
-    LayerMerge, merge_layers, merge_layers_with, parse_layered, parse_layered_with_config,
+    merge_layers, merge_layers_with, parse_layered, parse_layered_with_config, LayerMerge,
 };
-pub use loader::{KdlLoader, LoadError, load_kdl_file};
+pub use loader::{load_kdl_file, KdlLoader, LoadError};
 pub use merge::{DeepMerge, MergeOption, PartialConfig};
 pub use newtypes::{Duration, DurationParseError, Weight, WeightError};
 pub use parse::parse_config;
 pub use render::{
-    NodeRenderer, escape_string, insert_arg, is_valid_identifier, render_key, render_key_with_repr,
-    render_value, render_value_node, render_value_node_scalar, write_indent,
+    escape_string, insert_arg, is_valid_identifier, render_key, render_key_with_repr, render_value,
+    render_value_node, render_value_node_scalar, write_indent, NodeRenderer,
 };
 pub use round_trip::{
-    RoundTrip, RoundTripMut, parse_str_roundtrip, parse_str_with_config_roundtrip,
+    parse_str_roundtrip, parse_str_with_config_roundtrip, RoundTrip, RoundTripMut,
 };
 pub use types::{MergeModifierPolicy, Modifier, Node, Value};
 
@@ -49,6 +49,18 @@ pub trait KdlParse: Sized {
 /// Trait for rendering a typed configuration to KDL format.
 pub trait KdlRender {
     fn render<W: std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> std::fmt::Result;
+}
+
+impl<T: KdlParse> KdlParse for Box<T> {
+    fn from_node(node: &Node, config: &ParseConfig) -> Result<Self, KdlConfigError> {
+        T::from_node(node, config).map(Box::new)
+    }
+}
+
+impl<T: KdlRender> KdlRender for Box<T> {
+    fn render<W: std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> std::fmt::Result {
+        (**self).render(w, name, indent)
+    }
 }
 
 /// Convenience to render a type to a KDL string.

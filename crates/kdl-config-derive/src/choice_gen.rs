@@ -3,11 +3,12 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Attribute, Data, DeriveInput, Fields};
 
-use crate::attrs::RenameStrategy;
+use crate::attrs::{serde_rename_all_from_attrs, serde_rename_from_attrs, RenameStrategy};
 
 #[derive(Debug, Default)]
 struct ChoiceEnumAttrs {
     rename_all: RenameStrategy,
+    rename_all_explicit: bool,
 }
 
 #[derive(Debug, Default)]
@@ -267,6 +268,7 @@ fn parse_choice_enum_attrs(attrs: &[Attribute]) -> syn::Result<ChoiceEnumAttrs> 
                         ));
                     }
                 };
+                result.rename_all_explicit = true;
             } else if meta.path.is_ident("choice") || meta.path.is_ident("schema") {
                 if meta.input.peek(syn::Token![=]) {
                     let _: syn::Expr = meta.value()?.parse()?;
@@ -281,6 +283,12 @@ fn parse_choice_enum_attrs(attrs: &[Attribute]) -> syn::Result<ChoiceEnumAttrs> 
             }
             Ok(())
         })?;
+    }
+
+    if !result.rename_all_explicit {
+        if let Some(rename_all) = serde_rename_all_from_attrs(attrs)? {
+            result.rename_all = rename_all;
+        }
     }
 
     Ok(result)
@@ -306,6 +314,12 @@ fn parse_choice_variant_attrs(attrs: &[Attribute]) -> syn::Result<ChoiceVariantA
             }
             Ok(())
         })?;
+    }
+
+    if result.name.is_none() {
+        if let Some(rename) = serde_rename_from_attrs(attrs)? {
+            result.name = Some(rename);
+        }
     }
 
     Ok(result)

@@ -136,7 +136,11 @@ impl<T> DeepMerge for Vec<T> {
     /// If the other vector is empty, we keep self (allowing partial override).
     #[inline]
     fn deep_merge(self, other: Self) -> Self {
-        if other.is_empty() { self } else { other }
+        if other.is_empty() {
+            self
+        } else {
+            other
+        }
     }
 }
 
