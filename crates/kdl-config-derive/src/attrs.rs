@@ -889,7 +889,11 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                         "expected string literal for `render`",
                     ));
                 }
-            } else if meta.path.is_ident("scalar") || meta.path.is_ident("value_type") {
+            } else if meta.path.is_ident("scalar")
+                || meta.path.is_ident("value_type")
+                || meta.path.is_ident("value_like")
+                || meta.path.is_ident("kdl_value")
+            {
                 let value = if meta.input.peek(syn::Token![=]) {
                     let lit: syn::LitBool = meta.value()?.parse()?;
                     lit.value()

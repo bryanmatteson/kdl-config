@@ -35,7 +35,7 @@ pub use parse::parse_config;
 pub use render::{
     escape_string, insert_arg, is_valid_identifier, render_flatten, render_key,
     render_key_with_repr, render_node, render_value, render_value_node, render_value_node_scalar,
-    write_indent, NodeRenderer,
+    render_value_with_repr, write_indent, NodeRenderer,
 };
 pub use round_trip::{
     parse_str_roundtrip, parse_str_with_config_roundtrip, RoundTrip, RoundTripMut,

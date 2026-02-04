@@ -902,11 +902,18 @@ fn render_flatten_fields(
                     let flattened = ::kdl_config::render_flatten(value, #key);
                     let pos_offset = renderer.next_positional_index();
                     for (offset, arg) in flattened.args().iter().enumerate() {
-                        renderer.positional(pos_offset + offset, arg);
+                        let idx = pos_offset + offset;
+                        if let Some(repr) = flattened.arg_repr(offset) {
+                            renderer.positional_raw(idx, repr.to_string());
+                        } else {
+                            renderer.positional(idx, arg);
+                        }
                     }
                     for (attr_key, values) in flattened.attrs() {
+                        let key_repr = flattened.attr_repr(attr_key);
                         for value in values {
-                            renderer.keyed(attr_key, value);
+                            let rendered = ::kdl_config::render_value(value);
+                            renderer.keyed_raw_with_repr(attr_key, key_repr, rendered);
                         }
                     }
                     for child in flattened.children() {
@@ -922,11 +929,18 @@ fn render_flatten_fields(
                 let flattened = ::kdl_config::render_flatten(#reference, #key);
                 let pos_offset = renderer.next_positional_index();
                 for (offset, arg) in flattened.args().iter().enumerate() {
-                    renderer.positional(pos_offset + offset, arg);
+                    let idx = pos_offset + offset;
+                    if let Some(repr) = flattened.arg_repr(offset) {
+                        renderer.positional_raw(idx, repr.to_string());
+                    } else {
+                        renderer.positional(idx, arg);
+                    }
                 }
                 for (attr_key, values) in flattened.attrs() {
+                    let key_repr = flattened.attr_repr(attr_key);
                     for value in values {
-                        renderer.keyed(attr_key, value);
+                        let rendered = ::kdl_config::render_value(value);
+                        renderer.keyed_raw_with_repr(attr_key, key_repr, rendered);
                     }
                 }
                 for child in flattened.children() {

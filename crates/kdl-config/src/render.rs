@@ -81,6 +81,14 @@ pub fn render_value(value: &Value) -> String {
     }
 }
 
+pub fn render_value_with_repr(value: &Value, repr: Option<&str>) -> String {
+    if let Some(repr) = repr {
+        repr.to_string()
+    } else {
+        render_value(value)
+    }
+}
+
 fn render_modifier(modifier: Modifier) -> &'static str {
     match modifier {
         Modifier::Inherit => "",
@@ -155,6 +163,18 @@ impl NodeRenderer {
     ) -> &mut Self {
         let key = key.into();
         let rendered_key = render_key(&key);
+        self.keyed.push((rendered_key, rendered_value.into()));
+        self
+    }
+
+    pub fn keyed_raw_with_repr(
+        &mut self,
+        key: impl Into<String>,
+        key_repr: Option<&str>,
+        rendered_value: impl Into<String>,
+    ) -> &mut Self {
+        let key = key.into();
+        let rendered_key = render_key_with_repr(&key, key_repr);
         self.keyed.push((rendered_key, rendered_value.into()));
         self
     }
@@ -288,12 +308,19 @@ pub fn render_node(node: &Node) -> String {
     renderer.with_name_repr(node.name_repr().map(|repr| repr.to_string()));
 
     for (idx, value) in node.args().iter().enumerate() {
-        renderer.positional(idx, value);
+        let repr = node.arg_repr(idx);
+        if let Some(repr) = repr {
+            renderer.positional_raw(idx, repr.to_string());
+        } else {
+            renderer.positional(idx, value);
+        }
     }
 
     for (key, values) in node.attrs() {
+        let key_repr = node.attr_repr(key);
         for value in values {
-            renderer.keyed(key, value);
+            let rendered = render_value(value);
+            renderer.keyed_raw_with_repr(key, key_repr, rendered);
         }
     }
 

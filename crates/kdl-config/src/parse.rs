@@ -1,4 +1,5 @@
 use crate::error::{ErrorKind, KdlConfigError, Placement};
+use crate::render::is_valid_identifier;
 use crate::types::{Modifier, Node, Value};
 use kdl::{KdlDocument, KdlNode, KdlValue};
 
@@ -60,7 +61,15 @@ fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
             result.set_attr(key, value);
         } else {
             let value = kdl_value_to_value(entry.value())?;
-            result.add_arg(value);
+            let mut repr = entry.value().as_string().map(|repr| repr.to_string());
+            if repr.is_none() {
+                if let Value::String(s) = &value {
+                    if is_valid_identifier(s) {
+                        repr = Some(s.clone());
+                    }
+                }
+            }
+            result.add_arg_with_repr(value, repr);
         }
     }
 

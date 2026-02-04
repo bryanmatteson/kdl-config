@@ -3,10 +3,10 @@ use quote::{format_ident, quote};
 use syn::Ident;
 
 use crate::attrs::{
-    BoolMode, ChildrenMapKind, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec,
-    FieldInfo, FlagStyle, StructAttrs, extract_children_map_types, extract_hashmap_types,
-    extract_inner_type, has_child_placement, has_value_placement, is_bool_type, is_numeric_type,
-    is_string_type, is_value_type,
+    extract_children_map_types, extract_hashmap_types, extract_inner_type, has_child_placement,
+    has_value_placement, is_bool_type, is_numeric_type, is_string_type, is_value_type, BoolMode,
+    ChildrenMapKind, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec, FieldInfo,
+    FlagStyle, StructAttrs,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -343,14 +343,7 @@ fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
                 });
             }
             FieldKind::Node | FieldKind::NodeVec => {
-                marks.push(quote! {
-                    match struct_config.default_placement {
-                        ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
-                            used_keys.mark_child(#key);
-                        }
-                        ::kdl_config::DefaultPlacement::Attr | ::kdl_config::DefaultPlacement::Value => {}
-                    }
-                });
+                // Marked during parsing based on actual child names.
             }
             FieldKind::Flatten => {
                 marks.push(quote! {
@@ -1311,10 +1304,42 @@ fn generate_node_parser(
         ty
     };
     let child_ident = format_ident!("__kdl_child_{}", field_ident);
-    let child_iter = if field.placement.children_any {
-        quote! { node.children() }
+    let explicit_child_loop = if field.placement.children_any {
+        quote! {
+            for #child_ident in node.children() {
+                let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
+                if struct_config.deny_unknown {
+                    used_keys.mark_child(&#child_ident.name);
+                }
+                ::kdl_config::helpers::resolve_scalar(
+                    field_config.conflict,
+                    &mut #field_ident,
+                    v,
+                    #struct_name,
+                    #field_name,
+                    #kdl_key,
+                    ::kdl_config::Placement::Child,
+                )?;
+            }
+        }
     } else {
-        quote! { node.children_named(#kdl_key) }
+        quote! {
+            for #child_ident in node.children_named(#kdl_key) {
+                let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
+                if struct_config.deny_unknown {
+                    used_keys.mark_child(&#child_ident.name);
+                }
+                ::kdl_config::helpers::resolve_scalar(
+                    field_config.conflict,
+                    &mut #field_ident,
+                    v,
+                    #struct_name,
+                    #field_name,
+                    #kdl_key,
+                    ::kdl_config::Placement::Child,
+                )?;
+            }
+        }
     };
 
     let default_expr = generate_missing_expr(
@@ -1347,8 +1372,21 @@ fn generate_node_parser(
         if !has_placement {
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
-                    for #child_ident in #child_iter {
-                        let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
+                    for #child_ident in node.children() {
+                        let parsed = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config);
+                        let v = match parsed {
+                            Ok(v) => v,
+                            Err(err) => match err.kind {
+                                ::kdl_config::ErrorKind::NodeNameMismatch { .. }
+                                | ::kdl_config::ErrorKind::NoMatchingChoice { .. } => {
+                                    continue;
+                                }
+                                _ => return Err(err),
+                            },
+                        };
+                        if struct_config.deny_unknown {
+                            used_keys.mark_child(&#child_ident.name);
+                        }
                         ::kdl_config::helpers::resolve_scalar(
                             field_config.conflict,
                             &mut #field_ident,
@@ -1369,18 +1407,7 @@ fn generate_node_parser(
                 }
             }
         } else {
-            for #child_ident in #child_iter {
-                let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
-                ::kdl_config::helpers::resolve_scalar(
-                    field_config.conflict,
-                    &mut #field_ident,
-                    v,
-                    #struct_name,
-                    #field_name,
-                    #kdl_key,
-                    ::kdl_config::Placement::Child,
-                )?;
-            }
+            #explicit_child_loop
         }
 
         let #field_ident: #ty = if let Some(val) = #field_ident {
@@ -1495,12 +1522,25 @@ fn generate_node_vec_parser(
         if !has_placement {
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
-                    let #children_ident = #children_iter.collect::<Vec<_>>();
-                    if !#children_ident.is_empty() {
-                        let mut #values_ident = Vec::with_capacity(#children_ident.len());
-                        for #child_ident in #children_ident {
-                            #values_ident.push(<#elem_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?);
+                    let mut #values_ident: Vec<#elem_ty> = Vec::new();
+                    for #child_ident in node.children() {
+                        let parsed = <#elem_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config);
+                        let v = match parsed {
+                            Ok(v) => v,
+                            Err(err) => match err.kind {
+                                ::kdl_config::ErrorKind::NodeNameMismatch { .. }
+                                | ::kdl_config::ErrorKind::NoMatchingChoice { .. } => {
+                                    continue;
+                                }
+                                _ => return Err(err),
+                            },
+                        };
+                        if struct_config.deny_unknown {
+                            used_keys.mark_child(&#child_ident.name);
                         }
+                        #values_ident.push(v);
+                    }
+                    if !#values_ident.is_empty() {
                         #field_ident = Some(#values_ident);
                     }
                 }
@@ -1517,7 +1557,11 @@ fn generate_node_vec_parser(
             if !#children_ident.is_empty() {
                 let mut #values_ident = Vec::with_capacity(#children_ident.len());
                 for #child_ident in #children_ident {
-                    #values_ident.push(<#elem_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?);
+                    let v = <#elem_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
+                    if struct_config.deny_unknown {
+                        used_keys.mark_child(&#child_ident.name);
+                    }
+                    #values_ident.push(v);
                 }
                 #field_ident = Some(#values_ident);
             }

@@ -188,6 +188,7 @@ pub struct Node {
     pub modifier: Modifier,
     pub name_repr: Option<String>,
     args: Vec<Value>,
+    arg_reprs: Vec<Option<String>>,
     attrs: HashMap<String, Vec<Value>>,
     attr_reprs: HashMap<String, String>,
     children: Vec<Node>,
@@ -217,6 +218,13 @@ impl Node {
 
     pub fn with_arg(mut self, arg: Value) -> Self {
         self.args.push(arg);
+        self.arg_reprs.push(None);
+        self
+    }
+
+    pub fn with_arg_repr(mut self, arg: Value, repr: Option<String>) -> Self {
+        self.args.push(arg);
+        self.arg_reprs.push(repr);
         self
     }
 
@@ -237,6 +245,12 @@ impl Node {
 
     pub fn add_arg(&mut self, value: Value) {
         self.args.push(value);
+        self.arg_reprs.push(None);
+    }
+
+    pub fn add_arg_with_repr(&mut self, value: Value, repr: Option<String>) {
+        self.args.push(value);
+        self.arg_reprs.push(repr);
     }
 
     pub fn add_child(&mut self, child: Node) {
@@ -257,6 +271,10 @@ impl Node {
 
     pub fn args(&self) -> &[Value] {
         &self.args
+    }
+
+    pub fn arg_repr(&self, index: usize) -> Option<&str> {
+        self.arg_reprs.get(index).and_then(|repr| repr.as_deref())
     }
 
     pub fn attrs(&self) -> &HashMap<String, Vec<Value>> {
@@ -305,6 +323,9 @@ impl Node {
         }
         let mut copy = self.clone();
         copy.args.remove(index);
+        if index < copy.arg_reprs.len() {
+            copy.arg_reprs.remove(index);
+        }
         copy
     }
 
@@ -370,6 +391,7 @@ impl Node {
         }
 
         self.args.extend(other.args);
+        self.arg_reprs.extend(other.arg_reprs);
 
         for (key, values) in other.attrs {
             self.attrs.entry(key).or_default().extend(values);
