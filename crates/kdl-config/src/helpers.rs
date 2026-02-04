@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use crate::config::ConflictPolicy;
-use crate::config::FlagStyle;
-use crate::error::{KdlConfigError, Placement};
+use crate::config::{ConflictPolicy, FlagStyle, ParseConfig};
+use crate::error::{ErrorKind, KdlConfigError, Placement};
 use crate::types::{Node, Value};
+use crate::KdlParse;
 
 #[derive(Debug, Default)]
 pub struct UsedKeys {
@@ -260,6 +260,20 @@ pub fn find_flag_with_style_marked(
         (Some(v), None) => Ok(Some(v)),
         (None, Some(v)) => Ok(Some(v)),
         (None, None) => Ok(None),
+    }
+}
+
+pub fn parse_flatten<T: KdlParse>(node: &Node, config: &ParseConfig) -> Result<T, KdlConfigError> {
+    match T::from_node(node, config) {
+        Ok(val) => Ok(val),
+        Err(err) => match &err.kind {
+            ErrorKind::NodeNameMismatch { expected, .. } => {
+                let mut clone = node.clone();
+                clone.name = expected.clone();
+                T::from_node(&clone, config)
+            }
+            _ => Err(err),
+        },
     }
 }
 

@@ -3,9 +3,10 @@ use quote::{format_ident, quote};
 use syn::Ident;
 
 use crate::attrs::{
-    extract_children_map_types, extract_hashmap_types, extract_inner_type, is_bool_type,
-    is_numeric_type, is_string_type, BoolMode, ChildrenMapKind, ConflictPolicy, DefaultLiteral,
-    DefaultPlacement, DefaultSpec, FieldInfo, FlagStyle, StructAttrs,
+    extract_children_map_types, extract_hashmap_types, extract_inner_type, has_child_placement,
+    has_value_placement, is_bool_type, is_numeric_type, is_string_type, is_value_type, BoolMode,
+    ChildrenMapKind, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec, FieldInfo,
+    FlagStyle, StructAttrs,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -14,6 +15,7 @@ enum FieldKind {
     ValueVec,
     Node,
     NodeVec,
+    Flatten,
     Registry,
     ChildrenMap,
     Modifier,
@@ -182,6 +184,9 @@ pub(crate) fn generate_field_parser(field: &FieldInfo, struct_name: &str) -> Tok
         FieldKind::ChildrenMap => {
             generate_children_map_parser(field, struct_name, &field_overrides, mark_usage)
         }
+        FieldKind::Flatten => {
+            generate_flatten_parser(field, struct_name, &field_overrides, mark_usage)
+        }
         FieldKind::NodeVec => {
             generate_node_vec_parser(field, struct_name, &field_overrides, mark_usage)
         }
@@ -240,6 +245,9 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
     if field.is_modifier {
         return FieldKind::Modifier;
     }
+    if field.flatten {
+        return FieldKind::Flatten;
+    }
     if field.placement.registry {
         return FieldKind::Registry;
     }
@@ -247,7 +255,16 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
         return FieldKind::ChildrenMap;
     }
 
+    let has_value = has_value_placement(&field.placement);
+    let has_child = has_child_placement(&field.placement);
+
     if field.is_vec || field.is_option_vec {
+        if has_value {
+            return FieldKind::ValueVec;
+        }
+        if has_child {
+            return FieldKind::NodeVec;
+        }
         let inner = if field.is_option_vec {
             field.inner_type().and_then(extract_inner_type)
         } else {
@@ -259,25 +276,15 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
         } else {
             FieldKind::NodeVec
         }
+    } else if has_value {
+        FieldKind::ValueScalar
+    } else if has_child {
+        FieldKind::Node
     } else if is_value_type(&field.ty) || field.is_scalar {
         FieldKind::ValueScalar
     } else {
         FieldKind::Node
     }
-}
-
-fn is_value_type(ty: &syn::Type) -> bool {
-    if is_bool_type(ty) || is_string_type(ty) || is_numeric_type(ty) {
-        return true;
-    }
-
-    if let Some(inner) = extract_inner_type(ty) {
-        if crate::attrs::is_option_type(ty) {
-            return is_value_type(inner);
-        }
-    }
-
-    false
 }
 
 fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
@@ -298,11 +305,19 @@ fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
         || field.placement.value
         || field.placement.child
         || field.placement.children
+        || field.placement.children_any
         || field.placement.registry;
 
     if field.placement.registry {
         marks.push(quote! { used_keys.mark_child(#container); });
     } else if has_explicit {
+        if field.placement.children_any {
+            marks.push(quote! {
+                for child in node.children() {
+                    used_keys.mark_child(&child.name);
+                }
+            });
+        }
         if field.placement.attr || field.placement.keyed {
             marks.push(quote! { used_keys.mark_attr(#key); });
         }
@@ -334,6 +349,19 @@ fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
                             used_keys.mark_child(#key);
                         }
                         ::kdl_config::DefaultPlacement::Attr | ::kdl_config::DefaultPlacement::Value => {}
+                    }
+                });
+            }
+            FieldKind::Flatten => {
+                marks.push(quote! {
+                    for key in node.attrs().keys() {
+                        used_keys.mark_attr(key);
+                    }
+                    for (idx, _) in node.args().iter().enumerate() {
+                        used_keys.mark_arg(idx);
+                    }
+                    for child in node.children() {
+                        used_keys.mark_child(&child.name);
                     }
                 });
             }
@@ -390,11 +418,19 @@ pub(crate) fn generate_skip_marks(field: &FieldInfo) -> TokenStream {
         || field.placement.value
         || field.placement.child
         || field.placement.children
+        || field.placement.children_any
         || field.placement.registry;
 
     if field.placement.registry {
         marks.push(quote! { used_keys.mark_child(#container); });
     } else if has_explicit {
+        if field.placement.children_any {
+            marks.push(quote! {
+                for child in node.children() {
+                    used_keys.mark_child(&child.name);
+                }
+            });
+        }
         if field.placement.attr || field.placement.keyed {
             marks.push(quote! { used_keys.mark_attr(#key); });
         }
@@ -436,6 +472,19 @@ pub(crate) fn generate_skip_marks(field: &FieldInfo) -> TokenStream {
                             used_keys.mark_child(#key);
                         }
                         ::kdl_config::DefaultPlacement::Attr | ::kdl_config::DefaultPlacement::Value => {}
+                    }
+                });
+            }
+            FieldKind::Flatten => {
+                marks.push(quote! {
+                    for key in node.attrs().keys() {
+                        used_keys.mark_attr(key);
+                    }
+                    for (idx, _) in node.args().iter().enumerate() {
+                        used_keys.mark_arg(idx);
+                    }
+                    for child in node.children() {
+                        used_keys.mark_child(&child.name);
                     }
                 });
             }
@@ -548,6 +597,11 @@ fn generate_value_scalar_parser(
     let attr_value_ident = format_ident!("__kdl_attr_value_{}", field_ident);
     let arg_value_ident = format_ident!("__kdl_arg_value_{}", field_ident);
     let child_ident = format_ident!("__kdl_child_{}", field_ident);
+    let child_iter = if field.placement.children_any {
+        quote! { node.children() }
+    } else {
+        quote! { node.children_named(#kdl_key) }
+    };
     let child_arg_ident = format_ident!("__kdl_child_arg_{}", field_ident);
 
     let is_optional = field.is_optional;
@@ -1277,7 +1331,10 @@ fn generate_node_parser(
         quote! { val }
     };
 
-    let allow_child = field.placement.child || field.placement.children || field.placement.value;
+    let allow_child = field.placement.child
+        || field.placement.children
+        || field.placement.children_any
+        || field.placement.value;
 
     quote! {
         #mark_usage
@@ -1289,7 +1346,7 @@ fn generate_node_parser(
         if !has_placement {
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
-                    for #child_ident in node.children_named(#kdl_key) {
+                    for #child_ident in #child_iter {
                         let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
                         ::kdl_config::helpers::resolve_scalar(
                             field_config.conflict,
@@ -1311,7 +1368,7 @@ fn generate_node_parser(
                 }
             }
         } else {
-            for #child_ident in node.children_named(#kdl_key) {
+            for #child_ident in #child_iter {
                 let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
                 ::kdl_config::helpers::resolve_scalar(
                     field_config.conflict,
@@ -1329,6 +1386,57 @@ fn generate_node_parser(
             #finalize_value
         } else {
             #default_expr
+        };
+    }
+}
+
+fn generate_flatten_parser(
+    field: &FieldInfo,
+    struct_name: &str,
+    field_overrides: &TokenStream,
+    mark_usage: TokenStream,
+) -> TokenStream {
+    let field_ident = &field.ident;
+    let field_name = field.ident.to_string();
+    let kdl_key = &field.kdl_key;
+    let ty = &field.ty;
+    let is_optional = field.is_optional;
+    let value_ty = if field.is_optional {
+        field.inner_type().unwrap()
+    } else {
+        ty
+    };
+
+    let default_expr = generate_missing_expr(
+        field,
+        value_ty,
+        struct_name,
+        &field_name,
+        kdl_key,
+        false,
+        quote! { ::kdl_config::Placement::Unknown },
+    );
+    let finalize_value = if is_optional {
+        quote! { Some(val) }
+    } else {
+        quote! { val }
+    };
+
+    quote! {
+        #mark_usage
+        let _field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
+        let parsed = ::kdl_config::helpers::parse_flatten::<#value_ty>(node, config);
+        let #field_ident: #ty = match parsed {
+            Ok(val) => {
+                #finalize_value
+            }
+            Err(err) => {
+                if matches!(err.kind, ::kdl_config::ErrorKind::MissingRequired) {
+                    #default_expr
+                } else {
+                    return Err(err);
+                }
+            }
         };
     }
 }
@@ -1353,7 +1461,13 @@ fn generate_node_vec_parser(
     let children_ident = format_ident!("__kdl_children_{}", field_ident);
     let child_ident = format_ident!("__kdl_child_{}", field_ident);
     let values_ident = format_ident!("__kdl_values_{}", field_ident);
-    let allow_child = field.placement.child || field.placement.children;
+    let allow_child =
+        field.placement.child || field.placement.children || field.placement.children_any;
+    let children_iter = if field.placement.children_any {
+        quote! { node.children() }
+    } else {
+        quote! { node.children_named(#kdl_key) }
+    };
 
     let default_expr = generate_missing_expr(
         field,
@@ -1380,7 +1494,7 @@ fn generate_node_vec_parser(
         if !has_placement {
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
-                    let #children_ident = node.children_named(#kdl_key).collect::<Vec<_>>();
+                    let #children_ident = #children_iter.collect::<Vec<_>>();
                     if !#children_ident.is_empty() {
                         let mut #values_ident = Vec::with_capacity(#children_ident.len());
                         for #child_ident in #children_ident {
@@ -1398,7 +1512,7 @@ fn generate_node_vec_parser(
                 }
             }
         } else {
-            let #children_ident = node.children_named(#kdl_key).collect::<Vec<_>>();
+            let #children_ident = #children_iter.collect::<Vec<_>>();
             if !#children_ident.is_empty() {
                 let mut #values_ident = Vec::with_capacity(#children_ident.len());
                 for #child_ident in #children_ident {

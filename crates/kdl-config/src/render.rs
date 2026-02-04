@@ -126,6 +126,15 @@ impl NodeRenderer {
         self
     }
 
+    pub fn next_positional_index(&self) -> usize {
+        self.positional
+            .iter()
+            .map(|(idx, _)| *idx)
+            .max()
+            .map(|idx| idx + 1)
+            .unwrap_or(0)
+    }
+
     pub fn flag(&mut self, token: impl Into<String>) -> &mut Self {
         self.flags.push(token.into());
         self
@@ -272,6 +281,33 @@ pub fn render_value_node(name: &str, values: &[Value]) -> String {
 
 pub fn render_value_node_scalar(name: &str, value: &Value) -> String {
     render_value_node(name, std::slice::from_ref(value))
+}
+
+pub fn render_node(node: &Node) -> String {
+    let mut renderer = NodeRenderer::new(node.name.clone(), node.modifier);
+    renderer.with_name_repr(node.name_repr().map(|repr| repr.to_string()));
+
+    for (idx, value) in node.args().iter().enumerate() {
+        renderer.positional(idx, value);
+    }
+
+    for (key, values) in node.attrs() {
+        for value in values {
+            renderer.keyed(key, value);
+        }
+    }
+
+    for child in node.children() {
+        renderer.child(render_node(child));
+    }
+
+    renderer.render()
+}
+
+pub fn render_flatten<T: crate::KdlRender>(value: &T, name: &str) -> Node {
+    let rendered = crate::to_kdl(value, name);
+    let root = crate::parse_config(&rendered).expect("flatten render produced invalid KDL");
+    root.children().first().cloned().unwrap_or_default()
 }
 
 pub fn insert_arg(rendered: &str, arg: &str) -> String {

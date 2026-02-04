@@ -89,6 +89,7 @@ pub struct FieldAttrs {
     pub name: Option<String>,
     pub container: Option<String>,
     pub children_map: bool,
+    pub flatten: bool,
     pub map_node: Option<String>,
     pub registry_key: Option<RegistryKey>,
     pub default: Option<DefaultSpec>,
@@ -146,6 +147,7 @@ pub struct FieldPlacement {
     pub value: bool,
     pub child: bool,
     pub children: bool,
+    pub children_any: bool,
     pub registry: bool,
     pub modifier: bool,
 }
@@ -175,6 +177,7 @@ impl Default for FieldPlacement {
             value: false,
             child: false,
             children: false,
+            children_any: false,
             registry: false,
             modifier: false,
         }
@@ -533,6 +536,7 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
     let mut name: Option<String> = None;
     let mut container: Option<String> = None;
     let mut children_map = false;
+    let mut flatten = false;
     let mut map_node: Option<String> = None;
     let mut registry_key: Option<RegistryKey> = None;
     let mut default_spec: Option<DefaultSpec> = None;
@@ -646,6 +650,8 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                 placement.child = true;
             } else if meta.path.is_ident("children") {
                 placement.children = true;
+            } else if meta.path.is_ident("children_any") || meta.path.is_ident("choice") {
+                placement.children_any = true;
             } else if meta.path.is_ident("registry") {
                 placement.registry = true;
             } else if meta.path.is_ident("modifier") {
@@ -749,6 +755,14 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                 } else {
                     default_spec = Some(DefaultSpec::Derive);
                 }
+            } else if meta.path.is_ident("flatten") {
+                let value = if meta.input.peek(syn::Token![=]) {
+                    let lit: syn::LitBool = meta.value()?.parse()?;
+                    lit.value()
+                } else {
+                    true
+                };
+                flatten = value;
             } else if meta.path.is_ident("default_fn") {
                 default_count += 1;
                 let value: Expr = meta.value()?.parse()?;
@@ -766,17 +780,19 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
             } else if meta.path.is_ident("skip") {
                 skip = true;
             } else if meta.path.is_ident("skip_serializing_if") {
-                let value: Expr = meta.value()?.parse()?;
-                if let Expr::Lit(ExprLit {
-                    lit: Lit::Str(lit), ..
-                }) = value
-                {
-                    skip_serializing_if = Some(lit.value());
-                } else {
-                    return Err(syn::Error::new(
-                        value.span(),
-                        "expected string literal for `skip_serializing_if`",
-                    ));
+                if meta.input.peek(syn::Token![=]) {
+                    let value: Expr = meta.value()?.parse()?;
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(lit), ..
+                    }) = value
+                    {
+                        skip_serializing_if = Some(lit.value());
+                    } else {
+                        return Err(syn::Error::new(
+                            value.span(),
+                            "expected string literal for `skip_serializing_if`",
+                        ));
+                    }
                 }
             } else if meta.path.is_ident("bool") {
                 let value: Expr = meta.value()?.parse()?;
@@ -1015,6 +1031,9 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
             required,
             name,
             container,
+            children_map,
+            flatten,
+            map_node,
             registry_key,
             default: default_spec,
             skip,
@@ -1025,8 +1044,6 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
             render,
             scalar,
             schema: schema.clone(),
-            children_map,
-            map_node,
         }));
     }
 
@@ -1037,6 +1054,7 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
         name,
         container,
         children_map,
+        flatten,
         map_node,
         registry_key,
         default: default_spec,
@@ -1392,7 +1410,7 @@ pub fn is_modifier_type(ty: &Type) -> bool {
     }
 }
 
-fn is_value_type(ty: &Type) -> bool {
+pub(crate) fn is_value_type(ty: &Type) -> bool {
     if is_bool_type(ty) || is_string_type(ty) || is_numeric_type(ty) {
         return true;
     }
@@ -1404,6 +1422,19 @@ fn is_value_type(ty: &Type) -> bool {
     }
 
     false
+}
+
+pub(crate) fn has_value_placement(placement: &FieldPlacement) -> bool {
+    placement.attr
+        || placement.keyed
+        || placement.positional.is_some()
+        || placement.positional_list
+        || placement.flag.is_some()
+        || placement.value
+}
+
+pub(crate) fn has_child_placement(placement: &FieldPlacement) -> bool {
+    placement.child || placement.children || placement.children_any
 }
 
 #[derive(Debug, Clone)]
@@ -1422,6 +1453,7 @@ pub struct FieldInfo {
     pub is_scalar: bool,
     pub is_skipped: bool,
     pub children_map: bool,
+    pub flatten: bool,
     pub map_node: Option<String>,
     pub children_map_kind: Option<ChildrenMapKind>,
     pub default: Option<DefaultSpec>,
@@ -1504,11 +1536,17 @@ impl FieldInfo {
             ));
         }
 
-        if attrs.placement.modifier {
-            if !is_modifier {
+        if attrs.flatten {
+            if is_value_like {
                 return Err(syn::Error::new(
                     err_span,
-                    "modifier placement requires Modifier or Option<Modifier> field type",
+                    "flatten is only valid for nested node types",
+                ));
+            }
+            if attrs.children_map || attrs.placement.registry {
+                return Err(syn::Error::new(
+                    err_span,
+                    "flatten cannot be combined with registry or children_map placement",
                 ));
             }
             if attrs.placement.attr
@@ -1519,11 +1557,20 @@ impl FieldInfo {
                 || attrs.placement.value
                 || attrs.placement.child
                 || attrs.placement.children
+                || attrs.placement.children_any
                 || attrs.placement.registry
+                || attrs.placement.modifier
             {
                 return Err(syn::Error::new(
                     err_span,
-                    "modifier placement cannot be combined with other placements",
+                    "flatten cannot be combined with explicit placement",
+                ));
+            }
+            if attrs.container.is_some() || attrs.map_node.is_some() || attrs.registry_key.is_some()
+            {
+                return Err(syn::Error::new(
+                    err_span,
+                    "flatten cannot be combined with container, map_node, or registry key options",
                 ));
             }
         }
@@ -1541,17 +1588,44 @@ impl FieldInfo {
             ));
         }
 
-        if (attrs.placement.child || attrs.placement.children) && is_value_like {
-            return Err(syn::Error::new(
-                err_span,
-                "child/children placement is incompatible with scalar types",
-            ));
-        }
-
         if attrs.placement.value && !is_value_like {
             return Err(syn::Error::new(
                 err_span,
                 "value placement is only valid for scalar types",
+            ));
+        }
+
+        if attrs.placement.modifier {
+            if !is_modifier {
+                return Err(syn::Error::new(
+                    err_span,
+                    "modifier placement requires Modifier or Option<Modifier> field type",
+                ));
+            }
+            if attrs.placement.attr
+                || attrs.placement.keyed
+                || attrs.placement.positional.is_some()
+                || attrs.placement.positional_list
+                || attrs.placement.flag.is_some()
+                || attrs.placement.value
+                || attrs.placement.child
+                || attrs.placement.children
+                || attrs.placement.children_any
+                || attrs.placement.registry
+            {
+                return Err(syn::Error::new(
+                    err_span,
+                    "modifier placement cannot be combined with other placements",
+                ));
+            }
+        }
+
+        if (attrs.placement.child || attrs.placement.children || attrs.placement.children_any)
+            && is_value_like
+        {
+            return Err(syn::Error::new(
+                err_span,
+                "child/children placement is incompatible with scalar types",
             ));
         }
 
@@ -1578,6 +1652,7 @@ impl FieldInfo {
                 || attrs.placement.value
                 || attrs.placement.child
                 || attrs.placement.children
+                || attrs.placement.children_any
                 || attrs.placement.registry
                 || attrs.placement.modifier
             {
@@ -1667,6 +1742,7 @@ impl FieldInfo {
             is_scalar,
             is_skipped: attrs.skip,
             children_map: attrs.children_map,
+            flatten: attrs.flatten,
             map_node: attrs.map_node,
             children_map_kind: extract_children_map_types(&field.ty).map(|(kind, _, _)| kind),
             default: attrs.default,
@@ -1706,6 +1782,12 @@ impl FieldInfo {
                 "tuple struct fields do not support children_map",
             ));
         }
+        if attrs.flatten {
+            return Err(syn::Error::new(
+                err_span,
+                "tuple struct fields do not support flatten",
+            ));
+        }
 
         if attrs.placement.attr
             || attrs.placement.keyed
@@ -1714,6 +1796,7 @@ impl FieldInfo {
             || attrs.placement.value
             || attrs.placement.child
             || attrs.placement.children
+            || attrs.placement.children_any
             || attrs.placement.registry
             || attrs.placement.modifier
         {
@@ -1809,6 +1892,7 @@ impl FieldInfo {
             is_scalar,
             is_skipped: attrs.skip,
             children_map: false,
+            flatten: false,
             map_node: None,
             children_map_kind: None,
             default: attrs.default,

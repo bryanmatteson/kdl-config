@@ -167,25 +167,34 @@ fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
     let name = &input.ident;
 
     match &input.data {
-        Data::Enum(_) => Ok(quote! {
-            impl ::kdl_config::schema::KdlSchema for #name {
-                fn schema_ref() -> ::kdl_config::schema::SchemaRef {
-                        ::kdl_config::schema::SchemaRef::Inline(
-                            ::kdl_config::schema::KdlNodeSchema {
-                                values: vec![::kdl_config::schema::SchemaValue {
-                                    ty: ::kdl_config::schema::SchemaType::String,
-                                    required: true,
-                                    description: None,
-                                    enum_values: None,
-                                }],
-                                ..Default::default()
-                            },
-                        )
-                    }
+        Data::Enum(data) => {
+            let variants = value_gen::collect_value_enum_variants(input, data)?;
+            let enum_values: Vec<TokenStream> = variants
+                .iter()
+                .map(|(_, name)| {
+                    quote! { ::kdl_config::schema::SchemaLiteral::String(#name.to_string()) }
+                })
+                .collect();
+            Ok(quote! {
+                impl ::kdl_config::schema::KdlSchema for #name {
+                    fn schema_ref() -> ::kdl_config::schema::SchemaRef {
+                            ::kdl_config::schema::SchemaRef::Inline(
+                                ::kdl_config::schema::KdlNodeSchema {
+                                    values: vec![::kdl_config::schema::SchemaValue {
+                                        ty: ::kdl_config::schema::SchemaType::String,
+                                        required: true,
+                                        description: None,
+                                        enum_values: Some(vec![#(#enum_values),*]),
+                                    }],
+                                    ..Default::default()
+                                },
+                            )
+                        }
 
-                fn register_definitions(_registry: &mut ::kdl_config::schema::SchemaRegistry) {}
-            }
-        }),
+                    fn register_definitions(_registry: &mut ::kdl_config::schema::SchemaRegistry) {}
+                }
+            })
+        }
         Data::Struct(data) => {
             let inner_ty = match &data.fields {
                 syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {

@@ -2,7 +2,10 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Ident;
 
-use crate::attrs::{BoolMode, FieldInfo, FlagStyle, RenderPlacement, StructAttrs};
+use crate::attrs::{
+    has_child_placement, has_value_placement, is_value_type, BoolMode, DefaultPlacement, FieldInfo,
+    FlagStyle, RenderPlacement, StructAttrs,
+};
 
 #[derive(Debug, Clone, Copy)]
 enum FieldKind {
@@ -10,6 +13,7 @@ enum FieldKind {
     ValueVec,
     Node,
     NodeVec,
+    Flatten,
     Registry,
     ChildrenMap,
     Modifier,
@@ -82,9 +86,14 @@ pub(crate) fn render_body_with_accessor(
     let mut children_fields = Vec::new();
     let mut registry_fields = Vec::new();
     let mut children_map_fields = Vec::new();
+    let mut flatten_fields = Vec::new();
 
     for field in fields {
         if field.is_modifier || field.is_skipped {
+            continue;
+        }
+        if field.flatten {
+            flatten_fields.push(field);
             continue;
         }
         if field.children_map {
@@ -92,7 +101,7 @@ pub(crate) fn render_body_with_accessor(
             continue;
         }
         let kind = field_kind(field);
-        let render_placement = render_placement_for(field, kind);
+        let render_placement = render_placement_for(struct_attrs, field, kind);
 
         match render_placement {
             RenderPlacement::Attr => {
@@ -122,6 +131,7 @@ pub(crate) fn render_body_with_accessor(
     let children_render = render_children_fields(&children_fields, accessor);
     let registry_render = render_registry_fields(&registry_fields, accessor);
     let children_map_render = render_children_map_fields(&children_map_fields, accessor);
+    let flatten_render = render_flatten_fields(&flatten_fields, accessor);
     let modifier_expr = modifier_expr.unwrap_or_else(|| modifier_expr_for(fields, accessor));
 
     quote! {
@@ -137,6 +147,7 @@ pub(crate) fn render_body_with_accessor(
             let mut child_nodes: ::std::vec::Vec<(String, usize, String)> = ::std::vec::Vec::new();
             let mut idx: usize = 0;
 
+            #flatten_render
             #value_render
             #child_render
             #children_render
@@ -162,6 +173,9 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
     if field.is_modifier {
         return FieldKind::Modifier;
     }
+    if field.flatten {
+        return FieldKind::Flatten;
+    }
     if field.placement.registry {
         return FieldKind::Registry;
     }
@@ -169,7 +183,16 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
         return FieldKind::ChildrenMap;
     }
 
+    let has_value = has_value_placement(&field.placement);
+    let has_child = has_child_placement(&field.placement);
+
     if field.is_vec || field.is_option_vec {
+        if has_value {
+            return FieldKind::ValueVec;
+        }
+        if has_child {
+            return FieldKind::NodeVec;
+        }
         let inner = if field.is_option_vec {
             field
                 .inner_type()
@@ -183,40 +206,73 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
         } else {
             FieldKind::NodeVec
         }
+    } else if has_value {
+        FieldKind::ValueScalar
+    } else if has_child {
+        FieldKind::Node
     } else if is_value_type(&field.ty) || field.is_scalar {
         FieldKind::ValueScalar
     } else {
         FieldKind::Node
     }
 }
-
-fn is_value_type(ty: &syn::Type) -> bool {
-    if crate::attrs::is_bool_type(ty)
-        || crate::attrs::is_string_type(ty)
-        || crate::attrs::is_numeric_type(ty)
-    {
-        return true;
-    }
-
-    if crate::attrs::is_option_type(ty) {
-        if let Some(inner) = crate::attrs::extract_inner_type(ty) {
-            return is_value_type(inner);
-        }
-    }
-
-    false
-}
-
-fn render_placement_for(field: &FieldInfo, kind: FieldKind) -> RenderPlacement {
+fn render_placement_for(
+    struct_attrs: &StructAttrs,
+    field: &FieldInfo,
+    kind: FieldKind,
+) -> RenderPlacement {
     if let Some(render) = field.render {
         return render;
     }
 
+    if field.placement.registry {
+        return RenderPlacement::Registry;
+    }
+    if field.children_map {
+        return RenderPlacement::Children;
+    }
+    if field.placement.children_any {
+        if field.is_vec || field.is_option_vec {
+            return RenderPlacement::Children;
+        }
+        return RenderPlacement::Child;
+    }
+    if field.placement.child {
+        return RenderPlacement::Child;
+    }
+    if field.placement.children {
+        return RenderPlacement::Children;
+    }
+    if field.placement.value {
+        return RenderPlacement::Value;
+    }
+    if field.placement.attr
+        || field.placement.keyed
+        || field.placement.positional.is_some()
+        || field.placement.positional_list
+        || field.placement.flag.is_some()
+    {
+        return RenderPlacement::Attr;
+    }
+
+    let default_placement = struct_attrs
+        .default_placement
+        .clone()
+        .unwrap_or(DefaultPlacement::Exhaustive);
     match kind {
-        FieldKind::ValueScalar => RenderPlacement::Attr,
-        FieldKind::ValueVec => RenderPlacement::Value,
+        FieldKind::ValueScalar => match default_placement {
+            DefaultPlacement::Attr | DefaultPlacement::Exhaustive => RenderPlacement::Attr,
+            DefaultPlacement::Value | DefaultPlacement::Child => RenderPlacement::Value,
+        },
+        FieldKind::ValueVec => match default_placement {
+            DefaultPlacement::Attr => RenderPlacement::Attr,
+            DefaultPlacement::Exhaustive | DefaultPlacement::Value | DefaultPlacement::Child => {
+                RenderPlacement::Value
+            }
+        },
         FieldKind::Node => RenderPlacement::Child,
         FieldKind::NodeVec => RenderPlacement::Children,
+        FieldKind::Flatten => RenderPlacement::Child,
         FieldKind::Registry => RenderPlacement::Registry,
         FieldKind::ChildrenMap => RenderPlacement::Children,
         FieldKind::Modifier => RenderPlacement::Child,
@@ -826,6 +882,66 @@ fn render_children_map_fields(
                 });
             }
         }
+    }
+    quote! { #(#items)* }
+}
+
+fn render_flatten_fields(
+    fields: &[&FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
+    let mut items = Vec::new();
+    for field in fields {
+        let access = accessor(field);
+        let key = &field.kdl_key;
+        let cond = render_condition(field, &access);
+        let render_body = if field.is_optional {
+            let reference = &access.reference;
+            quote! {
+                if let Some(value) = #reference {
+                    let flattened = ::kdl_config::render_flatten(value, #key);
+                    let pos_offset = renderer.next_positional_index();
+                    for (offset, arg) in flattened.args().iter().enumerate() {
+                        renderer.positional(pos_offset + offset, arg);
+                    }
+                    for (attr_key, values) in flattened.attrs() {
+                        for value in values {
+                            renderer.keyed(attr_key, value);
+                        }
+                    }
+                    for child in flattened.children() {
+                        let rendered = ::kdl_config::render_node(child);
+                        child_nodes.push((child.name.clone(), idx, rendered));
+                        idx += 1;
+                    }
+                }
+            }
+        } else {
+            let reference = &access.reference;
+            quote! {
+                let flattened = ::kdl_config::render_flatten(#reference, #key);
+                let pos_offset = renderer.next_positional_index();
+                for (offset, arg) in flattened.args().iter().enumerate() {
+                    renderer.positional(pos_offset + offset, arg);
+                }
+                for (attr_key, values) in flattened.attrs() {
+                    for value in values {
+                        renderer.keyed(attr_key, value);
+                    }
+                }
+                for child in flattened.children() {
+                    let rendered = ::kdl_config::render_node(child);
+                    child_nodes.push((child.name.clone(), idx, rendered));
+                    idx += 1;
+                }
+            }
+        };
+
+        items.push(quote! {
+            if #cond {
+                #render_body
+            }
+        });
     }
     quote! { #(#items)* }
 }

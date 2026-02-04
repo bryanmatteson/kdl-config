@@ -5,9 +5,10 @@ use syn::{Attribute, DataEnum, DeriveInput, Expr, ExprLit, ExprUnary, Fields, Li
 
 use crate::attrs::{
     extract_children_map_types, extract_hashmap_types, extract_inner_type,
-    extract_registry_vec_value, is_bool_type, is_numeric_type, is_option_type, is_string_type,
-    parse_field_attrs, parse_struct_attrs, serde_rename_from_attrs, BoolMode, ConflictPolicy,
-    DefaultPlacement, FieldInfo, FlagStyle, SchemaTypeOverride, StructAttrs,
+    extract_registry_vec_value, has_child_placement, has_value_placement, is_bool_type,
+    is_numeric_type, is_option_type, is_string_type, is_value_type, parse_field_attrs,
+    parse_struct_attrs, serde_rename_from_attrs, BoolMode, ConflictPolicy, DefaultPlacement,
+    FieldInfo, FlagStyle, SchemaTypeOverride, StructAttrs,
 };
 
 pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -96,20 +97,6 @@ enum SchemaFieldKind {
     Modifier,
 }
 
-fn is_value_type(ty: &syn::Type) -> bool {
-    if is_bool_type(ty) || is_string_type(ty) || is_numeric_type(ty) {
-        return true;
-    }
-
-    if is_option_type(ty) {
-        if let Some(inner) = extract_inner_type(ty) {
-            return is_value_type(inner);
-        }
-    }
-
-    false
-}
-
 fn field_kind(field: &FieldInfo) -> SchemaFieldKind {
     if field.is_modifier {
         return SchemaFieldKind::Modifier;
@@ -118,7 +105,16 @@ fn field_kind(field: &FieldInfo) -> SchemaFieldKind {
         return SchemaFieldKind::Registry;
     }
 
+    let has_value = has_value_placement(&field.placement);
+    let has_child = has_child_placement(&field.placement);
+
     if field.is_vec || field.is_option_vec {
+        if has_value {
+            return SchemaFieldKind::Value;
+        }
+        if has_child {
+            return SchemaFieldKind::Node;
+        }
         let inner = if field.is_option_vec {
             field.inner_type().and_then(extract_inner_type)
         } else {
@@ -130,6 +126,10 @@ fn field_kind(field: &FieldInfo) -> SchemaFieldKind {
         } else {
             SchemaFieldKind::Node
         }
+    } else if has_value {
+        SchemaFieldKind::Value
+    } else if has_child {
+        SchemaFieldKind::Node
     } else if is_value_type(&field.ty) || field.is_scalar {
         SchemaFieldKind::Value
     } else {
@@ -173,6 +173,7 @@ struct SchemaParts {
     prop_inserts: Vec<TokenStream>,
     value_entries: Vec<(usize, TokenStream)>,
     child_inserts: Vec<TokenStream>,
+    flatten_inserts: Vec<TokenStream>,
 }
 
 fn schema_type_expr(ty: &Type) -> TokenStream {
@@ -222,6 +223,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
     let mut value_entries: Vec<(usize, TokenStream)> = Vec::new();
     let mut child_inserts = Vec::new();
     let mut register_calls = Vec::new();
+    let mut flatten_inserts = Vec::new();
 
     let default_placement = struct_attrs
         .default_placement
@@ -457,6 +459,54 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         if field.is_modifier || field.is_skipped || field.schema.skip {
             continue;
         }
+        if field.flatten {
+            let flatten_ty = if field.is_optional {
+                field.inner_type().unwrap_or(&field.ty)
+            } else {
+                &field.ty
+            };
+            register_calls.push(quote! {
+                <#flatten_ty as ::kdl_config::schema::KdlSchema>::register_definitions(registry);
+            });
+            flatten_inserts.push(quote! {
+                {
+                    let schema_ref = <#flatten_ty as ::kdl_config::schema::KdlSchema>::schema_ref();
+                    let inline = match schema_ref {
+                        ::kdl_config::schema::SchemaRef::Inline(s) => Some(s),
+                        ::kdl_config::schema::SchemaRef::Ref(r) => registry.definitions.get(&r).cloned(),
+                        ::kdl_config::schema::SchemaRef::Choice(choices) => {
+                            let mut schema = ::kdl_config::schema::KdlNodeSchema::default();
+                            schema.children = Some(::std::boxed::Box::new(
+                                ::kdl_config::schema::ChildrenSchema {
+                                    nodes: vec![::kdl_config::schema::SchemaRef::Choice(choices)],
+                                },
+                            ));
+                            Some(schema)
+                        }
+                    };
+
+                    if let Some(other) = inline {
+                        for (key, prop) in other.props {
+                            schema.props.entry(key).or_insert(prop);
+                        }
+                        if !other.values.is_empty() {
+                            schema.values.extend(other.values);
+                        }
+                        if let Some(children) = other.children {
+                            if let Some(existing) = schema.children.as_mut() {
+                                existing.nodes.extend(children.nodes);
+                            } else {
+                                schema.children = Some(children);
+                            }
+                        }
+                        if schema.registry_key.is_none() {
+                            schema.registry_key = other.registry_key;
+                        }
+                    }
+                }
+            });
+            continue;
+        }
         let required = field.schema.required.unwrap_or(field.required);
         let bool_mode = field
             .bool_mode
@@ -578,7 +628,8 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             || field.placement.positional_list
             || field.placement.value
             || field.placement.child
-            || field.placement.children;
+            || field.placement.children
+            || field.placement.children_any;
 
         if has_explicit {
             if field.placement.attr || field.placement.keyed {
@@ -628,8 +679,18 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                     SchemaFieldKind::Registry | SchemaFieldKind::Modifier => {}
                 }
             }
-            if field.placement.child || field.placement.children {
-                child_inserts.push(node_child_insert(ty, &kdl_key, required, desc_expr.clone()));
+            if field.placement.child || field.placement.children || field.placement.children_any {
+                let node_name = if field.placement.children_any {
+                    "*".to_string()
+                } else {
+                    kdl_key.clone()
+                };
+                child_inserts.push(node_child_insert(
+                    ty,
+                    &node_name,
+                    required,
+                    desc_expr.clone(),
+                ));
             }
         } else {
             match field_kind(field) {
@@ -704,6 +765,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         prop_inserts,
         value_entries,
         child_inserts,
+        flatten_inserts,
     }
 }
 
@@ -724,6 +786,7 @@ fn collect_schema_parts_with_offset(
 fn render_schema_parts(parts: &SchemaParts) -> TokenStream {
     let prop_inserts = &parts.prop_inserts;
     let child_inserts = &parts.child_inserts;
+    let flatten_inserts = &parts.flatten_inserts;
     let mut value_entries = parts.value_entries.clone();
     value_entries.sort_by_key(|(idx, _)| *idx);
     let value_inserts = value_entries.into_iter().map(|(_, insert)| insert);
@@ -739,6 +802,9 @@ fn render_schema_parts(parts: &SchemaParts) -> TokenStream {
         let mut children_nodes: Option<::kdl_config::schema::ChildrenSchema> = None;
         #(#child_inserts)*
         schema.children = children_nodes.map(Box::new);
+
+        // Flatten
+        #(#flatten_inserts)*
     }
 }
 

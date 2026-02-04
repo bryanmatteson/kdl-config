@@ -111,23 +111,11 @@ fn parse_variant_attrs(attrs: &[syn::Attribute]) -> syn::Result<VariantAttrs> {
     Ok(result)
 }
 
-pub fn generate_kdl_value_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
-    let enum_name = &input.ident;
-
-    match &input.data {
-        Data::Enum(data) => generate_kdl_value_enum_impl(input, data),
-        Data::Struct(data) => generate_kdl_value_struct_impl(input, data),
-        Data::Union(_) => Err(syn::Error::new_spanned(
-            enum_name,
-            "KdlValue can only be derived for enums or newtype structs",
-        )),
-    }
-}
-
-fn generate_kdl_value_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<TokenStream> {
-    let enum_name = &input.ident;
+pub(crate) fn collect_value_enum_variants(
+    input: &DeriveInput,
+    data: &DataEnum,
+) -> syn::Result<Vec<(syn::Ident, String)>> {
     let enum_attrs = parse_enum_attrs(&input.attrs)?;
-
     let mut variants = Vec::new();
 
     for variant in &data.variants {
@@ -143,6 +131,26 @@ fn generate_kdl_value_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Re
             .unwrap_or_else(|| enum_attrs.rename_all.apply(&variant.ident.to_string()));
         variants.push((variant.ident.clone(), name));
     }
+
+    Ok(variants)
+}
+
+pub fn generate_kdl_value_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
+    let enum_name = &input.ident;
+
+    match &input.data {
+        Data::Enum(data) => generate_kdl_value_enum_impl(input, data),
+        Data::Struct(data) => generate_kdl_value_struct_impl(input, data),
+        Data::Union(_) => Err(syn::Error::new_spanned(
+            enum_name,
+            "KdlValue can only be derived for enums or newtype structs",
+        )),
+    }
+}
+
+fn generate_kdl_value_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<TokenStream> {
+    let enum_name = &input.ident;
+    let variants = collect_value_enum_variants(input, data)?;
 
     let parse_arms: Vec<_> = variants
         .iter()
