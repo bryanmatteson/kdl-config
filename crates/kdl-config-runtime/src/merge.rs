@@ -140,6 +140,31 @@ impl<T> DeepMerge for Vec<T> {
     }
 }
 
+/// Extension trait for applying optional overlays.
+pub trait MergeOption<T> {
+    /// If `overlay` is `Some`, merge it with `self`. Otherwise return `self`.
+    fn merge_with(self, overlay: Option<T>) -> Self;
+}
+
+impl<T: DeepMerge> MergeOption<T> for T {
+    #[inline]
+    fn merge_with(self, overlay: Option<T>) -> Self {
+        match overlay {
+            Some(o) => self.deep_merge(o),
+            None => self,
+        }
+    }
+}
+
+/// Partial configuration wrapper for optional fields.
+///
+/// Used for configuration layers where all fields are optional (env vars, CLI flags).
+/// Call `.apply_to(base)` to merge into a complete config.
+pub trait PartialConfig<T: DeepMerge> {
+    /// Apply this partial config as an overlay on the base config.
+    fn apply_to(self, base: T) -> T;
+}
+
 #[cfg(test)]
 mod tests {
     use super::DeepMerge;
