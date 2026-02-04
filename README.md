@@ -74,6 +74,25 @@ KDL example for the struct above:
 config enabled no-enabled strict=#true fast
 ```
 
+## Positional Lists
+
+Collect all positional arguments into a `Vec<T>` with `positional = "rest"`:
+
+```rust
+use kdl_config::KdlNode;
+
+#[derive(KdlNode)]
+#[kdl(node = "config")]
+struct Config {
+    #[kdl(attr, positional = "rest")]
+    sources: Vec<String>,
+}
+```
+
+```kdl
+config "main" "docs" "api"
+```
+
 ## Children Maps
 
 Collect map-like child nodes into `HashMap` or `Vec<(K, V)>` with `children_map`.

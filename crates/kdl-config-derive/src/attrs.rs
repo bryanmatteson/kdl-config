@@ -139,6 +139,7 @@ pub struct FieldPlacement {
     pub attr: bool,
     pub keyed: bool,
     pub positional: Option<usize>,
+    pub positional_list: bool,
     pub flag: Option<(Option<String>, Option<String>)>,
     pub value: bool,
     pub child: bool,
@@ -167,6 +168,7 @@ impl Default for FieldPlacement {
             attr: false,
             keyed: false,
             positional: None,
+            positional_list: false,
             flag: None,
             value: false,
             child: false,
@@ -533,17 +535,44 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
             } else if meta.path.is_ident("keyed") {
                 placement.keyed = true;
             } else if meta.path.is_ident("positional") {
-                let value: Expr = meta.value()?.parse()?;
-                if let Expr::Lit(ExprLit {
-                    lit: Lit::Int(lit), ..
-                }) = value
-                {
-                    placement.positional = Some(lit.base10_parse()?);
-                } else {
+                if placement.positional.is_some() || placement.positional_list {
                     return Err(syn::Error::new(
-                        value.span(),
-                        "expected integer literal for `positional`",
+                        meta.path.span(),
+                        "positional placement is already set",
                     ));
+                }
+                if meta.input.peek(syn::Token![=]) {
+                    let value: Expr = meta.value()?.parse()?;
+                    match value {
+                        Expr::Lit(ExprLit {
+                            lit: Lit::Int(lit), ..
+                        }) => {
+                            placement.positional = Some(lit.base10_parse()?);
+                        }
+                        Expr::Lit(ExprLit {
+                            lit: Lit::Str(lit), ..
+                        }) => {
+                            let raw = lit.value();
+                            if raw == "*" || raw == "rest" {
+                                placement.positional_list = true;
+                            } else {
+                                return Err(syn::Error::new(
+                                    lit.span(),
+                                    "expected integer literal or \"rest\"/\"*\" for `positional`",
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(syn::Error::new(
+                                value.span(),
+                                "expected integer literal or \"rest\"/\"*\" for `positional`",
+                            ));
+                        }
+                    }
+                } else if meta.input.is_empty() {
+                    placement.positional_list = true;
+                } else {
+                    return Err(meta.error("positional does not accept nested meta"));
                 }
             } else if meta.path.is_ident("flag") {
                 if meta.input.peek(syn::Token![=]) {
@@ -603,12 +632,12 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                 children_map = true;
             } else if meta.path.is_ident("map_node") {
                 let value: Expr = meta.value()?.parse()?;
-                if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = value
+                {
                     if map_node.is_some() {
-                        return Err(syn::Error::new(
-                            lit.span(),
-                            "map_node is already set",
-                        ));
+                        return Err(syn::Error::new(lit.span(), "map_node is already set"));
                     }
                     map_node = Some(lit.value());
                 } else {
@@ -830,7 +859,10 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                         schema.skip = true;
                     } else if meta.path.is_ident("name") || meta.path.is_ident("rename") {
                         let value: Expr = meta.value()?.parse()?;
-                        if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(lit), ..
+                        }) = value
+                        {
                             if schema.name.is_some() {
                                 return Err(syn::Error::new(
                                     lit.span(),
@@ -846,7 +878,10 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                         }
                     } else if meta.path.is_ident("type") {
                         let value: Expr = meta.value()?.parse()?;
-                        if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(lit), ..
+                        }) = value
+                        {
                             if schema.ty.is_some() {
                                 return Err(syn::Error::new(
                                     lit.span(),
@@ -890,7 +925,10 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                         schema.required = Some(!value);
                     } else if meta.path.is_ident("description") || meta.path.is_ident("desc") {
                         let value: Expr = meta.value()?.parse()?;
-                        if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(lit), ..
+                        }) = value
+                        {
                             if schema.description.is_some() {
                                 return Err(syn::Error::new(
                                     lit.span(),
@@ -907,10 +945,7 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                     } else {
                         return Err(syn::Error::new(
                             meta.path.span(),
-                            format!(
-                                "unknown schema override: {}",
-                                path_to_string(&meta.path)
-                            ),
+                            format!("unknown schema override: {}", path_to_string(&meta.path)),
                         ));
                     }
                     Ok(())
@@ -1312,8 +1347,8 @@ impl FieldInfo {
         } else {
             None
         };
-        let is_vec_value =
-            vec_inner.map(is_value_type).unwrap_or(false) || (is_scalar && (is_vec || is_option_vec));
+        let is_vec_value = vec_inner.map(is_value_type).unwrap_or(false)
+            || (is_scalar && (is_vec || is_option_vec));
         let is_value_like = is_value || is_vec_value;
 
         let required = match attrs.required {
@@ -1349,6 +1384,7 @@ impl FieldInfo {
             if attrs.placement.attr
                 || attrs.placement.keyed
                 || attrs.placement.positional.is_some()
+                || attrs.placement.positional_list
                 || attrs.placement.flag.is_some()
                 || attrs.placement.value
                 || attrs.placement.child
@@ -1365,6 +1401,7 @@ impl FieldInfo {
         if (attrs.placement.attr
             || attrs.placement.keyed
             || attrs.placement.positional.is_some()
+            || attrs.placement.positional_list
             || attrs.placement.flag.is_some())
             && !is_value_like
         {
@@ -1406,6 +1443,7 @@ impl FieldInfo {
             if attrs.placement.attr
                 || attrs.placement.keyed
                 || attrs.placement.positional.is_some()
+                || attrs.placement.positional_list
                 || attrs.placement.flag.is_some()
                 || attrs.placement.value
                 || attrs.placement.child
@@ -1458,6 +1496,13 @@ impl FieldInfo {
             return Err(syn::Error::new(
                 err_span,
                 "flag placement is only valid for bool fields",
+            ));
+        }
+
+        if attrs.placement.positional_list && !is_vec && !is_option_vec {
+            return Err(syn::Error::new(
+                err_span,
+                "positional list placement requires Vec<T> or Option<Vec<T>> field type",
             ));
         }
 
@@ -1534,6 +1579,7 @@ impl FieldInfo {
 
         if attrs.placement.attr
             || attrs.placement.keyed
+            || attrs.placement.positional_list
             || attrs.placement.flag.is_some()
             || attrs.placement.value
             || attrs.placement.child

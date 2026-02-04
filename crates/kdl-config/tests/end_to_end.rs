@@ -1,14 +1,9 @@
 use std::collections::HashMap;
 
-use kdl_config_derive::{Kdl, KdlNode, KdlValue};
-use kdl_config::{
-    BoolMode, DefaultPlacement, KdlParse, ParseConfig, parse_config, parse_str,
-};
+use kdl_config::{BoolMode, DefaultPlacement, KdlParse, ParseConfig, parse_config, parse_str};
+use kdl_config::{Kdl, KdlNode, KdlValue};
 
-fn parse_named<T: KdlParse>(
-    kdl: &str,
-    name: &str,
-) -> Result<T, kdl_config::KdlConfigError> {
+fn parse_named<T: KdlParse>(kdl: &str, name: &str) -> Result<T, kdl_config::KdlConfigError> {
     let root = parse_config(kdl)?;
     let node = root.child(name).expect("missing node");
     T::from_node(node, &ParseConfig::default())
@@ -724,8 +719,7 @@ fn presence_only_optional_renders_only_positive_flag() {
     );
     assert_eq!(rendered.trim(), "config");
 
-    let rendered =
-        kdl_config::to_kdl(&OptionalPresenceOnlyRender { enabled: None }, "config");
+    let rendered = kdl_config::to_kdl(&OptionalPresenceOnlyRender { enabled: None }, "config");
     assert_eq!(rendered.trim(), "config");
 }
 
@@ -754,6 +748,38 @@ struct FlagAndPositional {
 fn positional_and_flag_candidates_conflict() {
     let result = parse_named::<FlagAndPositional>("config enabled", "config");
     assert!(result.is_err());
+}
+
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node = "config")]
+struct PositionalListConfig {
+    #[kdl(attr, positional = "rest")]
+    values: Vec<String>,
+}
+
+#[test]
+fn positional_list_parses_all_args() {
+    let parsed = parse_named::<PositionalListConfig>("config \"a\" \"b\" \"c\"", "config").unwrap();
+    assert_eq!(parsed.values, vec!["a", "b", "c"]);
+}
+
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node = "config")]
+struct PositionalListRender {
+    #[kdl(attr, positional = "*")]
+    #[kdl(render = "attr")]
+    values: Vec<String>,
+}
+
+#[test]
+fn positional_list_renders_as_args() {
+    let rendered = kdl_config::to_kdl(
+        &PositionalListRender {
+            values: vec!["alpha".to_string(), "beta".to_string()],
+        },
+        "config",
+    );
+    assert_eq!(rendered.trim(), r#"config "alpha" "beta""#);
 }
 
 #[derive(Debug, PartialEq, Kdl)]
@@ -940,15 +966,11 @@ fn registry_key_arg_uses_custom_index() {
     assert_eq!(parsed.items.get("beta").unwrap().value, 10);
 }
 
-fn registry_key_from_attr(
-    node: &kdl_config::Node,
-) -> Result<String, kdl_config::KdlConfigError> {
+fn registry_key_from_attr(node: &kdl_config::Node) -> Result<String, kdl_config::KdlConfigError> {
     node.attr("key")
         .and_then(|value| value.as_str())
         .map(|val| val.to_string())
-        .ok_or_else(|| {
-            kdl_config::KdlConfigError::custom("registry key", "missing key attribute")
-        })
+        .ok_or_else(|| kdl_config::KdlConfigError::custom("registry key", "missing key attribute"))
 }
 
 #[derive(Debug, PartialEq, KdlNode)]

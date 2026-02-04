@@ -4,10 +4,10 @@ use syn::spanned::Spanned;
 use syn::{Attribute, DataEnum, DeriveInput, Expr, ExprLit, ExprUnary, Fields, Lit, Type, UnOp};
 
 use crate::attrs::{
-    BoolMode, ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle, StructAttrs,
-    SchemaTypeOverride, extract_children_map_types, extract_hashmap_types, extract_inner_type,
+    extract_children_map_types, extract_hashmap_types, extract_inner_type,
     extract_registry_vec_value, is_bool_type, is_numeric_type, is_option_type, is_string_type,
-    parse_field_attrs, parse_struct_attrs,
+    parse_field_attrs, parse_struct_attrs, BoolMode, ConflictPolicy, DefaultPlacement, FieldInfo,
+    FlagStyle, SchemaTypeOverride, StructAttrs,
 };
 
 pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -270,16 +270,16 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
 
     let value_insert =
         |type_expr: TokenStream, required: bool, description: TokenStream| -> TokenStream {
-        quote! {
-            let type_spec = #type_expr;
-            schema.values.push(::kdl_config::schema::SchemaValue {
-                ty: type_spec,
-                required: #required,
-                description: #description,
-                enum_values: None,
-            });
-        }
-    };
+            quote! {
+                let type_spec = #type_expr;
+                schema.values.push(::kdl_config::schema::SchemaValue {
+                    ty: type_spec,
+                    required: #required,
+                    description: #description,
+                    enum_values: None,
+                });
+            }
+        };
 
     let value_child_insert = |type_expr: TokenStream,
                               kdl_key: &str,
@@ -318,43 +318,40 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         }
     };
 
-    let node_child_insert = |ty: &Type,
-                             kdl_key: &str,
-                             required: bool,
-                             description: TokenStream|
-     -> TokenStream {
-        quote! {
-            let schema_ref = <#ty as ::kdl_config::schema::KdlSchema>::schema_ref();
-            let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
-            node_schema.name = Some(#kdl_key.to_string());
-            node_schema.description = #description;
-            node_schema.required = Some(#required);
-            match schema_ref {
-                ::kdl_config::schema::SchemaRef::Ref(r) => {
-                    node_schema.ref_type = Some(r);
+    let node_child_insert =
+        |ty: &Type, kdl_key: &str, required: bool, description: TokenStream| -> TokenStream {
+            quote! {
+                let schema_ref = <#ty as ::kdl_config::schema::KdlSchema>::schema_ref();
+                let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
+                node_schema.name = Some(#kdl_key.to_string());
+                node_schema.description = #description;
+                node_schema.required = Some(#required);
+                match schema_ref {
+                    ::kdl_config::schema::SchemaRef::Ref(r) => {
+                        node_schema.ref_type = Some(r);
+                    }
+                    ::kdl_config::schema::SchemaRef::Inline(s) => {
+                        node_schema.props = s.props;
+                        node_schema.values = s.values;
+                        node_schema.children = s.children;
+                    }
+                    ::kdl_config::schema::SchemaRef::Choice(choices) => {
+                        node_schema.children = Some(::std::boxed::Box::new(
+                            ::kdl_config::schema::ChildrenSchema {
+                                nodes: vec![::kdl_config::schema::SchemaRef::Choice(choices)],
+                            },
+                        ));
+                    }
                 }
-                ::kdl_config::schema::SchemaRef::Inline(s) => {
-                    node_schema.props = s.props;
-                    node_schema.values = s.values;
-                    node_schema.children = s.children;
-                }
-                ::kdl_config::schema::SchemaRef::Choice(choices) => {
-                    node_schema.children = Some(::std::boxed::Box::new(
-                        ::kdl_config::schema::ChildrenSchema {
-                            nodes: vec![::kdl_config::schema::SchemaRef::Choice(choices)],
-                        },
-                    ));
-                }
-            }
 
-            if children_nodes.is_none() {
-                children_nodes = Some(::kdl_config::schema::ChildrenSchema { nodes: vec![] });
+                if children_nodes.is_none() {
+                    children_nodes = Some(::kdl_config::schema::ChildrenSchema { nodes: vec![] });
+                }
+                if let Some(c) = &mut children_nodes {
+                    c.nodes.push(::kdl_config::schema::SchemaRef::Inline(node_schema));
+                }
             }
-            if let Some(c) = &mut children_nodes {
-                c.nodes.push(::kdl_config::schema::SchemaRef::Inline(node_schema));
-            }
-        }
-    };
+        };
 
     let registry_child_insert = |val_ty: &Type,
                                  container: &str,
@@ -538,7 +535,11 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 field.registry_key.as_ref().unwrap_or(&default_key),
             ));
             child_inserts.push(registry_child_insert(
-                val_ty, &container, key_schema, required, desc_expr.clone(),
+                val_ty,
+                &container,
+                key_schema,
+                required,
+                desc_expr.clone(),
             ));
             continue;
         }
@@ -550,10 +551,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 <#val_ty as ::kdl_config::schema::KdlSchema>::register_definitions(registry);
             });
 
-            let node_name = field
-                .map_node
-                .clone()
-                .unwrap_or_else(|| "*".to_string());
+            let node_name = field.map_node.clone().unwrap_or_else(|| "*".to_string());
             let key_ty = field.map_node.as_ref().map(|_| key_ty);
             let key_schema = if field.map_node.is_some() {
                 let default_key = crate::attrs::RegistryKey::Arg(0);
@@ -577,6 +575,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         let has_explicit = field.placement.attr
             || field.placement.keyed
             || field.placement.positional.is_some()
+            || field.placement.positional_list
             || field.placement.value
             || field.placement.child
             || field.placement.children;
@@ -601,6 +600,12 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                     value_insert(type_expr.clone(), required, desc_expr.clone()),
                 ));
             }
+            if field.placement.positional_list {
+                value_entries.push((
+                    0,
+                    value_insert(type_expr.clone(), required, desc_expr.clone()),
+                ));
+            }
             if field.placement.value {
                 match field_kind(field) {
                     SchemaFieldKind::Value => {
@@ -614,24 +619,17 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                             desc_expr.clone(),
                         ));
                     }
-                    SchemaFieldKind::Node => {
-                        child_inserts.push(node_child_insert(
-                            ty,
-                            &kdl_key,
-                            required,
-                            desc_expr.clone(),
-                        ))
-                    }
+                    SchemaFieldKind::Node => child_inserts.push(node_child_insert(
+                        ty,
+                        &kdl_key,
+                        required,
+                        desc_expr.clone(),
+                    )),
                     SchemaFieldKind::Registry | SchemaFieldKind::Modifier => {}
                 }
             }
             if field.placement.child || field.placement.children {
-                child_inserts.push(node_child_insert(
-                    ty,
-                    &kdl_key,
-                    required,
-                    desc_expr.clone(),
-                ));
+                child_inserts.push(node_child_insert(ty, &kdl_key, required, desc_expr.clone()));
             }
         } else {
             match field_kind(field) {
@@ -765,7 +763,11 @@ fn generate_schema_builder(
     let schema_body = render_schema_parts(&parts);
     let register_calls = parts.register_calls;
 
-    let deny_unknown = match struct_attrs.schema.deny_unknown.or(struct_attrs.deny_unknown) {
+    let deny_unknown = match struct_attrs
+        .schema
+        .deny_unknown
+        .or(struct_attrs.deny_unknown)
+    {
         Some(val) => quote! { Some(#val) },
         None => quote! { Some(false) },
     };
@@ -1111,10 +1113,7 @@ fn generate_schema_enum_impl(
     }
 
     let tag_value_expr = tag_schema_expr(&tag_values);
-    let enum_literals: Vec<TokenStream> = tag_values
-        .iter()
-        .map(variant_tag_literal_expr)
-        .collect();
+    let enum_literals: Vec<TokenStream> = tag_values.iter().map(variant_tag_literal_expr).collect();
 
     let node_name_assign = if let Some(n) = struct_attrs
         .schema
@@ -1151,7 +1150,11 @@ fn generate_schema_enum_impl(
         })
         .collect();
 
-    let deny_unknown = match struct_attrs.schema.deny_unknown.or(struct_attrs.deny_unknown) {
+    let deny_unknown = match struct_attrs
+        .schema
+        .deny_unknown
+        .or(struct_attrs.deny_unknown)
+    {
         Some(val) => quote! { Some(#val) },
         None => quote! { Some(false) },
     };
@@ -1398,9 +1401,10 @@ fn generate_schema_union_impl(
     let mut register_calls = Vec::new();
 
     for field in &data.fields.named {
-        let ident = field.ident.as_ref().ok_or_else(|| {
-            syn::Error::new(field.span(), "union fields must be named")
-        })?;
+        let ident = field
+            .ident
+            .as_ref()
+            .ok_or_else(|| syn::Error::new(field.span(), "union fields must be named"))?;
         let attrs = parse_field_attrs(field)?;
         let attrs = match attrs {
             Some(attrs) => attrs,

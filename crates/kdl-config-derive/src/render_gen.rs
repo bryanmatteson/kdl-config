@@ -74,6 +74,7 @@ pub(crate) fn render_body_with_accessor(
     accessor: fn(&FieldInfo) -> FieldAccessor,
 ) -> TokenStream {
     let mut positional_fields = Vec::new();
+    let mut positional_list_fields = Vec::new();
     let mut keyed_fields = Vec::new();
     let mut flag_fields = Vec::new();
     let mut value_fields = Vec::new();
@@ -95,7 +96,9 @@ pub(crate) fn render_body_with_accessor(
 
         match render_placement {
             RenderPlacement::Attr => {
-                if field.placement.positional.is_some() {
+                if field.placement.positional_list {
+                    positional_list_fields.push(field);
+                } else if field.placement.positional.is_some() {
                     positional_fields.push(field);
                 } else if field.is_bool {
                     flag_fields.push(field);
@@ -111,6 +114,7 @@ pub(crate) fn render_body_with_accessor(
     }
 
     let positional_render = render_positional_fields(&positional_fields, accessor);
+    let positional_list_render = render_positional_list_fields(&positional_list_fields, accessor);
     let keyed_render = render_keyed_fields(&keyed_fields, accessor);
     let flag_render = render_flag_fields(&flag_fields, struct_attrs, accessor);
     let value_render = render_value_fields(&value_fields, struct_attrs, accessor);
@@ -125,6 +129,7 @@ pub(crate) fn render_body_with_accessor(
             let mut renderer = ::kdl_config::NodeRenderer::new(#name_expr, #modifier_expr);
 
             #positional_render
+            #positional_list_render
             #flag_render
             #keyed_render
 
@@ -166,7 +171,9 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
 
     if field.is_vec || field.is_option_vec {
         let inner = if field.is_option_vec {
-            field.inner_type().and_then(crate::attrs::extract_inner_type)
+            field
+                .inner_type()
+                .and_then(crate::attrs::extract_inner_type)
         } else {
             field.inner_type()
         };
@@ -184,7 +191,10 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
 }
 
 fn is_value_type(ty: &syn::Type) -> bool {
-    if crate::attrs::is_bool_type(ty) || crate::attrs::is_string_type(ty) || crate::attrs::is_numeric_type(ty) {
+    if crate::attrs::is_bool_type(ty)
+        || crate::attrs::is_string_type(ty)
+        || crate::attrs::is_numeric_type(ty)
+    {
         return true;
     }
 
@@ -213,7 +223,10 @@ fn render_placement_for(field: &FieldInfo, kind: FieldKind) -> RenderPlacement {
     }
 }
 
-fn modifier_expr_for(fields: &[FieldInfo], accessor: fn(&FieldInfo) -> FieldAccessor) -> TokenStream {
+fn modifier_expr_for(
+    fields: &[FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
     if let Some(field) = fields
         .iter()
         .find(|field| field.is_modifier && !field.is_skipped)
@@ -244,7 +257,10 @@ fn render_condition(field: &FieldInfo, accessor: &FieldAccessor) -> TokenStream 
     }
 }
 
-fn render_positional_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldAccessor) -> TokenStream {
+fn render_positional_fields(
+    fields: &[&FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
     let mut items = Vec::new();
     for field in fields {
         let access = accessor(field);
@@ -274,7 +290,46 @@ fn render_positional_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> F
     quote! { #(#items)* }
 }
 
-fn render_keyed_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldAccessor) -> TokenStream {
+fn render_positional_list_fields(
+    fields: &[&FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
+    let mut items = Vec::new();
+    for field in fields {
+        let access = accessor(field);
+        let cond = render_condition(field, &access);
+
+        let render_body = if field.is_option_vec {
+            let reference = &access.reference;
+            quote! {
+                if let Some(values) = #reference {
+                    for (idx, value) in values.iter().enumerate() {
+                        renderer.positional_raw(idx, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
+                    }
+                }
+            }
+        } else {
+            let reference = &access.reference;
+            quote! {
+                for (idx, value) in (#reference).iter().enumerate() {
+                    renderer.positional_raw(idx, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
+                }
+            }
+        };
+
+        items.push(quote! {
+            if #cond {
+                #render_body
+            }
+        });
+    }
+    quote! { #(#items)* }
+}
+
+fn render_keyed_fields(
+    fields: &[&FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
     let mut items = Vec::new();
     for field in fields {
         let access = accessor(field);
@@ -322,22 +377,30 @@ fn render_keyed_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldA
     quote! { #(#items)* }
 }
 
-fn render_flag_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, accessor: fn(&FieldInfo) -> FieldAccessor) -> TokenStream {
+fn render_flag_fields(
+    fields: &[&FieldInfo],
+    struct_attrs: &StructAttrs,
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
     let mut items = Vec::new();
     for field in fields {
         let access = accessor(field);
         let key = &field.kdl_key;
         let cond = render_condition(field, &access);
 
-        let bool_mode = field
-            .bool_mode
-            .clone()
-            .unwrap_or(struct_attrs.default_bool.clone().unwrap_or(BoolMode::PresenceAndValue));
+        let bool_mode = field.bool_mode.clone().unwrap_or(
+            struct_attrs
+                .default_bool
+                .clone()
+                .unwrap_or(BoolMode::PresenceAndValue),
+        );
         let bool_mode_tokens = bool_mode_tokens(bool_mode);
-        let flag_style = field
-            .flag_style
-            .clone()
-            .unwrap_or(struct_attrs.default_flag_style.clone().unwrap_or(FlagStyle::Both));
+        let flag_style = field.flag_style.clone().unwrap_or(
+            struct_attrs
+                .default_flag_style
+                .clone()
+                .unwrap_or(FlagStyle::Both),
+        );
 
         let (pos_flag, neg_flag) = match &field.placement.flag {
             Some((Some(pos), Some(neg))) => (pos.clone(), neg.clone()),
@@ -405,17 +468,23 @@ fn render_flag_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, accesso
     quote! { #(#items)* }
 }
 
-fn render_value_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, accessor: fn(&FieldInfo) -> FieldAccessor) -> TokenStream {
+fn render_value_fields(
+    fields: &[&FieldInfo],
+    struct_attrs: &StructAttrs,
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
     let mut items = Vec::new();
     for field in fields {
         let access = accessor(field);
         let key = &field.kdl_key;
         let cond = render_condition(field, &access);
 
-        let bool_mode = field
-            .bool_mode
-            .clone()
-            .unwrap_or(struct_attrs.default_bool.clone().unwrap_or(BoolMode::PresenceAndValue));
+        let bool_mode = field.bool_mode.clone().unwrap_or(
+            struct_attrs
+                .default_bool
+                .clone()
+                .unwrap_or(BoolMode::PresenceAndValue),
+        );
         let bool_mode_tokens = bool_mode_tokens(bool_mode);
 
         let render_body = if field.is_vec || field.is_option_vec {
@@ -507,7 +576,10 @@ fn render_value_fields(fields: &[&FieldInfo], struct_attrs: &StructAttrs, access
     quote! { #(#items)* }
 }
 
-fn render_child_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldAccessor) -> TokenStream {
+fn render_child_fields(
+    fields: &[&FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
     let mut items = Vec::new();
     for field in fields {
         let access = accessor(field);
@@ -541,7 +613,10 @@ fn render_child_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldA
     quote! { #(#items)* }
 }
 
-fn render_children_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldAccessor) -> TokenStream {
+fn render_children_fields(
+    fields: &[&FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
     let mut items = Vec::new();
     for field in fields {
         let access = accessor(field);
@@ -579,11 +654,17 @@ fn render_children_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> Fie
     quote! { #(#items)* }
 }
 
-fn render_registry_fields(fields: &[&FieldInfo], accessor: fn(&FieldInfo) -> FieldAccessor) -> TokenStream {
+fn render_registry_fields(
+    fields: &[&FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
     let mut items = Vec::new();
     for field in fields {
         let access = accessor(field);
-        let container = field.container.clone().unwrap_or_else(|| field.kdl_key.clone());
+        let container = field
+            .container
+            .clone()
+            .unwrap_or_else(|| field.kdl_key.clone());
         let cond = render_condition(field, &access);
         let reference = &access.reference;
         let registry_vec = crate::attrs::extract_registry_vec_value(&field.ty);

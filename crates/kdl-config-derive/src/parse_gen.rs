@@ -3,9 +3,9 @@ use quote::{format_ident, quote};
 use syn::Ident;
 
 use crate::attrs::{
-    BoolMode, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec, FieldInfo, FlagStyle,
-    StructAttrs, extract_hashmap_types, extract_inner_type, is_bool_type, is_numeric_type,
-    is_string_type, extract_children_map_types, ChildrenMapKind,
+    extract_children_map_types, extract_hashmap_types, extract_inner_type, is_bool_type,
+    is_numeric_type, is_string_type, BoolMode, ChildrenMapKind, ConflictPolicy, DefaultLiteral,
+    DefaultPlacement, DefaultSpec, FieldInfo, FlagStyle, StructAttrs,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -27,6 +27,22 @@ pub fn generate_parse_impl(
     skipped_infos: &[FieldInfo],
 ) -> TokenStream {
     let struct_name_str = struct_name.to_string();
+
+    let positional_list_fields: Vec<&FieldInfo> = fields
+        .iter()
+        .filter(|field| field.placement.positional_list && !field.is_skipped)
+        .collect();
+    let positional_index_fields: Vec<&FieldInfo> = fields
+        .iter()
+        .filter(|field| field.placement.positional.is_some() && !field.is_skipped)
+        .collect();
+
+    if positional_list_fields.len() > 1 {
+        return quote! { compile_error!("only one positional list field is allowed per struct"); };
+    }
+    if !positional_list_fields.is_empty() && !positional_index_fields.is_empty() {
+        return quote! { compile_error!("positional list fields cannot be combined with indexed positional fields"); };
+    }
 
     let validate_name = if let Some(ref node_name) = struct_attrs.node_name {
         quote! {
@@ -276,6 +292,7 @@ fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
     let has_explicit = field.placement.attr
         || field.placement.keyed
         || field.placement.positional.is_some()
+        || field.placement.positional_list
         || field.placement.flag.is_some()
         || field.placement.value
         || field.placement.child
@@ -367,6 +384,7 @@ pub(crate) fn generate_skip_marks(field: &FieldInfo) -> TokenStream {
     let has_explicit = field.placement.attr
         || field.placement.keyed
         || field.placement.positional.is_some()
+        || field.placement.positional_list
         || field.placement.flag.is_some()
         || field.placement.value
         || field.placement.child
@@ -381,6 +399,13 @@ pub(crate) fn generate_skip_marks(field: &FieldInfo) -> TokenStream {
         }
         if let Some(idx) = field.placement.positional {
             marks.push(quote! { used_keys.mark_arg(#idx); });
+        }
+        if field.placement.positional_list {
+            marks.push(quote! {
+                for idx in 0..node.args().len() {
+                    used_keys.mark_arg(idx);
+                }
+            });
         }
         if field.placement.value || field.placement.child || field.placement.children {
             marks.push(quote! { used_keys.mark_child(#key); });
@@ -530,6 +555,7 @@ fn generate_value_scalar_parser(
     let allow_attr_keyed =
         field.placement.keyed || (field.placement.attr && field.placement.flag.is_none());
     let allow_attr_positional = field.placement.positional;
+    let allow_attr_positional_list = field.placement.positional_list;
     let pos_index_expr = match allow_attr_positional {
         Some(idx) => quote! { Some(#idx) },
         None => quote! { None },
@@ -575,7 +601,7 @@ fn generate_value_scalar_parser(
         let custom_pos = #custom_pos_expr;
         let custom_neg = #custom_neg_expr;
         let pos_index = #pos_index_expr;
-        let has_placement = #allow_attr_keyed || #allow_value || pos_index.is_some() || #allow_flags;
+        let has_placement = #allow_attr_keyed || #allow_value || pos_index.is_some() || #allow_attr_positional_list || #allow_flags;
 
         if !has_placement {
             if #is_bool && field_config.bool_mode == ::kdl_config::BoolMode::ValueOnly {
@@ -1041,6 +1067,7 @@ fn generate_value_vec_parser(
     let allow_attr_keyed =
         field.placement.keyed || (field.placement.attr && field.placement.flag.is_none());
     let allow_attr_positional = field.placement.positional;
+    let allow_attr_positional_list = field.placement.positional_list;
     let allow_value = field.placement.value;
     let pos_index_expr = match allow_attr_positional {
         Some(idx) => quote! { Some(#idx) },
@@ -1068,7 +1095,7 @@ fn generate_value_vec_parser(
         let mut #field_ident: ::core::option::Option<Vec<#elem_ty>> = None;
 
         let pos_index = #pos_index_expr;
-        let has_placement = #allow_attr_keyed || #allow_value || pos_index.is_some();
+        let has_placement = #allow_attr_keyed || #allow_value || pos_index.is_some() || #allow_attr_positional_list;
 
         if !has_placement {
             match field_config.default_placement {
@@ -1172,6 +1199,20 @@ fn generate_value_vec_parser(
                     ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
                     if struct_config.deny_unknown {
                         used_keys.mark_arg(idx);
+                    }
+                }
+            }
+            if #allow_attr_positional_list {
+                if !node.args().is_empty() {
+                    let mut #values_ident = Vec::with_capacity(node.args().len());
+                    for #arg_value_ident in node.args() {
+                        #values_ident.push(::kdl_config::convert_value_checked::<#elem_ty>(#arg_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?);
+                    }
+                    ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, #values_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
+                    if struct_config.deny_unknown {
+                        for idx in 0..node.args().len() {
+                            used_keys.mark_arg(idx);
+                        }
                     }
                 }
             }
@@ -1592,10 +1633,7 @@ fn generate_children_map_parser(
     let node_copy_ident = format_ident!("__kdl_node_copy_{}", field_ident);
     let existing_idx_ident = format_ident!("__kdl_existing_idx_{}", field_ident);
     let required = field.required;
-    let map_node = field
-        .map_node
-        .as_ref()
-        .map(|s| quote! { #s });
+    let map_node = field.map_node.as_ref().map(|s| quote! { #s });
 
     let (children_map_kind, key_ty, val_ty) =
         extract_children_map_types(ty).expect("children_map requires HashMap or Vec<(K, V)>");
