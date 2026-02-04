@@ -36,8 +36,10 @@ fn apply_value_enum_meta(
     meta: syn::meta::ParseNestedMeta,
     result: &mut EnumAttrs,
 ) -> syn::Result<()> {
+    let has_nested = || !meta.input.is_empty() && !meta.input.peek(syn::Token![,]);
+
     if meta.path.is_ident("meta") || meta.path.is_ident("group") {
-        if !meta.input.is_empty() {
+        if has_nested() {
             meta.parse_nested_meta(|nested| apply_value_enum_meta(nested, result))?;
         }
         return Ok(());
@@ -77,7 +79,7 @@ fn apply_value_enum_meta(
     {
         if meta.input.peek(syn::Token![=]) {
             let _: syn::Expr = meta.value()?.parse()?;
-        } else if !meta.input.is_empty() {
+        } else if has_nested() {
             meta.parse_nested_meta(|_| Ok(()))?;
         }
     } else {
@@ -111,7 +113,7 @@ fn apply_value_variant_meta(
     result: &mut VariantAttrs,
 ) -> syn::Result<()> {
     if meta.path.is_ident("meta") || meta.path.is_ident("group") {
-        if !meta.input.is_empty() {
+        if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
             meta.parse_nested_meta(|nested| apply_value_variant_meta(nested, result))?;
         }
         return Ok(());

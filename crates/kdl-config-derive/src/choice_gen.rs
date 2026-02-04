@@ -264,12 +264,16 @@ fn parse_choice_enum_attrs(attrs: &[Attribute]) -> syn::Result<ChoiceEnumAttrs> 
     Ok(result)
 }
 
+fn has_nested_meta(meta: &syn::meta::ParseNestedMeta) -> bool {
+    !meta.input.is_empty() && !meta.input.peek(syn::Token![,])
+}
+
 fn apply_choice_enum_meta(
     meta: syn::meta::ParseNestedMeta,
     result: &mut ChoiceEnumAttrs,
 ) -> syn::Result<()> {
     if meta.path.is_ident("meta") || meta.path.is_ident("group") {
-        if !meta.input.is_empty() {
+        if has_nested_meta(&meta) {
             meta.parse_nested_meta(|nested| apply_choice_enum_meta(nested, result))?;
         }
         return Ok(());
@@ -298,7 +302,7 @@ fn apply_choice_enum_meta(
     {
         if meta.input.peek(syn::Token![=]) {
             let _: syn::Expr = meta.value()?.parse()?;
-        } else if !meta.input.is_empty() {
+        } else if has_nested_meta(&meta) {
             meta.parse_nested_meta(|_| Ok(()))?;
         }
     } else {
@@ -336,7 +340,7 @@ fn apply_choice_variant_meta(
     result: &mut ChoiceVariantAttrs,
 ) -> syn::Result<()> {
     if meta.path.is_ident("meta") || meta.path.is_ident("group") {
-        if !meta.input.is_empty() {
+        if has_nested_meta(&meta) {
             meta.parse_nested_meta(|nested| apply_choice_variant_meta(nested, result))?;
         }
         return Ok(());

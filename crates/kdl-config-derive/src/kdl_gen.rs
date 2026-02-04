@@ -150,7 +150,7 @@ fn apply_kdl_derive_meta(
         return Ok(());
     }
 
-    if !meta.input.is_empty() {
+    if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
         meta.parse_nested_meta(|_| Ok(()))?;
     }
 

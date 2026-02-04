@@ -52,7 +52,7 @@ fn apply_variant_meta(
     result: &mut VariantAttrs,
 ) -> syn::Result<()> {
     if meta.path.is_ident("meta") || meta.path.is_ident("group") {
-        if !meta.input.is_empty() {
+        if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
             meta.parse_nested_meta(|nested| apply_variant_meta(nested, result))?;
         }
         return Ok(());
