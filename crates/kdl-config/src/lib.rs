@@ -63,6 +63,21 @@ impl KdlParse for String {
     }
 }
 
+impl KdlParse for u16 {
+    fn from_node(node: &Node, _config: &ParseConfig) -> Result<Self, KdlConfigError> {
+        node.value()
+            .as_u64()
+            .ok_or(KdlConfigError::custom("Node", "expected a u64 value"))
+            .and_then(|v| {
+                if v > u16::MAX as u64 {
+                    Err(KdlConfigError::custom("Node", "value too large for u16"))
+                } else {
+                    Ok(v as u16)
+                }
+            })
+    }
+}
+
 impl<T: KdlRender> KdlRender for Box<T> {
     fn render<W: std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> std::fmt::Result {
         (**self).render(w, name, indent)

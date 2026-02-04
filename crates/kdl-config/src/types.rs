@@ -415,4 +415,16 @@ impl Node {
             }
         }
     }
+
+    pub fn value(&self) -> Value {
+        let args = self.args();
+        let children = self.children();
+        if args.is_empty() {
+            if children.is_empty() {
+                return Value::Null;
+            }
+            return children.get(0).unwrap().value();
+        }
+        args.get(0).unwrap_or(&Value::Null).clone()
+    }
 }
