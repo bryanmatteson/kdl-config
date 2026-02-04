@@ -311,6 +311,10 @@ fn to_snake_case(s: &str) -> String {
     result
 }
 
+fn has_nested_meta(meta: &syn::meta::ParseNestedMeta) -> bool {
+    !meta.input.is_empty() && !meta.input.peek(syn::Token![,])
+}
+
 pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
     let mut result = StructAttrs::default();
 
@@ -329,10 +333,10 @@ pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
                     } else {
                         return Err(syn::Error::new(value.span(), "expected string literal for `node`"));
                     }
-                } else if meta.input.is_empty() {
-                    result.node_name_default = true;
-                } else if !meta.input.is_empty() {
+                } else if has_nested_meta(&meta) {
                     meta.parse_nested_meta(|_| Ok(()))?;
+                } else {
+                    result.node_name_default = true;
                 }
             } else if meta.path.is_ident("rename_all") {
                 let value: Expr = meta.value()?.parse()?;
@@ -419,7 +423,7 @@ pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
                     let _: Expr = meta.value()?.parse()?;
                     return Ok(());
                 }
-                if meta.input.is_empty() {
+                if !has_nested_meta(&meta) {
                     return Ok(());
                 }
                 meta.parse_nested_meta(|meta| {
@@ -882,7 +886,7 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
                     let _: Expr = meta.value()?.parse()?;
                     return Ok(());
                 }
-                if meta.input.is_empty() {
+                if !has_nested_meta(&meta) {
                     return Ok(());
                 }
                 meta.parse_nested_meta(|meta| {

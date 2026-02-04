@@ -607,6 +607,21 @@ impl KdlSchema for i64 {
     fn register_definitions(_registry: &mut SchemaRegistry) {}
 }
 
+impl KdlSchema for u16 {
+    fn schema_ref() -> SchemaRef {
+        SchemaRef::Inline(KdlNodeSchema {
+            values: vec![SchemaValue {
+                ty: SchemaType::Integer,
+                required: true,
+                description: None,
+                enum_values: None,
+            }],
+            ..Default::default()
+        })
+    }
+    fn register_definitions(_registry: &mut SchemaRegistry) {}
+}
+
 impl KdlSchema for i128 {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {

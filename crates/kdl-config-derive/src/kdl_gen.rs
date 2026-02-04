@@ -62,6 +62,10 @@ pub fn generate_kdl_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
     Ok(tokens)
 }
 
+fn has_nested_meta(meta: &syn::meta::ParseNestedMeta) -> bool {
+    !meta.input.is_empty() && !meta.input.peek(syn::Token![,])
+}
+
 fn default_mode_for(data: &Data) -> DeriveMode {
     match data {
         Data::Struct(_) => DeriveMode::Node,
@@ -82,7 +86,7 @@ fn parse_kdl_derive_attrs(attrs: &[Attribute]) -> syn::Result<DeriveConfig> {
             if meta.path.is_ident("node") {
                 if meta.input.peek(syn::Token![=]) {
                     let _: syn::Expr = meta.value()?.parse()?;
-                } else if !meta.input.is_empty() {
+                } else if has_nested_meta(&meta) {
                     meta.parse_nested_meta(|_| Ok(()))?;
                 } else {
                     set_mode(&mut config, DeriveMode::Node, meta.path.span())?;
@@ -94,7 +98,7 @@ fn parse_kdl_derive_attrs(attrs: &[Attribute]) -> syn::Result<DeriveConfig> {
                 if meta.input.peek(syn::Token![=]) {
                     return Err(meta.error("choice does not accept a value"));
                 }
-                if !meta.input.is_empty() {
+                if has_nested_meta(&meta) {
                     meta.parse_nested_meta(|_| Ok(()))?;
                 }
                 set_mode(&mut config, DeriveMode::Choice, meta.path.span())?;
@@ -105,7 +109,7 @@ fn parse_kdl_derive_attrs(attrs: &[Attribute]) -> syn::Result<DeriveConfig> {
                 if meta.input.peek(syn::Token![=]) {
                     return Err(meta.error("value does not accept a value"));
                 }
-                if !meta.input.is_empty() {
+                if has_nested_meta(&meta) {
                     meta.parse_nested_meta(|_| Ok(()))?;
                 }
                 set_mode(&mut config, DeriveMode::Value, meta.path.span())?;
@@ -116,7 +120,7 @@ fn parse_kdl_derive_attrs(attrs: &[Attribute]) -> syn::Result<DeriveConfig> {
                 if meta.input.peek(syn::Token![=]) {
                     let lit: syn::LitBool = meta.value()?.parse()?;
                     config.schema = lit.value;
-                } else if !meta.input.is_empty() {
+                } else if has_nested_meta(&meta) {
                     meta.parse_nested_meta(|_| Ok(()))?;
                     config.schema = true;
                 } else {
