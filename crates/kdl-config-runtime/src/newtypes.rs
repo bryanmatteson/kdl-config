@@ -5,9 +5,12 @@ use crate::schema::{KdlNodeSchema, KdlSchema, SchemaRef, SchemaRegistry, SchemaT
 use crate::{FromKdlValue, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Duration(std::time::Duration);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DurationParseError {
     input: String,
     reason: &'static str,
@@ -52,8 +55,7 @@ impl Duration {
     }
 
     pub fn from_days(days: u64) -> Option<Self> {
-        days
-            .checked_mul(24 * 60 * 60)
+        days.checked_mul(24 * 60 * 60)
             .map(|secs| Self(std::time::Duration::from_secs(secs)))
     }
 
@@ -195,9 +197,12 @@ impl KdlSchema for Duration {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Weight(f64);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WeightError {
     value: f64,
 }
