@@ -253,6 +253,16 @@ impl Node {
         self.arg_reprs.push(repr);
     }
 
+    pub fn insert_arg(&mut self, index: usize, value: Value) {
+        self.insert_arg_with_repr(index, value, None);
+    }
+
+    pub fn insert_arg_with_repr(&mut self, index: usize, value: Value, repr: Option<String>) {
+        let idx = index.min(self.args.len());
+        self.args.insert(idx, value);
+        self.arg_reprs.insert(idx, repr);
+    }
+
     pub fn add_child(&mut self, child: Node) {
         self.children.push(child);
     }

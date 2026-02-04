@@ -302,18 +302,7 @@ fn parse_choice_variant_attrs(attrs: &[Attribute]) -> syn::Result<ChoiceVariantA
             continue;
         }
 
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("name") || meta.path.is_ident("rename") {
-                let lit: syn::LitStr = meta.value()?.parse()?;
-                result.name = Some(lit.value());
-            } else {
-                return Err(syn::Error::new(
-                    meta.path.span(),
-                    "unknown variant attribute for KdlChoice",
-                ));
-            }
-            Ok(())
-        })?;
+        attr.parse_nested_meta(|meta| apply_choice_variant_meta(meta, &mut result))?;
     }
 
     if result.name.is_none() {
@@ -323,4 +312,28 @@ fn parse_choice_variant_attrs(attrs: &[Attribute]) -> syn::Result<ChoiceVariantA
     }
 
     Ok(result)
+}
+
+fn apply_choice_variant_meta(
+    meta: syn::meta::ParseNestedMeta,
+    result: &mut ChoiceVariantAttrs,
+) -> syn::Result<()> {
+    if meta.path.is_ident("meta") || meta.path.is_ident("group") {
+        if !meta.input.is_empty() {
+            meta.parse_nested_meta(|nested| apply_choice_variant_meta(nested, result))?;
+        }
+        return Ok(());
+    }
+
+    if meta.path.is_ident("name") || meta.path.is_ident("rename") {
+        let lit: syn::LitStr = meta.value()?.parse()?;
+        result.name = Some(lit.value());
+    } else {
+        return Err(syn::Error::new(
+            meta.path.span(),
+            "unknown variant attribute for KdlChoice",
+        ));
+    }
+
+    Ok(())
 }

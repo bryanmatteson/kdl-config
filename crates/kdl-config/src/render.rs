@@ -303,6 +303,14 @@ pub fn render_value_node_scalar(name: &str, value: &Value) -> String {
     render_value_node(name, std::slice::from_ref(value))
 }
 
+pub fn value_node(name: &str, values: &[Value]) -> Node {
+    let mut node = Node::named(name);
+    for value in values {
+        node.add_arg(value.clone());
+    }
+    node
+}
+
 pub fn render_node(node: &Node) -> String {
     let mut renderer = NodeRenderer::new(node.name.clone(), node.modifier);
     renderer.with_name_repr(node.name_repr().map(|repr| repr.to_string()));
@@ -332,9 +340,12 @@ pub fn render_node(node: &Node) -> String {
 }
 
 pub fn render_flatten<T: crate::KdlRender>(value: &T, name: &str) -> Node {
+    value.render_node(name)
+}
+
+pub fn render_child_node<T: crate::KdlRender>(value: &T, name: &str) -> Node {
     let rendered = crate::to_kdl(value, name);
-    let root = crate::parse_config(&rendered).expect("flatten render produced invalid KDL");
-    root.children().first().cloned().unwrap_or_default()
+    crate::parse_node(&rendered).expect("rendered node is invalid KDL")
 }
 
 pub fn insert_arg(rendered: &str, arg: &str) -> String {

@@ -79,29 +79,7 @@ fn parse_variant_attrs(attrs: &[syn::Attribute]) -> syn::Result<VariantAttrs> {
         if !attr.path().is_ident("kdl") {
             continue;
         }
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("name") {
-                let value: syn::Expr = meta.value()?.parse()?;
-                if let syn::Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Str(lit),
-                    ..
-                }) = value
-                {
-                    result.name = Some(lit.value());
-                } else {
-                    return Err(syn::Error::new(
-                        value.span(),
-                        "expected string literal for `name`",
-                    ));
-                }
-            } else {
-                return Err(syn::Error::new(
-                    meta.path.span(),
-                    "unknown variant attribute for KdlValue",
-                ));
-            }
-            Ok(())
-        })?;
+        attr.parse_nested_meta(|meta| apply_value_variant_meta(meta, &mut result))?;
     }
     if result.name.is_none() {
         if let Some(rename) = serde_rename_from_attrs(attrs)? {
@@ -109,6 +87,41 @@ fn parse_variant_attrs(attrs: &[syn::Attribute]) -> syn::Result<VariantAttrs> {
         }
     }
     Ok(result)
+}
+
+fn apply_value_variant_meta(
+    meta: syn::meta::ParseNestedMeta,
+    result: &mut VariantAttrs,
+) -> syn::Result<()> {
+    if meta.path.is_ident("meta") || meta.path.is_ident("group") {
+        if !meta.input.is_empty() {
+            meta.parse_nested_meta(|nested| apply_value_variant_meta(nested, result))?;
+        }
+        return Ok(());
+    }
+
+    if meta.path.is_ident("name") {
+        let value: syn::Expr = meta.value()?.parse()?;
+        if let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(lit),
+            ..
+        }) = value
+        {
+            result.name = Some(lit.value());
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `name`",
+            ));
+        }
+    } else {
+        return Err(syn::Error::new(
+            meta.path.span(),
+            "unknown variant attribute for KdlValue",
+        ));
+    }
+
+    Ok(())
 }
 
 pub(crate) fn collect_value_enum_variants(

@@ -25,7 +25,33 @@ pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
     Ok(root)
 }
 
-fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
+pub fn parse_node(contents: &str) -> Result<Node, KdlConfigError> {
+    let document: KdlDocument = contents
+        .parse()
+        .map_err(|e: kdl::KdlError| KdlConfigError {
+            struct_name: "KDL Node".into(),
+            field_name: None,
+            kdl_key: None,
+            placement: Placement::Unknown,
+            required: true,
+            kind: ErrorKind::Parse(e.to_string()),
+        })?;
+
+    let nodes = document.nodes();
+    match nodes.len() {
+        0 => Err(KdlConfigError::custom(
+            "KDL Node",
+            "expected a single node, found none",
+        )),
+        1 => parse_kdl_node(&nodes[0]),
+        count => Err(KdlConfigError::custom(
+            "KDL Node",
+            format!("expected a single node, found {count}"),
+        )),
+    }
+}
+
+pub(crate) fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
     let name_ident = node.name();
     let raw_name = name_ident.value();
     let repr = name_ident.repr();

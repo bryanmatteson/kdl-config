@@ -326,192 +326,7 @@ pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
             continue;
         }
 
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("node") {
-                if meta.input.peek(syn::Token![=]) {
-                    let value: Expr = meta.value()?.parse()?;
-                    if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
-                        result.node_name = Some(lit.value());
-                        result.node_name_default = false;
-                    } else {
-                        return Err(syn::Error::new(value.span(), "expected string literal for `node`"));
-                    }
-                } else if has_nested_meta(&meta) {
-                    meta.parse_nested_meta(|_| Ok(()))?;
-                } else {
-                    result.node_name_default = true;
-                }
-            } else if meta.path.is_ident("rename_all") {
-                let value: Expr = meta.value()?.parse()?;
-                if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
-                    result.rename_all = match lit.value().as_str() {
-                        "kebab-case" => RenameStrategy::KebabCase,
-                        "snake_case" => RenameStrategy::SnakeCase,
-                        "lowercase" => RenameStrategy::Lowercase,
-                        "UPPERCASE" => RenameStrategy::Uppercase,
-                        "none" => RenameStrategy::None,
-                        other => {
-                            return Err(syn::Error::new(
-                                lit.span(),
-                                format!("unknown rename_all value: '{other}'. expected 'kebab-case', 'snake_case', 'lowercase', 'UPPERCASE', or 'none'"),
-                            ));
-                        }
-                    };
-                    result.rename_all_explicit = true;
-                } else {
-                    return Err(syn::Error::new(value.span(), "expected string literal for `rename_all`"));
-                }
-            } else if meta.path.is_ident("default_placement") {
-                let value: Expr = meta.value()?.parse()?;
-                if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
-                    result.default_placement = Some(match lit.value().as_str() {
-                        "exhaustive" => DefaultPlacement::Exhaustive,
-                        "attr" => DefaultPlacement::Attr,
-                        "value" => DefaultPlacement::Value,
-                        "child" => DefaultPlacement::Child,
-                        other => {
-                            return Err(syn::Error::new(lit.span(), format!("unknown default_placement: '{other}'")));
-                        }
-                    });
-                } else {
-                    return Err(syn::Error::new(value.span(), "expected string literal for `default_placement`"));
-                }
-            } else if meta.path.is_ident("default_bool") {
-                let value: Expr = meta.value()?.parse()?;
-                if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
-                    result.default_bool = Some(match lit.value().as_str() {
-                        "presence+value" => BoolMode::PresenceAndValue,
-                        "value-only" => BoolMode::ValueOnly,
-                        "presence-only" => BoolMode::PresenceOnly,
-                        other => {
-                            return Err(syn::Error::new(lit.span(), format!("unknown default_bool: '{other}'")));
-                        }
-                    });
-                } else {
-                    return Err(syn::Error::new(value.span(), "expected string literal for `default_bool`"));
-                }
-            } else if meta.path.is_ident("default_flag_style") {
-                let value: Expr = meta.value()?.parse()?;
-                if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
-                    result.default_flag_style = Some(match lit.value().as_str() {
-                        "both" => FlagStyle::Both,
-                        "value|no" => FlagStyle::ValueNo,
-                        "with|without" => FlagStyle::WithWithout,
-                        other => {
-                            return Err(syn::Error::new(lit.span(), format!("unknown default_flag_style: '{other}'")));
-                        }
-                    });
-                } else {
-                    return Err(syn::Error::new(value.span(), "expected string literal for `default_flag_style`"));
-                }
-            } else if meta.path.is_ident("default_conflict") {
-                let value: Expr = meta.value()?.parse()?;
-                if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
-                    result.default_conflict = Some(match lit.value().as_str() {
-                        "error" => ConflictPolicy::Error,
-                        "first" => ConflictPolicy::First,
-                        "last" => ConflictPolicy::Last,
-                        "append" => ConflictPolicy::Append,
-                        other => {
-                            return Err(syn::Error::new(lit.span(), format!("unknown default_conflict: '{other}'")));
-                        }
-                    });
-                } else {
-                    return Err(syn::Error::new(value.span(), "expected string literal for `default_conflict`"));
-                }
-            } else if meta.path.is_ident("deny_unknown") {
-                result.deny_unknown = Some(true);
-            } else if meta.path.is_ident("schema") {
-                if meta.input.peek(syn::Token![=]) {
-                    let _: Expr = meta.value()?.parse()?;
-                    return Ok(());
-                }
-                if !has_nested_meta(&meta) {
-                    return Ok(());
-                }
-                meta.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("name") || meta.path.is_ident("rename") {
-                        let value: Expr = meta.value()?.parse()?;
-                        if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
-                            if result.schema.name.is_some() {
-                                return Err(syn::Error::new(
-                                    lit.span(),
-                                    "schema name override already set",
-                                ));
-                            }
-                            result.schema.name = Some(lit.value());
-                        } else {
-                            return Err(syn::Error::new(
-                                value.span(),
-                                "expected string literal for `schema(name = ...)`",
-                            ));
-                        }
-                    } else if meta.path.is_ident("description") || meta.path.is_ident("desc") {
-                        let value: Expr = meta.value()?.parse()?;
-                        if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = value {
-                            if result.schema.description.is_some() {
-                                return Err(syn::Error::new(
-                                    lit.span(),
-                                    "schema description override already set",
-                                ));
-                            }
-                            result.schema.description = Some(lit.value());
-                        } else {
-                            return Err(syn::Error::new(
-                                value.span(),
-                                "expected string literal for `schema(description = ...)`",
-                            ));
-                        }
-                    } else if meta.path.is_ident("deny_unknown") {
-                        let value = if meta.input.peek(syn::Token![=]) {
-                            let lit: syn::LitBool = meta.value()?.parse()?;
-                            lit.value()
-                        } else {
-                            true
-                        };
-                        if result.schema.deny_unknown.is_some() {
-                            return Err(syn::Error::new(
-                                meta.path.span(),
-                                "schema deny_unknown override already set",
-                            ));
-                        }
-                        result.schema.deny_unknown = Some(value);
-                    } else if meta.path.is_ident("allow_unknown") {
-                        let value = if meta.input.peek(syn::Token![=]) {
-                            let lit: syn::LitBool = meta.value()?.parse()?;
-                            lit.value()
-                        } else {
-                            true
-                        };
-                        if result.schema.deny_unknown.is_some() {
-                            return Err(syn::Error::new(
-                                meta.path.span(),
-                                "schema deny_unknown override already set",
-                            ));
-                        }
-                        result.schema.deny_unknown = Some(!value);
-                    } else {
-                        return Err(syn::Error::new(
-                            meta.path.span(),
-                            format!(
-                                "unknown schema override: {}",
-                                path_to_string(&meta.path)
-                            ),
-                        ));
-                    }
-                    Ok(())
-                })?;
-            } else if meta.path.is_ident("choice") || meta.path.is_ident("value") {
-                if meta.input.peek(syn::Token![=]) {
-                    let _: Expr = meta.value()?.parse()?;
-                } else if !meta.input.is_empty() {
-                    meta.parse_nested_meta(|_| Ok(()))?;
-                }
-            } else {
-                return Err(syn::Error::new(meta.path.span(), format!("unknown struct attribute: {}", path_to_string(&meta.path))));
-            }
-            Ok(())
-        })?;
+        attr.parse_nested_meta(|meta| apply_struct_meta(meta, &mut result))?;
     }
 
     if !result.rename_all_explicit {
@@ -528,6 +343,753 @@ pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
     }
 
     Ok(result)
+}
+
+fn apply_struct_meta(
+    meta: syn::meta::ParseNestedMeta,
+    result: &mut StructAttrs,
+) -> syn::Result<()> {
+    if meta.path.is_ident("meta") || meta.path.is_ident("group") {
+        if has_nested_meta(&meta) {
+            meta.parse_nested_meta(|nested| apply_struct_meta(nested, result))?;
+        }
+        return Ok(());
+    }
+
+    if meta.path.is_ident("node") {
+        if meta.input.peek(syn::Token![=]) {
+            let value: Expr = meta.value()?.parse()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(lit), ..
+            }) = value
+            {
+                result.node_name = Some(lit.value());
+                result.node_name_default = false;
+            } else {
+                return Err(syn::Error::new(
+                    value.span(),
+                    "expected string literal for `node`",
+                ));
+            }
+        } else if has_nested_meta(&meta) {
+            meta.parse_nested_meta(|_| Ok(()))?;
+        } else {
+            result.node_name_default = true;
+        }
+    } else if meta.path.is_ident("rename_all") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            result.rename_all = match lit.value().as_str() {
+                "kebab-case" => RenameStrategy::KebabCase,
+                "snake_case" => RenameStrategy::SnakeCase,
+                "lowercase" => RenameStrategy::Lowercase,
+                "UPPERCASE" => RenameStrategy::Uppercase,
+                "none" => RenameStrategy::None,
+                other => {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!("unknown rename_all value: '{other}'. expected 'kebab-case', 'snake_case', 'lowercase', 'UPPERCASE', or 'none'"),
+                    ));
+                }
+            };
+            result.rename_all_explicit = true;
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `rename_all`",
+            ));
+        }
+    } else if meta.path.is_ident("default_placement") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            result.default_placement = Some(match lit.value().as_str() {
+                "exhaustive" => DefaultPlacement::Exhaustive,
+                "attr" => DefaultPlacement::Attr,
+                "value" => DefaultPlacement::Value,
+                "child" => DefaultPlacement::Child,
+                other => {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!("unknown default_placement: '{other}'"),
+                    ));
+                }
+            });
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `default_placement`",
+            ));
+        }
+    } else if meta.path.is_ident("default_bool") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            result.default_bool = Some(match lit.value().as_str() {
+                "presence+value" => BoolMode::PresenceAndValue,
+                "value-only" => BoolMode::ValueOnly,
+                "presence-only" => BoolMode::PresenceOnly,
+                other => {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!("unknown default_bool: '{other}'"),
+                    ));
+                }
+            });
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `default_bool`",
+            ));
+        }
+    } else if meta.path.is_ident("default_flag_style") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            result.default_flag_style = Some(match lit.value().as_str() {
+                "both" => FlagStyle::Both,
+                "value|no" => FlagStyle::ValueNo,
+                "with|without" => FlagStyle::WithWithout,
+                other => {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!("unknown default_flag_style: '{other}'"),
+                    ));
+                }
+            });
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `default_flag_style`",
+            ));
+        }
+    } else if meta.path.is_ident("default_conflict") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            result.default_conflict = Some(match lit.value().as_str() {
+                "error" => ConflictPolicy::Error,
+                "first" => ConflictPolicy::First,
+                "last" => ConflictPolicy::Last,
+                "append" => ConflictPolicy::Append,
+                other => {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!("unknown default_conflict: '{other}'"),
+                    ));
+                }
+            });
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `default_conflict`",
+            ));
+        }
+    } else if meta.path.is_ident("deny_unknown") {
+        result.deny_unknown = Some(true);
+    } else if meta.path.is_ident("schema") {
+        if meta.input.peek(syn::Token![=]) {
+            let _: Expr = meta.value()?.parse()?;
+            return Ok(());
+        }
+        if !has_nested_meta(&meta) {
+            return Ok(());
+        }
+        meta.parse_nested_meta(|meta| {
+            if meta.path.is_ident("name") || meta.path.is_ident("rename") {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = value
+                {
+                    if result.schema.name.is_some() {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "schema name override already set",
+                        ));
+                    }
+                    result.schema.name = Some(lit.value());
+                } else {
+                    return Err(syn::Error::new(
+                        value.span(),
+                        "expected string literal for `schema(name = ...)`",
+                    ));
+                }
+            } else if meta.path.is_ident("description") || meta.path.is_ident("desc") {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = value
+                {
+                    if result.schema.description.is_some() {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "schema description override already set",
+                        ));
+                    }
+                    result.schema.description = Some(lit.value());
+                } else {
+                    return Err(syn::Error::new(
+                        value.span(),
+                        "expected string literal for `schema(description = ...)`",
+                    ));
+                }
+            } else if meta.path.is_ident("deny_unknown") {
+                let value = if meta.input.peek(syn::Token![=]) {
+                    let lit: syn::LitBool = meta.value()?.parse()?;
+                    lit.value()
+                } else {
+                    true
+                };
+                if result.schema.deny_unknown.is_some() {
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "schema deny_unknown override already set",
+                    ));
+                }
+                result.schema.deny_unknown = Some(value);
+            } else if meta.path.is_ident("allow_unknown") {
+                let value = if meta.input.peek(syn::Token![=]) {
+                    let lit: syn::LitBool = meta.value()?.parse()?;
+                    lit.value()
+                } else {
+                    true
+                };
+                if result.schema.deny_unknown.is_some() {
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "schema deny_unknown override already set",
+                    ));
+                }
+                result.schema.deny_unknown = Some(!value);
+            } else {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    format!("unknown schema override: {}", path_to_string(&meta.path)),
+                ));
+            }
+            Ok(())
+        })?;
+    } else if meta.path.is_ident("choice") || meta.path.is_ident("value") {
+        if meta.input.peek(syn::Token![=]) {
+            let _: Expr = meta.value()?.parse()?;
+        } else if !meta.input.is_empty() {
+            meta.parse_nested_meta(|_| Ok(()))?;
+        }
+    } else {
+        return Err(syn::Error::new(
+            meta.path.span(),
+            format!("unknown struct attribute: {}", path_to_string(&meta.path)),
+        ));
+    }
+
+    Ok(())
+}
+
+fn apply_field_meta(
+    meta: syn::meta::ParseNestedMeta,
+    placement: &mut FieldPlacement,
+    required: &mut Option<bool>,
+    name: &mut Option<String>,
+    container: &mut Option<String>,
+    children_map: &mut bool,
+    flatten: &mut bool,
+    map_node: &mut Option<String>,
+    registry_key: &mut Option<RegistryKey>,
+    default_spec: &mut Option<DefaultSpec>,
+    default_count: &mut u8,
+    skip_serializing_if: &mut Option<String>,
+    skip: &mut bool,
+    bool_mode: &mut Option<BoolMode>,
+    flag_style: &mut Option<FlagStyle>,
+    conflict: &mut Option<ConflictPolicy>,
+    render: &mut Option<RenderPlacement>,
+    scalar: &mut bool,
+    schema: &mut FieldSchemaOverride,
+) -> syn::Result<()> {
+    if meta.path.is_ident("meta") || meta.path.is_ident("group") {
+        if has_nested_meta(&meta) {
+            meta.parse_nested_meta(|nested| {
+                apply_field_meta(
+                    nested,
+                    placement,
+                    required,
+                    name,
+                    container,
+                    children_map,
+                    flatten,
+                    map_node,
+                    registry_key,
+                    default_spec,
+                    default_count,
+                    skip_serializing_if,
+                    skip,
+                    bool_mode,
+                    flag_style,
+                    conflict,
+                    render,
+                    scalar,
+                    schema,
+                )
+            })?;
+        }
+        return Ok(());
+    }
+
+    let mut set_registry_key = |value: RegistryKey, span: Span| -> syn::Result<()> {
+        if registry_key.is_some() {
+            return Err(syn::Error::new(span, "registry key is already set"));
+        }
+        *registry_key = Some(value);
+        Ok(())
+    };
+
+    if meta.path.is_ident("attr") {
+        placement.attr = true;
+    } else if meta.path.is_ident("keyed") {
+        placement.keyed = true;
+    } else if meta.path.is_ident("positional") {
+        if placement.positional.is_some() || placement.positional_list {
+            return Err(syn::Error::new(
+                meta.path.span(),
+                "positional placement is already set",
+            ));
+        }
+        if meta.input.peek(syn::Token![=]) {
+            let value: Expr = meta.value()?.parse()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Int(lit), ..
+            }) = value
+            {
+                placement.positional = Some(lit.base10_parse()?);
+            } else {
+                return Err(syn::Error::new(
+                    value.span(),
+                    "expected integer literal for `positional`",
+                ));
+            }
+        } else {
+            placement.positional = Some(0);
+        }
+    } else if meta.path.is_ident("positional_list") {
+        if placement.positional.is_some() || placement.positional_list {
+            return Err(syn::Error::new(
+                meta.path.span(),
+                "positional placement is already set",
+            ));
+        }
+        placement.positional_list = true;
+    } else if meta.path.is_ident("flag") {
+        if meta.input.peek(syn::Token![=]) {
+            let value: Expr = meta.value()?.parse()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(lit), ..
+            }) = value
+            {
+                placement.flag = Some((Some(lit.value()), None));
+            } else {
+                return Err(syn::Error::new(
+                    value.span(),
+                    "expected string literal for `flag`",
+                ));
+            }
+        } else {
+            placement.flag = Some((None, None));
+        }
+    } else if meta.path.is_ident("neg_flag") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            let (pos, _) = placement.flag.clone().unwrap_or((None, None));
+            placement.flag = Some((pos, Some(lit.value())));
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `neg_flag`",
+            ));
+        }
+    } else if meta.path.is_ident("value") {
+        placement.value = true;
+    } else if meta.path.is_ident("child") {
+        placement.child = true;
+    } else if meta.path.is_ident("children") {
+        placement.children = true;
+    } else if meta.path.is_ident("children_any") || meta.path.is_ident("choice") {
+        placement.children_any = true;
+    } else if meta.path.is_ident("registry") {
+        placement.registry = true;
+    } else if meta.path.is_ident("modifier") {
+        placement.modifier = true;
+    } else if meta.path.is_ident("container") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            *container = Some(lit.value());
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `container`",
+            ));
+        }
+    } else if meta.path.is_ident("children_map") {
+        *children_map = true;
+    } else if meta.path.is_ident("map_node") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            if map_node.is_some() {
+                return Err(syn::Error::new(lit.span(), "map_node is already set"));
+            }
+            *map_node = Some(lit.value());
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `map_node`",
+            ));
+        }
+    } else if meta.path.is_ident("key_arg") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Int(ref lit),
+            ..
+        }) = value
+        {
+            set_registry_key(RegistryKey::Arg(lit.base10_parse()?), value.span())?;
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected integer literal for `key_arg`",
+            ));
+        }
+    } else if meta.path.is_ident("key_attr") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(ref lit),
+            ..
+        }) = value
+        {
+            set_registry_key(RegistryKey::Attr(lit.value()), value.span())?;
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `key_attr`",
+            ));
+        }
+    } else if meta.path.is_ident("key_fn") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(ref lit),
+            ..
+        }) = value
+        {
+            set_registry_key(RegistryKey::Function(lit.value()), value.span())?;
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `key_fn`",
+            ));
+        }
+    } else if meta.path.is_ident("required") {
+        *required = Some(true);
+    } else if meta.path.is_ident("optional") {
+        *required = Some(false);
+    } else if meta.path.is_ident("name") || meta.path.is_ident("rename") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            *name = Some(lit.value());
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `name`",
+            ));
+        }
+    } else if meta.path.is_ident("default") {
+        *default_count += 1;
+        if meta.input.peek(syn::Token![=]) {
+            let _ = meta.input.parse::<syn::Token![=]>()?;
+            let expr: Expr = meta.input.parse()?;
+            *default_spec = Some(DefaultSpec::Literal(parse_default_expr(&expr)?));
+        } else {
+            *default_spec = Some(DefaultSpec::Derive);
+        }
+    } else if meta.path.is_ident("flatten") {
+        let value = if meta.input.peek(syn::Token![=]) {
+            let lit: syn::LitBool = meta.value()?.parse()?;
+            lit.value()
+        } else {
+            true
+        };
+        *flatten = value;
+    } else if meta.path.is_ident("default_fn") {
+        *default_count += 1;
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            *default_spec = Some(DefaultSpec::Function(lit.value()));
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `default_fn`",
+            ));
+        }
+    } else if meta.path.is_ident("skip") {
+        *skip = true;
+    } else if meta.path.is_ident("skip_serializing_if") {
+        if meta.input.peek(syn::Token![=]) {
+            let value: Expr = meta.value()?.parse()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(lit), ..
+            }) = value
+            {
+                *skip_serializing_if = Some(lit.value());
+            } else {
+                return Err(syn::Error::new(
+                    value.span(),
+                    "expected string literal for `skip_serializing_if`",
+                ));
+            }
+        }
+    } else if meta.path.is_ident("bool") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            *bool_mode = Some(match lit.value().as_str() {
+                "presence+value" => BoolMode::PresenceAndValue,
+                "value-only" => BoolMode::ValueOnly,
+                "presence-only" => BoolMode::PresenceOnly,
+                other => {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!("unknown bool mode: '{other}'"),
+                    ));
+                }
+            });
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `bool`",
+            ));
+        }
+    } else if meta.path.is_ident("flag_style") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            *flag_style = Some(match lit.value().as_str() {
+                "both" => FlagStyle::Both,
+                "value|no" => FlagStyle::ValueNo,
+                "with|without" => FlagStyle::WithWithout,
+                other => {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!("unknown flag_style: '{other}'"),
+                    ));
+                }
+            });
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `flag_style`",
+            ));
+        }
+    } else if meta.path.is_ident("conflict") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            *conflict = Some(match lit.value().as_str() {
+                "error" => ConflictPolicy::Error,
+                "first" => ConflictPolicy::First,
+                "last" => ConflictPolicy::Last,
+                "append" => ConflictPolicy::Append,
+                other => {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!("unknown conflict policy: '{other}'"),
+                    ));
+                }
+            });
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `conflict`",
+            ));
+        }
+    } else if meta.path.is_ident("render") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            *render = Some(match lit.value().as_str() {
+                "attr" => RenderPlacement::Attr,
+                "value" => RenderPlacement::Value,
+                "child" => RenderPlacement::Child,
+                "children" => RenderPlacement::Children,
+                "registry" => RenderPlacement::Registry,
+                other => {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!("unknown render placement: '{other}'"),
+                    ));
+                }
+            });
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `render`",
+            ));
+        }
+    } else if meta.path.is_ident("scalar")
+        || meta.path.is_ident("value_type")
+        || meta.path.is_ident("value_like")
+        || meta.path.is_ident("kdl_value")
+    {
+        let value = if meta.input.peek(syn::Token![=]) {
+            let lit: syn::LitBool = meta.value()?.parse()?;
+            lit.value()
+        } else {
+            true
+        };
+        *scalar = value;
+    } else if meta.path.is_ident("schema") {
+        if meta.input.peek(syn::Token![=]) {
+            let _: Expr = meta.value()?.parse()?;
+            return Ok(());
+        }
+        if !has_nested_meta(&meta) {
+            return Ok(());
+        }
+        meta.parse_nested_meta(|meta| {
+            if meta.path.is_ident("skip") {
+                schema.skip = true;
+            } else if meta.path.is_ident("name") || meta.path.is_ident("rename") {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = value
+                {
+                    if schema.name.is_some() {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "schema name override already set",
+                        ));
+                    }
+                    schema.name = Some(lit.value());
+                } else {
+                    return Err(syn::Error::new(
+                        value.span(),
+                        "expected string literal for `schema(name = ...)`",
+                    ));
+                }
+            } else if meta.path.is_ident("type") {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = value
+                {
+                    if schema.ty.is_some() {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "schema type override already set",
+                        ));
+                    }
+                    schema.ty = Some(parse_schema_type(&lit)?);
+                } else {
+                    return Err(syn::Error::new(
+                        value.span(),
+                        "expected string literal for `schema(type = ...)`",
+                    ));
+                }
+            } else if meta.path.is_ident("required") {
+                let value = if meta.input.peek(syn::Token![=]) {
+                    let lit: syn::LitBool = meta.value()?.parse()?;
+                    lit.value()
+                } else {
+                    true
+                };
+                if schema.required.is_some() {
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "schema required override already set",
+                    ));
+                }
+                schema.required = Some(value);
+            } else if meta.path.is_ident("optional") {
+                let value = if meta.input.peek(syn::Token![=]) {
+                    let lit: syn::LitBool = meta.value()?.parse()?;
+                    lit.value()
+                } else {
+                    true
+                };
+                if schema.required.is_some() {
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "schema required override already set",
+                    ));
+                }
+                schema.required = Some(!value);
+            } else if meta.path.is_ident("description") || meta.path.is_ident("desc") {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = value
+                {
+                    if schema.description.is_some() {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "schema description override already set",
+                        ));
+                    }
+                    schema.description = Some(lit.value());
+                } else {
+                    return Err(syn::Error::new(
+                        value.span(),
+                        "expected string literal for `schema(description = ...)`",
+                    ));
+                }
+            } else {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    format!("unknown schema override: {}", path_to_string(&meta.path)),
+                ));
+            }
+            Ok(())
+        })?;
+    } else {
+        return Err(syn::Error::new(
+            meta.path.span(),
+            format!("unknown field attribute: {}", path_to_string(&meta.path)),
+        ));
+    }
+
+    Ok(())
 }
 
 pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
@@ -569,6 +1131,34 @@ pub fn parse_field_attrs(field: &Field) -> syn::Result<Option<FieldAttrs>> {
         };
 
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("meta") || meta.path.is_ident("group") {
+                if has_nested_meta(&meta) {
+                    meta.parse_nested_meta(|nested| {
+                        apply_field_meta(
+                            nested,
+                            &mut placement,
+                            &mut required,
+                            &mut name,
+                            &mut container,
+                            &mut children_map,
+                            &mut flatten,
+                            &mut map_node,
+                            &mut registry_key,
+                            &mut default_spec,
+                            &mut default_count,
+                            &mut skip_serializing_if,
+                            &mut skip,
+                            &mut bool_mode,
+                            &mut flag_style,
+                            &mut conflict,
+                            &mut render,
+                            &mut scalar,
+                            &mut schema,
+                        )
+                    })?;
+                }
+                return Ok(());
+            }
             if meta.path.is_ident("attr") {
                 placement.attr = true;
             } else if meta.path.is_ident("keyed") {

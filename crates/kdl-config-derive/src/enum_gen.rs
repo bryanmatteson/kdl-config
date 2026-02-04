@@ -37,32 +37,7 @@ fn parse_variant_attrs(attrs: &[Attribute]) -> syn::Result<VariantAttrs> {
         if !attr.path().is_ident("kdl") {
             continue;
         }
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("name") || meta.path.is_ident("rename") {
-                let value: Expr = meta.value()?.parse()?;
-                if let Expr::Lit(ExprLit {
-                    lit: Lit::Str(lit), ..
-                }) = value
-                {
-                    result.name = Some(lit.value());
-                } else {
-                    return Err(syn::Error::new(
-                        value.span(),
-                        "expected string literal for `name`",
-                    ));
-                }
-            } else if meta.path.is_ident("tag") {
-                let value: Expr = meta.value()?.parse()?;
-                let tag = parse_tag_expr(&value)?;
-                result.tag = Some(tag);
-            } else {
-                return Err(syn::Error::new(
-                    meta.path.span(),
-                    "unknown enum variant attribute",
-                ));
-            }
-            Ok(())
-        })?;
+        attr.parse_nested_meta(|meta| apply_variant_meta(meta, &mut result))?;
     }
     if result.name.is_none() {
         if let Some(rename) = serde_rename_from_attrs(attrs)? {
@@ -70,6 +45,44 @@ fn parse_variant_attrs(attrs: &[Attribute]) -> syn::Result<VariantAttrs> {
         }
     }
     Ok(result)
+}
+
+fn apply_variant_meta(
+    meta: syn::meta::ParseNestedMeta,
+    result: &mut VariantAttrs,
+) -> syn::Result<()> {
+    if meta.path.is_ident("meta") || meta.path.is_ident("group") {
+        if !meta.input.is_empty() {
+            meta.parse_nested_meta(|nested| apply_variant_meta(nested, result))?;
+        }
+        return Ok(());
+    }
+
+    if meta.path.is_ident("name") || meta.path.is_ident("rename") {
+        let value: Expr = meta.value()?.parse()?;
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) = value
+        {
+            result.name = Some(lit.value());
+        } else {
+            return Err(syn::Error::new(
+                value.span(),
+                "expected string literal for `name`",
+            ));
+        }
+    } else if meta.path.is_ident("tag") {
+        let value: Expr = meta.value()?.parse()?;
+        let tag = parse_tag_expr(&value)?;
+        result.tag = Some(tag);
+    } else {
+        return Err(syn::Error::new(
+            meta.path.span(),
+            "unknown enum variant attribute",
+        ));
+    }
+
+    Ok(())
 }
 
 fn parse_tag_expr(expr: &Expr) -> syn::Result<VariantTag> {
@@ -287,6 +300,13 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
                 }
 
                 Ok(())
+            }
+
+            fn render_node(&self, _name: &str) -> ::kdl_config::Node {
+                let rendered = match self {
+                    #(#render_arms)*
+                };
+                ::kdl_config::parse_node(&rendered).expect("rendered enum node is invalid KDL")
             }
         }
     })
