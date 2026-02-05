@@ -1,6 +1,6 @@
 //! Container-level (struct/enum) attribute definitions.
 
-use super::types::{BoolMode, ConflictPolicy, DefaultPlacement, FlagStyle, RenameStrategy};
+use super::types::{BoolMode, ConflictPolicy, DefaultPlacement, FlagStyle, RenameStrategy, SelectorAst};
 
 /// Schema overrides for struct-level attributes.
 ///
@@ -50,6 +50,12 @@ pub struct StructAttrs {
     pub default_flag_style: Option<FlagStyle>,
     /// Default conflict resolution policy.
     pub default_conflict: Option<ConflictPolicy>,
+    /// Selector for enum discriminators (tagged enums).
+    pub selector: Option<SelectorAst>,
+    /// Selector options for enum discriminators (tagged enums).
+    pub selector_opts: super::types::SelectOpts,
+    /// Selector spec for enum discriminators (tagged enums).
+    pub selector_spec: Option<super::types::SelectSpec>,
     /// Whether to deny unknown fields/attributes.
     pub deny_unknown: Option<bool>,
     /// Schema overrides.

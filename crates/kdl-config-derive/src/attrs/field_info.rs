@@ -7,8 +7,8 @@ use super::field::{FieldAttrs, FieldPlacement, FieldSchemaOverride};
 use super::parse::parse_field_attrs;
 use super::type_utils::*;
 use super::types::{
-    BoolMode, ChildrenMapKind, ConflictPolicy, DefaultSpec, FlagStyle, RegistryKey, RenameStrategy,
-    RenderPlacement,
+    BoolMode, ChildrenMapKind, CollectionMode, CollectionSpec, ConflictPolicy, DefaultSpec,
+    FlagStyle, RenameStrategy, RenderPlacement, SelectSpec, SelectorAst,
 };
 
 /// Processed field information used for code generation.
@@ -27,10 +27,10 @@ pub struct FieldInfo {
     pub is_modifier: bool,
     pub is_scalar: bool,
     pub is_skipped: bool,
-    pub children_map: bool,
     pub flatten: bool,
     pub map_node: Option<String>,
     pub children_map_kind: Option<ChildrenMapKind>,
+    pub collection: Option<CollectionSpec>,
     pub default: Option<DefaultSpec>,
     pub skip_serializing_if: Option<String>,
     pub bool_mode: Option<BoolMode>,
@@ -38,7 +38,7 @@ pub struct FieldInfo {
     pub conflict: Option<ConflictPolicy>,
     pub render: Option<RenderPlacement>,
     pub container: Option<String>,
-    pub registry_key: Option<RegistryKey>,
+    pub select: Option<SelectSpec>,
     pub schema: FieldSchemaOverride,
 }
 
@@ -76,10 +76,10 @@ impl FieldInfo {
         let err_span = attrs.span;
 
         // Validate tuple field restrictions
-        if attrs.name.is_some() || attrs.container.is_some() || attrs.registry_key.is_some() {
+        if attrs.name.is_some() || attrs.container.is_some() || attrs.select.is_some() {
             return Err(syn::Error::new(
                 err_span,
-                "tuple struct fields only support positional placement without names or registry keys",
+                "tuple struct fields only support positional placement without names or selectors",
             ));
         }
         if attrs.children_map || attrs.map_node.is_some() {
@@ -197,10 +197,10 @@ impl FieldInfo {
             is_modifier,
             is_scalar,
             is_skipped: attrs.skip,
-            children_map: false,
             flatten: false,
             map_node: None,
             children_map_kind: None,
+            collection: None,
             default: attrs.default,
             skip_serializing_if: attrs.skip_serializing_if,
             bool_mode: attrs.bool_mode,
@@ -208,7 +208,7 @@ impl FieldInfo {
             conflict: attrs.conflict,
             render: attrs.render,
             container: None,
-            registry_key: None,
+            select: None,
             schema: attrs.schema,
         }))
     }
@@ -280,6 +280,8 @@ impl FieldInfo {
             err_span,
         )?;
 
+        let collection = build_collection_spec(&attrs, &kdl_key);
+
         Ok(Some(FieldInfo {
             ident,
             ty: ty.clone(),
@@ -294,10 +296,10 @@ impl FieldInfo {
             is_modifier,
             is_scalar,
             is_skipped: attrs.skip,
-            children_map: attrs.children_map,
             flatten: attrs.flatten,
             map_node: attrs.map_node,
             children_map_kind: extract_children_map_types(&ty).map(|(kind, _, _)| kind),
+            collection,
             default: attrs.default,
             skip_serializing_if: attrs.skip_serializing_if,
             bool_mode: attrs.bool_mode,
@@ -305,7 +307,7 @@ impl FieldInfo {
             conflict: attrs.conflict,
             render: attrs.render,
             container: attrs.container,
-            registry_key: attrs.registry_key,
+            select: attrs.select,
             schema: attrs.schema,
         }))
     }
@@ -352,11 +354,11 @@ impl FieldInfo {
                     "flatten cannot be combined with explicit placement",
                 ));
             }
-            if attrs.container.is_some() || attrs.map_node.is_some() || attrs.registry_key.is_some()
+            if attrs.container.is_some() || attrs.map_node.is_some() || attrs.select.is_some()
             {
                 return Err(syn::Error::new(
                     err_span,
-                    "flatten cannot be combined with container, map_node, or registry key options",
+                    "flatten cannot be combined with container, map_node, or selector options",
                 ));
             }
         }
@@ -437,10 +439,10 @@ impl FieldInfo {
                     "children_map does not support container override",
                 ));
             }
-            if attrs.registry_key.is_some() && attrs.map_node.is_none() {
+            if attrs.select.is_some() && attrs.map_node.is_none() {
                 return Err(syn::Error::new(
                     err_span,
-                    "children_map key options require map_node",
+                    "children_map selector options require map_node",
                 ));
             }
         } else if attrs.map_node.is_some() {
@@ -451,14 +453,35 @@ impl FieldInfo {
         }
 
         // Registry key validation
-        if attrs.registry_key.is_some()
+        if attrs.select.is_some()
             && !attrs.placement.registry
             && !(attrs.children_map && attrs.map_node.is_some())
         {
             return Err(syn::Error::new(
                 err_span,
-                "registry key options require #[kdl(registry)] or #[kdl(children_map, map_node = ...)]",
+                "selector options require #[kdl(registry)] or #[kdl(children_map, map_node = ...)]",
             ));
+        }
+
+        if let Some(select) = &attrs.select {
+            if !(attrs.placement.registry
+                || attrs.children_map
+                || attrs.placement.child
+                || attrs.placement.children
+                || attrs.placement.children_any)
+            {
+                return Err(syn::Error::new(
+                    err_span,
+                    "selector options require child/children/registry/children_map placement",
+                ));
+            }
+
+            if attrs.placement.registry {
+                validate_selector_for_collection(&select.selector, err_span)?;
+            }
+            if attrs.children_map && attrs.map_node.is_some() {
+                validate_selector_for_collection(&select.selector, err_span)?;
+            }
         }
 
         // Children placement requires Vec
@@ -520,6 +543,67 @@ fn has_any_placement(p: &FieldPlacement) -> bool {
         || p.children_any
         || p.registry
         || p.modifier
+}
+
+fn validate_selector_for_collection(selector: &SelectorAst, err_span: Span) -> syn::Result<()> {
+    match selector {
+        SelectorAst::Arg(_) | SelectorAst::Attr(_) | SelectorAst::Func(_) => Ok(()),
+        SelectorAst::Any(list) => {
+            for item in list {
+                validate_selector_for_collection(item, err_span)?;
+            }
+            Ok(())
+        }
+        SelectorAst::Name => Err(syn::Error::new(
+            err_span,
+            "name() selector is not valid for registry/children_map key extraction",
+        )),
+    }
+}
+
+fn build_collection_spec(attrs: &FieldAttrs, kdl_key: &str) -> Option<CollectionSpec> {
+    if !(attrs.placement.registry || attrs.children_map) {
+        return None;
+    }
+
+    let mode = if attrs.placement.registry {
+        CollectionMode::Registry {
+            container: attrs
+                .container
+                .clone()
+                .unwrap_or_else(|| kdl_key.to_string()),
+        }
+    } else if let Some(node) = attrs.map_node.clone() {
+        CollectionMode::ChildrenMapNode { node }
+    } else {
+        CollectionMode::ChildrenMapAll
+    };
+
+    let selector = if let Some(spec) = attrs.select.as_ref() {
+        spec.selector.clone()
+    } else if attrs.placement.registry || attrs.map_node.is_some() {
+        SelectorAst::Arg(0)
+    } else {
+        SelectorAst::Name
+    };
+
+    let inject = attrs
+        .select
+        .as_ref()
+        .and_then(|spec| spec.opts.inject.clone());
+
+    let consume = attrs
+        .select
+        .as_ref()
+        .and_then(|spec| spec.opts.consume)
+        .unwrap_or(inject.is_some());
+
+    Some(CollectionSpec {
+        mode,
+        selector,
+        consume,
+        inject,
+    })
 }
 
 /// Check if any value placement is set.

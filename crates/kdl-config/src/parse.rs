@@ -3,7 +3,7 @@ use crate::render::is_valid_identifier;
 use crate::types::{Modifier, Node, NodeLocation, Value};
 use kdl::{KdlDocument, KdlNode, KdlValue};
 
-struct LineIndex {
+pub(crate) struct LineIndex {
     line_starts: Vec<usize>,
     len: usize,
 }

@@ -30,7 +30,9 @@ pub use type_utils::{
     extract_registry_vec_value, is_bool_type, is_numeric_type, is_option_type, is_string_type,
     is_value_type,
 };
+#[allow(unused_imports)]
 pub use types::{
-    BoolMode, ChildrenMapKind, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec,
-    FlagStyle, RegistryKey, RenameStrategy, RenderPlacement, SchemaTypeOverride,
+    BoolMode, ChildrenMapKind, CollectionMode, CollectionSpec, ConflictPolicy, DefaultLiteral,
+    DefaultPlacement, DefaultSpec, FlagStyle, InjectOpt, RenameStrategy, RenderPlacement,
+    SchemaTypeOverride, SelectOpts, SelectSpec, SelectorAst,
 };

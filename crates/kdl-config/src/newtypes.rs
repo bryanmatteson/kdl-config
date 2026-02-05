@@ -4,9 +4,10 @@ use std::str::FromStr;
 
 use crate::schema::{KdlNodeSchema, KdlSchema, SchemaRef, SchemaRegistry, SchemaType, SchemaValue};
 use crate::{
-    FromKdlValue, KdlConfigError, KdlParse, KdlRender, Node, NodeRenderer, ParseConfig, Placement,
-    Value, convert_value_checked, parse_str_roundtrip, parse_str_with_config,
+    DecodeContext, FromKdlValue, KdlConfigError, KdlDecode, KdlNode, KdlNodeExt, KdlRender,
+    NodeRenderer, Placement, Value, convert_value_checked,
 };
+use kdl::KdlValue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -163,14 +164,14 @@ impl fmt::Display for Duration {
 impl FromKdlValue for Duration {
     const TYPE_NAME: &'static str = "duration";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::String(s) => s.parse().ok(),
-            Value::Int(n) => (*n)
+            KdlValue::String(s) => s.parse().ok(),
+            KdlValue::Integer(n) => (*n)
                 .try_into()
                 .ok()
                 .map(|millis: u64| Self(std::time::Duration::from_millis(millis))),
-            Value::Float(f) => duration_from_millis_f64(*f).map(Self),
+            KdlValue::Float(f) => duration_from_millis_f64(*f).map(Self),
             _ => None,
         }
     }
@@ -197,6 +198,23 @@ impl KdlSchema for Duration {
 
     fn register_definitions(registry: &mut SchemaRegistry) {
         let _ = registry;
+    }
+}
+
+impl KdlDecode for Duration {
+    fn decode(node: &KdlNode, _ctx: &DecodeContext) -> Result<Self, KdlConfigError> {
+        let null_value = KdlValue::Null;
+        let value = node
+            .arg(0)
+            .or_else(|| node.iter_children().next().and_then(|child| child.arg(0)))
+            .unwrap_or(&null_value);
+        convert_value_checked::<Duration>(
+            value,
+            "Duration",
+            "duration",
+            "duration",
+            Placement::Value,
+        )
     }
 }
 
@@ -269,10 +287,10 @@ impl From<Weight> for f64 {
 impl FromKdlValue for Weight {
     const TYPE_NAME: &'static str = "weight";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         let raw = match value {
-            Value::Float(f) => *f,
-            Value::Int(n) => *n as f64,
+            KdlValue::Float(f) => *f,
+            KdlValue::Integer(n) => *n as f64,
             _ => return None,
         };
 
@@ -296,10 +314,15 @@ impl KdlSchema for Weight {
     }
 }
 
-impl KdlParse for Weight {
-    fn from_node(node: &Node, _config: &ParseConfig) -> Result<Self, KdlConfigError> {
+impl KdlDecode for Weight {
+    fn decode(node: &KdlNode, _ctx: &DecodeContext) -> Result<Self, KdlConfigError> {
+        let null_value = KdlValue::Null;
+        let value = node
+            .arg(0)
+            .or_else(|| node.iter_children().next().and_then(|child| child.arg(0)))
+            .unwrap_or(&null_value);
         convert_value_checked::<Weight>(
-            &node.value(),
+            value,
             "Weight",
             "weight",
             "weight",
@@ -424,18 +447,18 @@ impl TryFrom<usize> for PositiveCount {
     }
 }
 
-impl KdlParse for PositiveCount {
-    fn from_node(node: &Node, _config: &ParseConfig) -> Result<Self, KdlConfigError> {
-        let val = node.args().first().ok_or_else(|| {
+impl KdlDecode for PositiveCount {
+    fn decode(node: &KdlNode, _ctx: &DecodeContext) -> Result<Self, KdlConfigError> {
+        let value = node.arg(0).ok_or_else(|| {
             KdlConfigError::missing_required(
-                node.name.clone(),
+                "PositiveCount",
                 "value",
                 "value",
                 Placement::AttrPositional,
             )
         })?;
-        <Self as FromKdlValue>::from_value(val)
-            .ok_or_else(|| KdlConfigError::custom(node.name.clone(), "count must be positive"))
+        <Self as FromKdlValue>::from_value(value)
+            .ok_or_else(|| KdlConfigError::custom("PositiveCount", "count must be positive"))
     }
 }
 
@@ -454,7 +477,7 @@ impl KdlRender for PositiveCount {
 
 impl FromKdlValue for PositiveCount {
     const TYPE_NAME: &'static str = "integer";
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         u32::from_value(value).and_then(Self::new)
     }
 }
@@ -469,7 +492,7 @@ impl From<PositiveCount> for Value {
 mod tests {
     use super::{Duration, Weight};
     use crate::FromKdlValue;
-    use crate::Value;
+    use crate::KdlValue;
 
     #[test]
     fn duration_parses_units() {
@@ -500,15 +523,15 @@ mod tests {
 
     #[test]
     fn duration_from_kdl_value() {
-        let val = Value::String("5m".to_string());
+        let val = KdlValue::String("5m".to_string());
         let parsed = Duration::from_value(&val).unwrap();
         assert_eq!(parsed.as_millis(), 300_000);
 
-        let val = Value::Int(250);
+        let val = KdlValue::Integer(250);
         let parsed = Duration::from_value(&val).unwrap();
         assert_eq!(parsed.as_millis(), 250);
 
-        let val = Value::Float(2.5);
+        let val = KdlValue::Float(2.5);
         let parsed = Duration::from_value(&val).unwrap();
         assert_eq!(parsed.as_millis(), 2);
     }

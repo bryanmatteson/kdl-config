@@ -202,9 +202,9 @@ fn generate_kdl_value_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Re
         impl ::kdl_config::FromKdlValue for #enum_name {
             const TYPE_NAME: &'static str = "string";
 
-            fn from_value(value: &::kdl_config::Value) -> ::core::option::Option<Self> {
+            fn from_value(value: &::kdl_config::KdlValue) -> ::core::option::Option<Self> {
                 match value {
-                    ::kdl_config::Value::String(s) => match s.as_str() {
+                    ::kdl_config::KdlValue::String(s) => match s.as_str() {
                         #(#parse_arms)*
                         _ => None,
                     },
@@ -250,7 +250,7 @@ fn generate_kdl_value_struct_impl(
         impl ::kdl_config::FromKdlValue for #struct_name {
             const TYPE_NAME: &'static str = <#inner_type as ::kdl_config::FromKdlValue>::TYPE_NAME;
 
-            fn from_value(value: &::kdl_config::Value) -> ::core::option::Option<Self> {
+            fn from_value(value: &::kdl_config::KdlValue) -> ::core::option::Option<Self> {
                 <#inner_type as ::kdl_config::FromKdlValue>::from_value(value).map(Self)
             }
         }

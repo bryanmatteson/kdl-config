@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
 use crate::types::{Modifier, Node, Value};
+use kdl::KdlValue;
 
 pub fn escape_string(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 2);
@@ -78,6 +79,18 @@ pub fn render_value(value: &Value) -> String {
         Value::String(s) => escape_string(s),
         Value::Path(p) => escape_string(&p.to_string_lossy()),
         Value::Array(arr) => arr.iter().map(render_value).collect::<Vec<_>>().join(" "),
+    }
+}
+
+pub fn value_to_kdl(value: &Value) -> KdlValue {
+    match value {
+        Value::Null => KdlValue::Null,
+        Value::Bool(b) => KdlValue::Bool(*b),
+        Value::Int(n) => KdlValue::Integer(*n),
+        Value::Float(f) => KdlValue::Float(*f),
+        Value::String(s) => KdlValue::String(s.clone()),
+        Value::Path(p) => KdlValue::String(p.to_string_lossy().to_string()),
+        Value::Array(_) => KdlValue::Null,
     }
 }
 
@@ -287,6 +300,17 @@ impl crate::KdlRender for Node {
         }
 
         Ok(())
+    }
+
+    fn render_node(&self, name: &str) -> Node {
+        if name == self.name {
+            self.clone()
+        } else {
+            let mut node = self.clone();
+            node.name = name.to_string();
+            node.name_repr = None;
+            node
+        }
     }
 }
 

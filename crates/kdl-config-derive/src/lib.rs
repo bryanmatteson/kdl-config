@@ -5,6 +5,7 @@ mod kdl_gen;
 mod parse_gen;
 mod render_gen;
 mod schema_gen;
+mod update_gen;
 mod value_gen;
 
 use proc_macro::TokenStream;
@@ -67,10 +68,18 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     );
                     let render_impl =
                         generate_render_impl(struct_name, &struct_attrs, &field_infos);
+                    let update_impl = update_gen::generate_update_impl(
+                        struct_name,
+                        &struct_attrs,
+                        &field_infos,
+                        FieldAccessor::for_self,
+                        None,
+                    );
 
                     Ok(quote::quote! {
                         #parse_impl
                         #render_impl
+                        #update_impl
                     })
                 }
                 Fields::Unnamed(unnamed) => {
@@ -99,11 +108,11 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     let expected_node_name = struct_attrs.resolved_node_name(&struct_name_str);
                     let validate_name = if let Some(ref node_name) = expected_node_name {
                         quote::quote! {
-                            if node.name != #node_name {
+                            if node.name_str() != #node_name {
                                 return Err(::kdl_config::KdlConfigError::node_name_mismatch(
                                     #struct_name_str,
                                     #node_name,
-                                    &node.name,
+                                    node.name_str(),
                                 ));
                             }
                         }
@@ -118,7 +127,7 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                         .collect();
                     let skip_marks: Vec<proc_macro2::TokenStream> = skipped_infos
                         .iter()
-                        .map(|field| crate::parse_gen::generate_skip_marks(field))
+                        .map(|field| crate::parse_gen::generate_skip_marks(field, &struct_name_str))
                         .collect();
 
                     let render_impl = {
@@ -154,22 +163,50 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                         }
                     };
 
+                    let update_impl = {
+                        let binding_defs: Vec<proc_macro2::TokenStream> = (0..tuple_values.len())
+                            .map(|i| {
+                                let ident = syn::Ident::new(
+                                    &format!("__kdl_field_{}", i),
+                                    proc_macro2::Span::call_site(),
+                                );
+                                let index = syn::Index::from(i);
+                                quote::quote! { let #ident = &self.#index; }
+                            })
+                            .collect();
+                        let prelude = quote::quote! { #(#binding_defs)* };
+                        update_gen::generate_update_impl(
+                            struct_name,
+                            &struct_attrs,
+                            &field_infos,
+                            FieldAccessor::binding,
+                            Some(prelude),
+                        )
+                    };
+
                     let parse_impl = quote::quote! {
-                        impl ::kdl_config::KdlParse for #struct_name {
-                            fn from_node(node: &::kdl_config::Node, config: &::kdl_config::ParseConfig) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
-                                #validate_name
-                                let struct_overrides = #struct_overrides;
-                                let struct_config = ::kdl_config::resolve_struct(config, struct_overrides);
-                                let mut used_keys = ::kdl_config::helpers::UsedKeys::new();
+                        impl ::kdl_config::KdlDecode for #struct_name {
+                            fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
+                                let result = (|| {
+                                    use ::kdl_config::KdlNodeExt as _;
+                                    #validate_name
+                                    let struct_overrides = #struct_overrides;
+                                    let struct_config = ::kdl_config::resolve_struct(ctx.config, struct_overrides);
+                                    let mut claims = ::kdl_config::helpers::Claims::new();
 
-                                #(#field_parsers)*
-                                #(#skip_marks)*
+                                    #(#field_parsers)*
+                                    #(#skip_marks)*
 
-                                if struct_config.deny_unknown {
-                                    used_keys.check_unknowns(node, #struct_name_str)?;
-                                }
+                                    if struct_config.deny_unknown {
+                                        claims.check_unknowns(node, #struct_name_str)?;
+                                    }
 
-                                Ok(Self(#(#tuple_values),*))
+                                    Ok(Self(#(#tuple_values),*))
+                                })();
+
+                                result.map_err(|err| {
+                                    err.with_context(ctx.source, ctx.path.as_ref(), Some(node.span().offset()))
+                                })
                             }
                         }
                     };
@@ -177,18 +214,20 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     Ok(quote::quote! {
                         #parse_impl
                         #render_impl
+                        #update_impl
                     })
                 }
                 Fields::Unit => {
                     let struct_name_str = struct_name.to_string();
                     let expected_node_name = struct_attrs.resolved_node_name(&struct_name_str);
+                    let struct_overrides = generate_struct_overrides(&struct_attrs);
                     let validate_name = if let Some(ref node_name) = expected_node_name {
                         quote::quote! {
-                            if node.name != #node_name {
+                            if node.name_str() != #node_name {
                                 return Err(::kdl_config::KdlConfigError::node_name_mismatch(
                                     #struct_name_str,
                                     #node_name,
-                                    &node.name,
+                                    node.name_str(),
                                 ));
                             }
                         }
@@ -197,16 +236,29 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     };
 
                     let parse_impl = quote::quote! {
-                        impl ::kdl_config::KdlParse for #struct_name {
-                            fn from_node(node: &::kdl_config::Node, _config: &::kdl_config::ParseConfig) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
-                                #validate_name
-                                if !node.args().is_empty() || !node.attrs().is_empty() || !node.children().is_empty() {
-                                    return Err(::kdl_config::KdlConfigError::custom(
-                                        #struct_name_str,
-                                        "unit structs do not accept values",
-                                    ));
-                                }
-                                Ok(Self)
+                        impl ::kdl_config::KdlDecode for #struct_name {
+                            fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
+                                let result = (|| {
+                                    use ::kdl_config::KdlNodeExt as _;
+                                    #validate_name
+                                    if !node.args().is_empty() || !node.attrs().is_empty() || node.iter_children().next().is_some() {
+                                        return Err(::kdl_config::KdlConfigError::custom(
+                                            #struct_name_str,
+                                            "unit structs do not accept values",
+                                        ));
+                                    }
+                                    let struct_overrides = #struct_overrides;
+                                    let struct_config = ::kdl_config::resolve_struct(ctx.config, struct_overrides);
+                                    let claims = ::kdl_config::helpers::Claims::new();
+                                    if struct_config.deny_unknown {
+                                        claims.check_unknowns(node, #struct_name_str)?;
+                                    }
+                                    Ok(Self)
+                                })();
+
+                                result.map_err(|err| {
+                                    err.with_context(ctx.source, ctx.path.as_ref(), Some(node.span().offset()))
+                                })
                             }
                         }
                     };
@@ -222,9 +274,22 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                         }
                     };
 
+                    let update_impl = quote::quote! {
+                        impl ::kdl_config::KdlUpdate for #struct_name {
+                            fn update(&self, node: &mut ::kdl_config::KdlNode, _ctx: &::kdl_config::UpdateContext) -> ::core::result::Result<(), ::kdl_config::KdlConfigError> {
+                                node.entries_mut().clear();
+                                if let Some(children) = node.children_mut() {
+                                    children.nodes_mut().clear();
+                                }
+                                Ok(())
+                            }
+                        }
+                    };
+
                     Ok(quote::quote! {
                         #parse_impl
                         #render_impl
+                        #update_impl
                     })
                 }
             }

@@ -3,10 +3,10 @@ use quote::{format_ident, quote};
 use syn::Ident;
 
 use crate::attrs::{
-    BoolMode, ChildrenMapKind, ConflictPolicy, DefaultLiteral, DefaultPlacement, DefaultSpec,
-    FieldInfo, FlagStyle, StructAttrs, extract_children_map_types, extract_hashmap_types,
-    extract_inner_type, has_child_placement, has_value_placement, is_bool_type, is_numeric_type,
-    is_string_type, is_value_type,
+    BoolMode, ChildrenMapKind, CollectionMode, ConflictPolicy, DefaultLiteral, DefaultPlacement,
+    DefaultSpec, FieldInfo, FlagStyle, InjectOpt, SelectorAst, StructAttrs,
+    extract_children_map_types, extract_hashmap_types, extract_inner_type, has_child_placement,
+    has_value_placement, is_bool_type, is_numeric_type, is_string_type, is_value_type,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -16,8 +16,7 @@ enum FieldKind {
     Node,
     NodeVec,
     Flatten,
-    Registry,
-    ChildrenMap,
+    Collection,
     Modifier,
 }
 
@@ -49,11 +48,11 @@ pub fn generate_parse_impl(
 
     let validate_name = if let Some(ref node_name) = expected_node_name {
         quote! {
-            if node.name != #node_name {
+            if !ctx.allow_any_name && node.name_str() != #node_name {
                 return Err(::kdl_config::KdlConfigError::node_name_mismatch(
                     #struct_name_str,
                     #node_name,
-                    &node.name,
+                    node.name_str(),
                 ));
             }
         }
@@ -70,25 +69,26 @@ pub fn generate_parse_impl(
 
     let skip_marks: Vec<TokenStream> = skipped_infos
         .iter()
-        .map(|field| generate_skip_marks(field))
+        .map(|field| generate_skip_marks(field, &struct_name_str))
         .collect();
 
     let field_names: Vec<&Ident> = fields.iter().map(|f| &f.ident).collect();
 
     quote! {
-        impl ::kdl_config::KdlParse for #struct_name {
-            fn from_node(node: &::kdl_config::Node, config: &::kdl_config::ParseConfig) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
+        impl ::kdl_config::KdlDecode for #struct_name {
+            fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
                 let result = (|| {
+                    use ::kdl_config::KdlNodeExt as _;
                     #validate_name
                     let struct_overrides = #struct_overrides;
-                    let struct_config = ::kdl_config::resolve_struct(config, struct_overrides);
-                    let mut used_keys = ::kdl_config::helpers::UsedKeys::new();
+                    let struct_config = ::kdl_config::resolve_struct(ctx.config, struct_overrides);
+                    let mut claims = ::kdl_config::helpers::Claims::new();
 
                     #(#field_parsers)*
                     #(#skip_marks)*
 
                     if struct_config.deny_unknown {
-                        used_keys.check_unknowns(node, #struct_name_str)?;
+                        claims.check_unknowns(node, #struct_name_str)?;
                     }
 
                     Ok(Self {
@@ -97,7 +97,9 @@ pub fn generate_parse_impl(
                     })
                 })();
 
-                result.map_err(|err| err.with_node(node))
+                result.map_err(|err| {
+                    err.with_context(ctx.source, ctx.path.as_ref(), Some(node.span().offset()))
+                })
             }
         }
     }
@@ -168,25 +170,38 @@ pub(crate) fn generate_struct_overrides(struct_attrs: &StructAttrs) -> TokenStre
 }
 
 pub(crate) fn generate_field_parser(field: &FieldInfo, struct_name: &str) -> TokenStream {
-    if field.is_hashmap && !field.placement.registry && !field.children_map {
+    if field.is_hashmap && field.collection.is_none() {
         return quote! { compile_error!("HashMap fields require #[kdl(registry)] or #[kdl(children_map)]"); };
     }
-    if crate::attrs::extract_registry_vec_value(&field.ty).is_some()
-        && !field.placement.registry
-        && !field.children_map
+    if crate::attrs::extract_registry_vec_value(&field.ty).is_some() && field.collection.is_none()
     {
-        return quote! { compile_error!("Vec<(String, T)> registry fields require #[kdl(registry)]"); };
+        return quote! { compile_error!("Vec<(String, T)> fields require #[kdl(registry)] or #[kdl(children_map)]"); };
     }
 
     let field_overrides = generate_field_overrides(field);
     let mark_usage = generate_usage_marks(field);
 
-    match field_kind(field) {
-        FieldKind::Registry => {
-            generate_registry_parser(field, struct_name, &field_overrides, mark_usage)
+    let kind = field_kind(field);
+
+    if field
+        .select
+        .as_ref()
+        .and_then(|spec| spec.opts.inject.as_ref())
+        .is_some()
+    {
+        match kind {
+            FieldKind::Node | FieldKind::NodeVec | FieldKind::Collection => {}
+            _ => {
+                return quote! { compile_error!("inject is only supported for child/children/registry/children_map fields"); };
+            }
         }
-        FieldKind::ChildrenMap => {
-            generate_children_map_parser(field, struct_name, &field_overrides, mark_usage)
+    }
+
+    match kind {
+        FieldKind::Collection => {
+            let collection =
+                field.collection.as_ref().expect("collection fields must have a spec");
+            generate_collection_parser(field, struct_name, &field_overrides, mark_usage, collection)
         }
         FieldKind::Flatten => {
             generate_flatten_parser(field, struct_name, &field_overrides, mark_usage)
@@ -252,11 +267,8 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
     if field.flatten {
         return FieldKind::Flatten;
     }
-    if field.placement.registry {
-        return FieldKind::Registry;
-    }
-    if field.children_map {
-        return FieldKind::ChildrenMap;
+    if field.collection.is_some() {
+        return FieldKind::Collection;
     }
 
     let has_value = has_value_placement(&field.placement);
@@ -292,15 +304,55 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
 }
 
 fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
+    let _ = field;
+    quote! {}
+}
+
+pub(crate) fn generate_skip_marks(field: &FieldInfo, struct_name: &str) -> TokenStream {
     if field.is_modifier {
         return quote! {};
     }
-    if field.children_map {
-        return quote! {};
-    }
-    let mut marks = Vec::new();
+
     let key = field.kdl_key.clone();
-    let container = field.container.clone().unwrap_or_else(|| key.clone());
+    let field_name = field.ident.to_string();
+    let field_overrides = generate_field_overrides(field);
+
+    if let Some(collection) = field.collection.as_ref() {
+        let claims = match &collection.mode {
+            CollectionMode::Registry { container } => {
+                quote! {
+                    for (idx, child) in node.iter_children().enumerate() {
+                        if child.name_str() == #container {
+                            claims.claim_child(idx);
+                        }
+                    }
+                }
+            }
+            CollectionMode::ChildrenMapNode { node } => {
+                quote! {
+                    for (idx, child) in node.iter_children().enumerate() {
+                        if child.name_str() == #node {
+                            claims.claim_child(idx);
+                        }
+                    }
+                }
+            }
+            CollectionMode::ChildrenMapAll => {
+                quote! {
+                    for (idx, _child) in node.iter_children().enumerate() {
+                        claims.claim_child(idx);
+                    }
+                }
+            }
+        };
+        return quote! {
+            if struct_config.deny_unknown {
+                #claims
+            }
+        };
+    }
+
+    let mut marks = Vec::new();
     let has_explicit = field.placement.attr
         || field.placement.keyed
         || field.placement.positional.is_some()
@@ -309,24 +361,37 @@ fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
         || field.placement.value
         || field.placement.child
         || field.placement.children
-        || field.placement.children_any
-        || field.placement.registry;
+        || field.placement.children_any;
 
-    if field.placement.registry {
-        marks.push(quote! { used_keys.mark_child(#container); });
-    } else if has_explicit {
+    if has_explicit {
         if field.placement.children_any {
             marks.push(quote! {
-                for child in node.children() {
-                    used_keys.mark_child(&child.name);
+                for (idx, _child) in node.iter_children().enumerate() {
+                    claims.claim_child(idx);
                 }
             });
         }
         if field.placement.attr || field.placement.keyed {
-            marks.push(quote! { used_keys.mark_attr(#key); });
+            marks.push(quote! { claims.claim_attr(#key); });
+        }
+        if let Some(idx) = field.placement.positional {
+            marks.push(quote! { claims.claim_arg(#idx); });
+        }
+        if field.placement.positional_list {
+            marks.push(quote! {
+                for idx in 0..node.args().len() {
+                    claims.claim_arg(idx);
+                }
+            });
         }
         if field.placement.value || field.placement.child || field.placement.children {
-            marks.push(quote! { used_keys.mark_child(#key); });
+            marks.push(quote! {
+                for (idx, child) in node.iter_children().enumerate() {
+                    if child.name_str() == #key {
+                        claims.claim_child(idx);
+                    }
+                }
+            });
         }
     } else {
         match field_kind(field) {
@@ -334,40 +399,99 @@ fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
                 marks.push(quote! {
                     match struct_config.default_placement {
                         ::kdl_config::DefaultPlacement::Exhaustive => {
-                            used_keys.mark_attr(#key);
-                            used_keys.mark_child(#key);
+                            claims.claim_attr(#key);
+                            for (idx, child) in node.iter_children().enumerate() {
+                                if child.name_str() == #key {
+                                    claims.claim_child(idx);
+                                }
+                            }
                         }
                         ::kdl_config::DefaultPlacement::Attr => {
-                            used_keys.mark_attr(#key);
+                            claims.claim_attr(#key);
                         }
                         ::kdl_config::DefaultPlacement::Value | ::kdl_config::DefaultPlacement::Child => {
-                            used_keys.mark_child(#key);
+                            for (idx, child) in node.iter_children().enumerate() {
+                                if child.name_str() == #key {
+                                    claims.claim_child(idx);
+                                }
+                            }
                         }
                     }
                 });
             }
             FieldKind::Node | FieldKind::NodeVec => {
-                // Marked during parsing based on actual child names.
+                marks.push(quote! {
+                    match struct_config.default_placement {
+                        ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
+                            for (idx, child) in node.iter_children().enumerate() {
+                                if child.name_str() == #key {
+                                    claims.claim_child(idx);
+                                }
+                            }
+                        }
+                        ::kdl_config::DefaultPlacement::Attr | ::kdl_config::DefaultPlacement::Value => {}
+                    }
+                });
             }
             FieldKind::Flatten => {
                 marks.push(quote! {
                     for key in node.attrs().keys() {
-                        used_keys.mark_attr(key);
+                        claims.claim_attr(key);
                     }
                     for (idx, _) in node.args().iter().enumerate() {
-                        used_keys.mark_arg(idx);
+                        claims.claim_arg(idx);
                     }
-                    for child in node.children() {
-                        used_keys.mark_child(&child.name);
+                    for (idx, _child) in node.iter_children().enumerate() {
+                        claims.claim_child(idx);
                     }
                 });
             }
-            FieldKind::Registry => {
-                marks.push(quote! { used_keys.mark_child(#container); });
-            }
-            FieldKind::ChildrenMap => {}
+            FieldKind::Collection => {}
             FieldKind::Modifier => {}
         }
+    }
+
+    if field.is_bool {
+        let (custom_pos, custom_neg) = match &field.placement.flag {
+            Some((pos, neg)) => (pos.clone(), neg.clone()),
+            None => (None, None),
+        };
+        let custom_pos_expr = match custom_pos {
+            Some(ref s) => quote! { Some(#s.to_string()) },
+            None => quote! { None },
+        };
+        let custom_neg_expr = match custom_neg {
+            Some(ref s) => quote! { Some(#s.to_string()) },
+            None => quote! { None },
+        };
+        let allow_flags =
+            field.placement.flag.is_some() || (field.placement.attr && !field.placement.keyed);
+        let has_explicit_expr = has_explicit;
+        marks.push(quote! {
+            let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
+            let custom_pos = #custom_pos_expr;
+            let custom_neg = #custom_neg_expr;
+            let flags_allowed = if #has_explicit_expr {
+                #allow_flags
+            } else {
+                matches!(field_config.default_placement, ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Attr)
+            };
+            if flags_allowed && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly {
+                if let Some((_flag_val, flag_indices)) = ::kdl_config::helpers::scan_flag_with_style(
+                    node,
+                    #key,
+                    field_config.flag_style,
+                    custom_pos,
+                    custom_neg,
+                    #struct_name,
+                    #field_name,
+                )? {
+                    for idx in flag_indices {
+                        claims.claim_arg(idx);
+                    }
+                }
+            }
+        });
     }
 
     if marks.is_empty() {
@@ -381,196 +505,21 @@ fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
     }
 }
 
-pub(crate) fn generate_skip_marks(field: &FieldInfo) -> TokenStream {
-    if field.is_modifier {
-        return quote! {};
-    }
-    if field.children_map {
-        let map_node = field.map_node.clone();
-        let marks = if let Some(map_node) = map_node {
-            quote! { used_keys.mark_child(#map_node); }
-        } else {
-            quote! {
-                for child in node.children() {
-                    used_keys.mark_child(&child.name);
-                }
-            }
-        };
-        return quote! {
-            if struct_config.deny_unknown {
-                #marks
-            }
-        };
-    }
-
-    let mut marks = Vec::new();
-    let key = field.kdl_key.clone();
-    let container = field.container.clone().unwrap_or_else(|| key.clone());
-
-    let has_explicit = field.placement.attr
-        || field.placement.keyed
-        || field.placement.positional.is_some()
-        || field.placement.positional_list
-        || field.placement.flag.is_some()
-        || field.placement.value
-        || field.placement.child
-        || field.placement.children
-        || field.placement.children_any
-        || field.placement.registry;
-
-    if field.placement.registry {
-        marks.push(quote! { used_keys.mark_child(#container); });
-    } else if has_explicit {
-        if field.placement.children_any {
-            marks.push(quote! {
-                for child in node.children() {
-                    used_keys.mark_child(&child.name);
-                }
-            });
-        }
-        if field.placement.attr || field.placement.keyed {
-            marks.push(quote! { used_keys.mark_attr(#key); });
-        }
-        if let Some(idx) = field.placement.positional {
-            marks.push(quote! { used_keys.mark_arg(#idx); });
-        }
-        if field.placement.positional_list {
-            marks.push(quote! {
-                for idx in 0..node.args().len() {
-                    used_keys.mark_arg(idx);
-                }
-            });
-        }
-        if field.placement.value || field.placement.child || field.placement.children {
-            marks.push(quote! { used_keys.mark_child(#key); });
-        }
-    } else {
-        match field_kind(field) {
-            FieldKind::ValueScalar | FieldKind::ValueVec => {
-                marks.push(quote! {
-                    match struct_config.default_placement {
-                        ::kdl_config::DefaultPlacement::Exhaustive => {
-                            used_keys.mark_attr(#key);
-                            used_keys.mark_child(#key);
-                        }
-                        ::kdl_config::DefaultPlacement::Attr => {
-                            used_keys.mark_attr(#key);
-                        }
-                        ::kdl_config::DefaultPlacement::Value | ::kdl_config::DefaultPlacement::Child => {
-                            used_keys.mark_child(#key);
-                        }
-                    }
-                });
-            }
-            FieldKind::Node | FieldKind::NodeVec => {
-                marks.push(quote! {
-                    match struct_config.default_placement {
-                        ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
-                            used_keys.mark_child(#key);
-                        }
-                        ::kdl_config::DefaultPlacement::Attr | ::kdl_config::DefaultPlacement::Value => {}
-                    }
-                });
-            }
-            FieldKind::Flatten => {
-                marks.push(quote! {
-                    for key in node.attrs().keys() {
-                        used_keys.mark_attr(key);
-                    }
-                    for (idx, _) in node.args().iter().enumerate() {
-                        used_keys.mark_arg(idx);
-                    }
-                    for child in node.children() {
-                        used_keys.mark_child(&child.name);
-                    }
-                });
-            }
-            FieldKind::Registry => {
-                marks.push(quote! { used_keys.mark_child(#container); });
-            }
-            FieldKind::ChildrenMap => {}
-            FieldKind::Modifier => {}
-        }
-    }
-
-    let field_overrides = generate_field_overrides(field);
-    let field_config_ident = format_ident!("__kdl_skip_cfg_{}", field.ident);
-    let is_value_scalar = matches!(field_kind(field), FieldKind::ValueScalar);
-    let mut flag_marks = Vec::new();
-
-    if field.is_bool {
-        let allow_flags_explicit =
-            field.placement.flag.is_some() || (field.placement.attr && !field.placement.keyed);
-
-        let (custom_pos, custom_neg) = match &field.placement.flag {
-            Some((Some(pos), Some(neg))) => (Some(pos.clone()), Some(neg.clone())),
-            _ => (None, None),
-        };
-
-        let custom_pos_expr = match custom_pos {
-            Some(ref s) => quote! { Some(#s.to_string()) },
-            None => quote! { None },
-        };
-        let custom_neg_expr = match custom_neg {
-            Some(ref s) => quote! { Some(#s.to_string()) },
-            None => quote! { None },
-        };
-
-        let allow_flags_default = quote! {
-            matches!(struct_config.default_placement, ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Attr)
-        };
-
-        flag_marks.push(quote! {
-            if #field_config_ident.bool_mode != ::kdl_config::BoolMode::ValueOnly {
-                let allow_flags = if #has_explicit {
-                    #allow_flags_explicit
-                } else {
-                    #allow_flags_default && #is_value_scalar
-                };
-
-                if allow_flags {
-                    let custom_pos = #custom_pos_expr;
-                    let custom_neg = #custom_neg_expr;
-                    let (pos, neg) = if let (Some(pos), Some(neg)) = (custom_pos, custom_neg) {
-                        (pos, neg)
-                    } else {
-                        ::kdl_config::helpers::flag_names_for_key(#key, #field_config_ident.flag_style)
-                    };
-                    used_keys.mark_flag(&pos);
-                    used_keys.mark_flag(&neg);
-                }
-            }
-        });
-    }
-
-    if marks.is_empty() && flag_marks.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            if struct_config.deny_unknown {
-                let #field_config_ident = ::kdl_config::resolve_field(&struct_config, #field_overrides);
-                #(#marks)*
-                #(#flag_marks)*
-            }
-        }
-    }
-}
-
 fn generate_modifier_parser(field: &FieldInfo) -> TokenStream {
     let field_ident = &field.ident;
     let ty = &field.ty;
 
     if field.is_optional {
         quote! {
-            let #field_ident: #ty = if node.modifier == ::kdl_config::Modifier::Inherit {
+            let #field_ident: #ty = if node.modifier() == ::kdl_config::Modifier::Inherit {
                 None
             } else {
-                Some(node.modifier)
+                Some(node.modifier())
             };
         }
     } else {
         quote! {
-            let #field_ident: #ty = node.modifier;
+            let #field_ident: #ty = node.modifier();
         }
     }
 }
@@ -599,6 +548,8 @@ fn generate_value_scalar_parser(
 
     let is_optional = field.is_optional;
     let is_bool = field.is_bool;
+    let source_ident = format_ident!("__kdl_scalar_source_{}", field_ident);
+    let candidates_ident = format_ident!("__kdl_scalar_candidates_{}", field_ident);
 
     let allow_attr_keyed =
         field.placement.keyed || (field.placement.attr && field.placement.flag.is_none());
@@ -644,32 +595,45 @@ fn generate_value_scalar_parser(
     quote! {
         #mark_usage
         let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
-        let mut #field_ident: ::core::option::Option<#value_ty> = None;
-
         let custom_pos = #custom_pos_expr;
         let custom_neg = #custom_neg_expr;
         let pos_index = #pos_index_expr;
         let has_placement = #allow_attr_keyed || #allow_value || pos_index.is_some() || #allow_attr_positional_list || #allow_flags;
 
-        if !has_placement {
-            if #is_bool && field_config.bool_mode == ::kdl_config::BoolMode::ValueOnly {
-                let flag_val = ::kdl_config::helpers::find_flag_with_style(
-                    node,
-                    #kdl_key,
-                    field_config.flag_style,
-                    custom_pos.clone(),
-                    custom_neg.clone(),
+        enum #source_ident {
+            AttrKeyed,
+            Arg(usize),
+            Flag(Vec<usize>),
+            Child(usize),
+        }
+
+        let mut #candidates_ident: ::std::vec::Vec<(#value_ty, #source_ident)> = ::std::vec::Vec::new();
+
+        let flags_allowed = if has_placement {
+            #allow_flags
+        } else {
+            matches!(field_config.default_placement, ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Attr)
+        };
+
+        if #is_bool && field_config.bool_mode == ::kdl_config::BoolMode::ValueOnly && flags_allowed {
+            if let Some((_flag_val, _flag_indices)) = ::kdl_config::helpers::scan_flag_with_style(
+                node,
+                #kdl_key,
+                field_config.flag_style,
+                custom_pos.clone(),
+                custom_neg.clone(),
+                #struct_name,
+                #field_name,
+            )? {
+                return Err(::kdl_config::KdlConfigError::incompatible_placement(
                     #struct_name,
                     #field_name,
-                )?;
-                if flag_val.is_some() {
-                    return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                        #struct_name,
-                        #field_name,
-                        "flag placement is not allowed for value-only bools",
-                    ));
-                }
+                    "flag placement is not allowed for value-only bools",
+                ));
             }
+        }
+
+        if !has_placement {
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive => {
                     if let Some(#attr_values_ident) = node.attr_values(#kdl_key) {
@@ -681,8 +645,14 @@ fn generate_value_scalar_parser(
                                     "explicit values are not allowed in presence-only mode",
                                 ));
                             }
-                            let v = ::kdl_config::convert_value_checked::<#value_ty>(#attr_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
-                            ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
+                            let v = ::kdl_config::convert_value_checked::<#value_ty>(
+                                #attr_value_ident,
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::AttrKeyed,
+                            )?;
+                            #candidates_ident.push((v, #source_ident::AttrKeyed));
                         }
                     }
 
@@ -695,57 +665,62 @@ fn generate_value_scalar_parser(
                                     "explicit values are not allowed in presence-only mode",
                                 ));
                             }
-                            let v = ::kdl_config::convert_value_checked::<#value_ty>(#arg_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
-                            ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
-                            if struct_config.deny_unknown {
-                                used_keys.mark_arg(idx);
-                            }
+                            let v = ::kdl_config::convert_value_checked::<#value_ty>(
+                                #arg_value_ident,
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::AttrPositional,
+                            )?;
+                            #candidates_ident.push((v, #source_ident::Arg(idx)));
                         }
                     }
 
                     if #is_bool && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly {
-                        let flag_val = if struct_config.deny_unknown {
-                            ::kdl_config::helpers::find_flag_with_style_marked(
-                                node,
-                                #kdl_key,
-                                field_config.flag_style,
-                                custom_pos.clone(),
-                                custom_neg.clone(),
-                                #struct_name,
-                                #field_name,
-                                Some(&mut used_keys),
-                            )?
-                        } else {
-                            ::kdl_config::helpers::find_flag_with_style(
-                                node,
-                                #kdl_key,
-                                field_config.flag_style,
-                                custom_pos.clone(),
-                                custom_neg.clone(),
-                                #struct_name,
-                                #field_name,
-                            )?
-                        };
-                        if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
-                            if let Some(false) = flag_val {
+                        if let Some((flag_val, flag_indices)) = ::kdl_config::helpers::scan_flag_with_style(
+                            node,
+                            #kdl_key,
+                            field_config.flag_style,
+                            custom_pos.clone(),
+                            custom_neg.clone(),
+                            #struct_name,
+                            #field_name,
+                        )? {
+                            if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly && flag_val == false {
                                 return Err(::kdl_config::KdlConfigError::incompatible_placement(
                                     #struct_name,
                                     #field_name,
                                     "negative flags are not allowed in presence-only mode",
                                 ));
                             }
-                        }
-                        if let Some(flag_val) = flag_val {
-                            let v: #value_ty = ::kdl_config::convert_value_checked(&::kdl_config::Value::Bool(flag_val), #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrFlag)?;
-                            ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrFlag)?;
+                            let v: #value_ty = ::kdl_config::convert_value_checked(
+                                &::kdl_config::KdlValue::Bool(flag_val),
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::AttrFlag,
+                            )?;
+                            #candidates_ident.push((v, #source_ident::Flag(flag_indices)));
                         }
                     }
 
-                    for #child_ident in node.children_named(#kdl_key) {
+                    for (child_index, #child_ident) in node.iter_children().enumerate() {
+                        if #child_ident.name_str() != #kdl_key {
+                            continue;
+                        }
                         if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
-                            if #child_ident.args().is_empty() && #child_ident.children().is_empty() && #child_ident.attrs().is_empty() {
-                                let v: #value_ty = ::kdl_config::convert_value_checked(&::kdl_config::Value::Bool(true), #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
-                                ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
+                            if #child_ident.args().is_empty()
+                                && #child_ident.iter_children().next().is_none()
+                                && #child_ident.attrs().is_empty()
+                            {
+                                let v: #value_ty = ::kdl_config::convert_value_checked(
+                                    &::kdl_config::KdlValue::Bool(true),
+                                    #struct_name,
+                                    #field_name,
+                                    #kdl_key,
+                                    ::kdl_config::Placement::Value,
+                                )?;
+                                #candidates_ident.push((v, #source_ident::Child(child_index)));
                             } else {
                                 return Err(::kdl_config::KdlConfigError::incompatible_placement(
                                     #struct_name,
@@ -753,32 +728,46 @@ fn generate_value_scalar_parser(
                                     "explicit values are not allowed in presence-only mode",
                                 ));
                             }
-                        } else {
-                            if #child_ident.args().is_empty() {
-                                if #is_bool && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly && #child_ident.children().is_empty() && #child_ident.attrs().is_empty() {
-                                    let v: #value_ty = ::kdl_config::convert_value_checked(&::kdl_config::Value::Bool(true), #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
-                                    ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
-                                } else {
-                                    return Err(::kdl_config::KdlConfigError::missing_required(
-                                        #struct_name,
-                                        #field_name,
-                                        #kdl_key,
-                                        ::kdl_config::Placement::Value,
-                                    ));
-                                }
-                            } else if #child_ident.args().len() == 1 {
-                                let #child_arg_ident = &#child_ident.args()[0];
-                                let v = ::kdl_config::convert_value_checked::<#value_ty>(#child_arg_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
-                                ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
-                            } else {
-                                return Err(::kdl_config::KdlConfigError::too_many(
+                        } else if #child_ident.args().is_empty() {
+                            if #is_bool
+                                && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly
+                                && #child_ident.iter_children().next().is_none()
+                                && #child_ident.attrs().is_empty()
+                            {
+                                let v: #value_ty = ::kdl_config::convert_value_checked(
+                                    &::kdl_config::KdlValue::Bool(true),
                                     #struct_name,
                                     #field_name,
                                     #kdl_key,
                                     ::kdl_config::Placement::Value,
-                                    #child_ident.args().len(),
+                                )?;
+                                #candidates_ident.push((v, #source_ident::Child(child_index)));
+                            } else {
+                                return Err(::kdl_config::KdlConfigError::missing_required(
+                                    #struct_name,
+                                    #field_name,
+                                    #kdl_key,
+                                    ::kdl_config::Placement::Value,
                                 ));
                             }
+                        } else if #child_ident.args().len() == 1 {
+                            let #child_arg_ident = &#child_ident.args()[0];
+                            let v = ::kdl_config::convert_value_checked::<#value_ty>(
+                                #child_arg_ident,
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::Value,
+                            )?;
+                            #candidates_ident.push((v, #source_ident::Child(child_index)));
+                        } else {
+                            return Err(::kdl_config::KdlConfigError::too_many(
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::Value,
+                                #child_ident.args().len(),
+                            ));
                         }
                     }
                 }
@@ -792,68 +781,63 @@ fn generate_value_scalar_parser(
                                     "explicit values are not allowed in presence-only mode",
                                 ));
                             }
-                            let v = ::kdl_config::convert_value_checked::<#value_ty>(#attr_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
-                            ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
+                            let v = ::kdl_config::convert_value_checked::<#value_ty>(
+                                #attr_value_ident,
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::AttrKeyed,
+                            )?;
+                            #candidates_ident.push((v, #source_ident::AttrKeyed));
                         }
                     }
+
                     if #is_bool && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly {
-                        let flag_val = if struct_config.deny_unknown {
-                            ::kdl_config::helpers::find_flag_with_style_marked(
-                                node,
-                                #kdl_key,
-                                field_config.flag_style,
-                                custom_pos.clone(),
-                                custom_neg.clone(),
-                                #struct_name,
-                                #field_name,
-                                Some(&mut used_keys),
-                            )?
-                        } else {
-                            ::kdl_config::helpers::find_flag_with_style(
-                                node,
-                                #kdl_key,
-                                field_config.flag_style,
-                                custom_pos.clone(),
-                                custom_neg.clone(),
-                                #struct_name,
-                                #field_name,
-                            )?
-                        };
-                        if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
-                            if let Some(false) = flag_val {
+                        if let Some((flag_val, flag_indices)) = ::kdl_config::helpers::scan_flag_with_style(
+                            node,
+                            #kdl_key,
+                            field_config.flag_style,
+                            custom_pos.clone(),
+                            custom_neg.clone(),
+                            #struct_name,
+                            #field_name,
+                        )? {
+                            if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly && flag_val == false {
                                 return Err(::kdl_config::KdlConfigError::incompatible_placement(
                                     #struct_name,
                                     #field_name,
                                     "negative flags are not allowed in presence-only mode",
                                 ));
                             }
-                        }
-                        if let Some(flag_val) = flag_val {
-                            let v: #value_ty = ::kdl_config::convert_value_checked(&::kdl_config::Value::Bool(flag_val), #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrFlag)?;
-                            ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrFlag)?;
+                            let v: #value_ty = ::kdl_config::convert_value_checked(
+                                &::kdl_config::KdlValue::Bool(flag_val),
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::AttrFlag,
+                            )?;
+                            #candidates_ident.push((v, #source_ident::Flag(flag_indices)));
                         }
                     }
                 }
                 ::kdl_config::DefaultPlacement::Value => {
-                    for #child_ident in node.children_named(#kdl_key) {
+                    for (child_index, #child_ident) in node.iter_children().enumerate() {
+                        if #child_ident.name_str() != #kdl_key {
+                            continue;
+                        }
                         if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
-                            if #child_ident.args().is_empty() && #child_ident.children().is_empty() && #child_ident.attrs().is_empty() {
+                            if #child_ident.args().is_empty()
+                                && #child_ident.iter_children().next().is_none()
+                                && #child_ident.attrs().is_empty()
+                            {
                                 let v: #value_ty = ::kdl_config::convert_value_checked(
-                                    &::kdl_config::Value::Bool(true),
+                                    &::kdl_config::KdlValue::Bool(true),
                                     #struct_name,
                                     #field_name,
                                     #kdl_key,
                                     ::kdl_config::Placement::Value,
                                 )?;
-                                ::kdl_config::helpers::resolve_scalar(
-                                    field_config.conflict,
-                                    &mut #field_ident,
-                                    v,
-                                    #struct_name,
-                                    #field_name,
-                                    #kdl_key,
-                                    ::kdl_config::Placement::Value,
-                                )?;
+                                #candidates_ident.push((v, #source_ident::Child(child_index)));
                             } else {
                                 return Err(::kdl_config::KdlConfigError::incompatible_placement(
                                     #struct_name,
@@ -861,199 +845,20 @@ fn generate_value_scalar_parser(
                                     "explicit values are not allowed in presence-only mode",
                                 ));
                             }
-                        } else {
-                            if #child_ident.args().is_empty() {
-                                if #is_bool && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly && #child_ident.children().is_empty() && #child_ident.attrs().is_empty() {
-                                    let v: #value_ty = ::kdl_config::convert_value_checked(
-                                        &::kdl_config::Value::Bool(true),
-                                        #struct_name,
-                                        #field_name,
-                                        #kdl_key,
-                                        ::kdl_config::Placement::Value,
-                                    )?;
-                                    ::kdl_config::helpers::resolve_scalar(
-                                        field_config.conflict,
-                                        &mut #field_ident,
-                                        v,
-                                        #struct_name,
-                                        #field_name,
-                                        #kdl_key,
-                                        ::kdl_config::Placement::Value,
-                                    )?;
-                                } else {
-                                    return Err(::kdl_config::KdlConfigError::missing_required(
-                                        #struct_name,
-                                        #field_name,
-                                        #kdl_key,
-                                        ::kdl_config::Placement::Value,
-                                    ));
-                                }
-                            } else if #child_ident.args().len() == 1 {
-                                let v = ::kdl_config::convert_value_checked::<#value_ty>(
-                                    &#child_ident.args()[0],
+                        } else if #child_ident.args().is_empty() {
+                            if #is_bool
+                                && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly
+                                && #child_ident.iter_children().next().is_none()
+                                && #child_ident.attrs().is_empty()
+                            {
+                                let v: #value_ty = ::kdl_config::convert_value_checked(
+                                    &::kdl_config::KdlValue::Bool(true),
                                     #struct_name,
                                     #field_name,
                                     #kdl_key,
                                     ::kdl_config::Placement::Value,
                                 )?;
-                                ::kdl_config::helpers::resolve_scalar(
-                                    field_config.conflict,
-                                    &mut #field_ident,
-                                    v,
-                                    #struct_name,
-                                    #field_name,
-                                    #kdl_key,
-                                    ::kdl_config::Placement::Value,
-                                )?;
-                            } else {
-                                return Err(::kdl_config::KdlConfigError::too_many(
-                                    #struct_name,
-                                    #field_name,
-                                    #kdl_key,
-                                    ::kdl_config::Placement::Value,
-                                    #child_ident.args().len(),
-                                ));
-                            }
-                        }
-                    }
-                }
-                ::kdl_config::DefaultPlacement::Child => {
-                    return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                        #struct_name,
-                        #field_name,
-                        "child placement is incompatible with scalar value types",
-                    ));
-                }
-            }
-        } else {
-            if !#allow_attr_keyed {
-                if node.attr_values(#kdl_key).is_some() {
-                    return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                        #struct_name,
-                        #field_name,
-                        "keyed attribute placement is not allowed for this field",
-                    ));
-                }
-            }
-
-            if !#allow_value {
-                if node.children_named(#kdl_key).next().is_some() {
-                    return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                        #struct_name,
-                        #field_name,
-                        "value placement is not allowed for this field",
-                    ));
-                }
-            }
-
-            if #is_bool && (!#allow_flags || field_config.bool_mode == ::kdl_config::BoolMode::ValueOnly) {
-                let flag_val = ::kdl_config::helpers::find_flag_with_style(
-                    node,
-                    #kdl_key,
-                    field_config.flag_style,
-                    custom_pos.clone(),
-                    custom_neg.clone(),
-                    #struct_name,
-                    #field_name,
-                )?;
-                if flag_val.is_some() {
-                    return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                        #struct_name,
-                        #field_name,
-                        "flag placement is not allowed for this field",
-                    ));
-                }
-            }
-
-            if #allow_attr_keyed {
-                if let Some(#attr_values_ident) = node.attr_values(#kdl_key) {
-                    for #attr_value_ident in #attr_values_ident {
-                        if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
-                            return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                                #struct_name,
-                                #field_name,
-                                "explicit values are not allowed in presence-only mode",
-                            ));
-                        }
-                        let v = ::kdl_config::convert_value_checked::<#value_ty>(#attr_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
-                        ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
-                    }
-                }
-            }
-
-            if let Some(idx) = pos_index {
-                if let Some(#arg_value_ident) = node.arg(idx) {
-                    if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
-                        return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                            #struct_name,
-                            #field_name,
-                            "explicit values are not allowed in presence-only mode",
-                        ));
-                    }
-                    let v = ::kdl_config::convert_value_checked::<#value_ty>(#arg_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
-                    ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
-                    if struct_config.deny_unknown {
-                        used_keys.mark_arg(idx);
-                    }
-                }
-            }
-
-            if #is_bool && #allow_flags && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly {
-                let flag_val = if struct_config.deny_unknown {
-                    ::kdl_config::helpers::find_flag_with_style_marked(
-                        node,
-                        #kdl_key,
-                        field_config.flag_style,
-                        custom_pos.clone(),
-                        custom_neg.clone(),
-                        #struct_name,
-                        #field_name,
-                        Some(&mut used_keys),
-                    )?
-                } else {
-                    ::kdl_config::helpers::find_flag_with_style(
-                        node,
-                        #kdl_key,
-                        field_config.flag_style,
-                        custom_pos.clone(),
-                        custom_neg.clone(),
-                        #struct_name,
-                        #field_name,
-                    )?
-                };
-                if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
-                    if let Some(false) = flag_val {
-                        return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                            #struct_name,
-                            #field_name,
-                            "negative flags are not allowed in presence-only mode",
-                        ));
-                    }
-                }
-                if let Some(flag_val) = flag_val {
-                    let v: #value_ty = ::kdl_config::convert_value_checked(&::kdl_config::Value::Bool(flag_val), #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrFlag)?;
-                    ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrFlag)?;
-                }
-            }
-
-            if #allow_value {
-                for #child_ident in node.children_named(#kdl_key) {
-                    if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
-                        if #child_ident.args().is_empty() && #child_ident.children().is_empty() && #child_ident.attrs().is_empty() {
-                            let v: #value_ty = ::kdl_config::convert_value_checked(&::kdl_config::Value::Bool(true), #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
-                            ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
-                        } else {
-                            return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                                #struct_name,
-                                #field_name,
-                                "explicit values are not allowed in presence-only mode",
-                            ));
-                        }
-                    } else {
-                        if #child_ident.args().is_empty() {
-                            if #is_bool && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly && #child_ident.children().is_empty() && #child_ident.attrs().is_empty() {
-                                let v: #value_ty = ::kdl_config::convert_value_checked(&::kdl_config::Value::Bool(true), #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
-                                ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
+                                #candidates_ident.push((v, #source_ident::Child(child_index)));
                             } else {
                                 return Err(::kdl_config::KdlConfigError::missing_required(
                                     #struct_name,
@@ -1063,9 +868,14 @@ fn generate_value_scalar_parser(
                                 ));
                             }
                         } else if #child_ident.args().len() == 1 {
-                            let #child_arg_ident = &#child_ident.args()[0];
-                            let v = ::kdl_config::convert_value_checked::<#value_ty>(#child_arg_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
-                            ::kdl_config::helpers::resolve_scalar(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
+                            let v = ::kdl_config::convert_value_checked::<#value_ty>(
+                                &#child_ident.args()[0],
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::Value,
+                            )?;
+                            #candidates_ident.push((v, #source_ident::Child(child_index)));
                         } else {
                             return Err(::kdl_config::KdlConfigError::too_many(
                                 #struct_name,
@@ -1077,17 +887,201 @@ fn generate_value_scalar_parser(
                         }
                     }
                 }
+                ::kdl_config::DefaultPlacement::Child => {}
+            }
+        } else {
+            if #allow_attr_keyed {
+                if let Some(#attr_values_ident) = node.attr_values(#kdl_key) {
+                    for #attr_value_ident in #attr_values_ident {
+                        if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
+                            return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                                #struct_name,
+                                #field_name,
+                                "explicit values are not allowed in presence-only mode",
+                            ));
+                        }
+                        let v = ::kdl_config::convert_value_checked::<#value_ty>(
+                            #attr_value_ident,
+                            #struct_name,
+                            #field_name,
+                            #kdl_key,
+                            ::kdl_config::Placement::AttrKeyed,
+                        )?;
+                        #candidates_ident.push((v, #source_ident::AttrKeyed));
+                    }
+                }
+            }
+            if let Some(idx) = pos_index {
+                if let Some(#arg_value_ident) = node.arg(idx) {
+                    if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
+                        return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                            #struct_name,
+                            #field_name,
+                            "explicit values are not allowed in presence-only mode",
+                        ));
+                    }
+                    let v = ::kdl_config::convert_value_checked::<#value_ty>(
+                        #arg_value_ident,
+                        #struct_name,
+                        #field_name,
+                        #kdl_key,
+                        ::kdl_config::Placement::AttrPositional,
+                    )?;
+                    #candidates_ident.push((v, #source_ident::Arg(idx)));
+                }
+            }
+            if #is_bool && #allow_flags && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly {
+                if let Some((flag_val, flag_indices)) = ::kdl_config::helpers::scan_flag_with_style(
+                    node,
+                    #kdl_key,
+                    field_config.flag_style,
+                    custom_pos.clone(),
+                    custom_neg.clone(),
+                    #struct_name,
+                    #field_name,
+                )? {
+                    if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly && flag_val == false {
+                        return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                            #struct_name,
+                            #field_name,
+                            "negative flags are not allowed in presence-only mode",
+                        ));
+                    }
+                    let v: #value_ty = ::kdl_config::convert_value_checked(
+                        &::kdl_config::KdlValue::Bool(flag_val),
+                        #struct_name,
+                        #field_name,
+                        #kdl_key,
+                        ::kdl_config::Placement::AttrFlag,
+                    )?;
+                    #candidates_ident.push((v, #source_ident::Flag(flag_indices)));
+                }
+            }
+
+            if #allow_value {
+                for (child_index, #child_ident) in node.iter_children().enumerate() {
+                    if #child_ident.name_str() != #kdl_key {
+                        continue;
+                    }
+                    if field_config.bool_mode == ::kdl_config::BoolMode::PresenceOnly {
+                        if #child_ident.args().is_empty()
+                            && #child_ident.iter_children().next().is_none()
+                            && #child_ident.attrs().is_empty()
+                        {
+                            let v: #value_ty = ::kdl_config::convert_value_checked(
+                                &::kdl_config::KdlValue::Bool(true),
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::Value,
+                            )?;
+                            #candidates_ident.push((v, #source_ident::Child(child_index)));
+                        } else {
+                            return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                                #struct_name,
+                                #field_name,
+                                "explicit values are not allowed in presence-only mode",
+                            ));
+                        }
+                    } else if #child_ident.args().is_empty() {
+                        if #is_bool
+                            && field_config.bool_mode != ::kdl_config::BoolMode::ValueOnly
+                            && #child_ident.iter_children().next().is_none()
+                            && #child_ident.attrs().is_empty()
+                        {
+                            let v: #value_ty = ::kdl_config::convert_value_checked(
+                                &::kdl_config::KdlValue::Bool(true),
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::Value,
+                            )?;
+                            #candidates_ident.push((v, #source_ident::Child(child_index)));
+                        } else {
+                            return Err(::kdl_config::KdlConfigError::missing_required(
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                                ::kdl_config::Placement::Value,
+                            ));
+                        }
+                    } else if #child_ident.args().len() == 1 {
+                        let #child_arg_ident = &#child_ident.args()[0];
+                        let v = ::kdl_config::convert_value_checked::<#value_ty>(
+                            #child_arg_ident,
+                            #struct_name,
+                            #field_name,
+                            #kdl_key,
+                            ::kdl_config::Placement::Value,
+                        )?;
+                        #candidates_ident.push((v, #source_ident::Child(child_index)));
+                    } else {
+                        return Err(::kdl_config::KdlConfigError::too_many(
+                            #struct_name,
+                            #field_name,
+                            #kdl_key,
+                            ::kdl_config::Placement::Value,
+                            #child_ident.args().len(),
+                        ));
+                    }
+                }
             }
         }
 
-        let #field_ident: #ty = if let Some(val) = #field_ident {
+        let selected = match field_config.conflict {
+            ::kdl_config::ConflictPolicy::Error => {
+                if #candidates_ident.len() > 1 {
+                    return Err(::kdl_config::KdlConfigError::ambiguous(
+                        #struct_name,
+                        #field_name,
+                        #kdl_key,
+                        ::kdl_config::Placement::Unknown,
+                        "multiple candidates for scalar field",
+                    ));
+                }
+                #candidates_ident.pop()
+            }
+            ::kdl_config::ConflictPolicy::First => {
+                if #candidates_ident.is_empty() {
+                    None
+                } else {
+                    Some(#candidates_ident.remove(0))
+                }
+            }
+            ::kdl_config::ConflictPolicy::Last => #candidates_ident.pop(),
+            ::kdl_config::ConflictPolicy::Append => {
+                return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                    #struct_name,
+                    #field_name,
+                    "append conflict policy is not supported for scalar fields",
+                ));
+            }
+        };
+
+        let #field_ident: #ty = if let Some((val, source)) = selected {
+            match source {
+                #source_ident::AttrKeyed => {
+                    claims.claim_attr(#kdl_key);
+                }
+                #source_ident::Arg(idx) => {
+                    claims.claim_arg(idx);
+                }
+                #source_ident::Flag(indices) => {
+                    for idx in indices {
+                        claims.claim_arg(idx);
+                    }
+                }
+                #source_ident::Child(idx) => {
+                    claims.claim_child(idx);
+                }
+            }
+            let val = val;
             #finalize_value
         } else {
             #default_expr
         };
     }
 }
-
 fn generate_value_vec_parser(
     field: &FieldInfo,
     struct_name: &str,
@@ -1153,17 +1147,19 @@ fn generate_value_vec_parser(
                             let v = ::kdl_config::convert_value_checked::<Vec<#elem_ty>>(#attr_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
                             ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
                         }
+                        claims.claim_attr(#kdl_key);
                     }
                     if let Some(idx) = pos_index {
                         if let Some(#arg_value_ident) = node.arg(idx) {
                             let v = ::kdl_config::convert_value_checked::<Vec<#elem_ty>>(#arg_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
                             ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
-                            if struct_config.deny_unknown {
-                                used_keys.mark_arg(idx);
-                            }
+                            claims.claim_arg(idx);
                         }
                     }
-                    for #child_ident in node.children_named(#kdl_key) {
+                    for (child_index, #child_ident) in node.iter_children().enumerate() {
+                        if #child_ident.name_str() != #kdl_key {
+                            continue;
+                        }
                         if #child_ident.args().is_empty() {
                             return Err(::kdl_config::KdlConfigError::missing_required(
                                 #struct_name,
@@ -1177,6 +1173,7 @@ fn generate_value_vec_parser(
                             #values_ident.push(::kdl_config::convert_value_checked::<#elem_ty>(#child_arg_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?);
                         }
                         ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, #values_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
+                        claims.claim_child(child_index);
                     }
                 }
                 ::kdl_config::DefaultPlacement::Attr => {
@@ -1185,10 +1182,14 @@ fn generate_value_vec_parser(
                             let v = ::kdl_config::convert_value_checked::<Vec<#elem_ty>>(#attr_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
                             ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
                         }
+                        claims.claim_attr(#kdl_key);
                     }
                 }
                 ::kdl_config::DefaultPlacement::Value => {
-                    for #child_ident in node.children_named(#kdl_key) {
+                    for (child_index, #child_ident) in node.iter_children().enumerate() {
+                        if #child_ident.name_str() != #kdl_key {
+                            continue;
+                        }
                         if #child_ident.args().is_empty() {
                             return Err(::kdl_config::KdlConfigError::missing_required(
                                 #struct_name,
@@ -1202,6 +1203,7 @@ fn generate_value_vec_parser(
                             #values_ident.push(::kdl_config::convert_value_checked::<#elem_ty>(#child_arg_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?);
                         }
                         ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, #values_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
+                        claims.claim_child(child_index);
                     }
                 }
                 ::kdl_config::DefaultPlacement::Child => {
@@ -1239,15 +1241,14 @@ fn generate_value_vec_parser(
                         let v = ::kdl_config::convert_value_checked::<Vec<#elem_ty>>(#attr_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
                         ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrKeyed)?;
                     }
+                    claims.claim_attr(#kdl_key);
                 }
             }
             if let Some(idx) = pos_index {
                 if let Some(#arg_value_ident) = node.arg(idx) {
                     let v = ::kdl_config::convert_value_checked::<Vec<#elem_ty>>(#arg_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
                     ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, v, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
-                    if struct_config.deny_unknown {
-                        used_keys.mark_arg(idx);
-                    }
+                    claims.claim_arg(idx);
                 }
             }
             if #allow_attr_positional_list {
@@ -1257,15 +1258,16 @@ fn generate_value_vec_parser(
                         #values_ident.push(::kdl_config::convert_value_checked::<#elem_ty>(#arg_value_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?);
                     }
                     ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, #values_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::AttrPositional)?;
-                    if struct_config.deny_unknown {
-                        for idx in 0..node.args().len() {
-                            used_keys.mark_arg(idx);
-                        }
+                    for idx in 0..node.args().len() {
+                        claims.claim_arg(idx);
                     }
                 }
             }
             if #allow_value {
-                for #child_ident in node.children_named(#kdl_key) {
+                for (child_index, #child_ident) in node.iter_children().enumerate() {
+                    if #child_ident.name_str() != #kdl_key {
+                        continue;
+                    }
                     if #child_ident.args().is_empty() {
                         return Err(::kdl_config::KdlConfigError::missing_required(
                             #struct_name,
@@ -1279,6 +1281,7 @@ fn generate_value_vec_parser(
                         #values_ident.push(::kdl_config::convert_value_checked::<#elem_ty>(#child_arg_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?);
                     }
                     ::kdl_config::helpers::resolve_vec(field_config.conflict, &mut #field_ident, #values_ident, #struct_name, #field_name, #kdl_key, ::kdl_config::Placement::Value)?;
+                    claims.claim_child(child_index);
                 }
             }
         }
@@ -1308,14 +1311,43 @@ fn generate_node_parser(
         ty
     };
     let child_ident = format_ident!("__kdl_child_{}", field_ident);
+    let inject_node_ident = format_ident!("__kdl_inject_node_{}", field_ident);
+    let inject_value_ident = format_ident!("__kdl_inject_value_{}", field_ident);
+    let (inject_prep, decode_target) = if let Some(spec) = field.select.as_ref() {
+        if let Some(inject) = spec.opts.inject.as_ref() {
+            let inject_name = match inject {
+                InjectOpt::Implicit => "name".to_string(),
+                InjectOpt::Field(name) => name.clone(),
+            };
+            let consume = spec.opts.consume.unwrap_or(true);
+            let inject_extract = selector_inject_extract(
+                &spec.selector,
+                struct_name,
+                &field_name,
+                &child_ident,
+                &inject_value_ident,
+                &inject_node_ident,
+                consume,
+            );
+            let inject_attr = quote! {
+                let mut entry = ::kdl_config::KdlEntry::new(#inject_value_ident);
+                entry.set_name(Some(#inject_name));
+                #inject_node_ident.entries_mut().push(entry);
+            };
+            (quote! { #inject_extract #inject_attr }, quote! { &#inject_node_ident })
+        } else {
+            (quote! {}, quote! { #child_ident })
+        }
+    } else {
+        (quote! {}, quote! { #child_ident })
+    };
     let explicit_child_loop = if field.placement.children_any {
         quote! {
-            for #child_ident in node.children() {
-                let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
-                    .map_err(|err| err.with_node(#child_ident))?;
-                if struct_config.deny_unknown {
-                    used_keys.mark_child(&#child_ident.name);
-                }
+            for (child_index, #child_ident) in node.iter_children().enumerate() {
+                let child_ctx = ctx.with_child(#child_ident.name_str(), child_index);
+                #inject_prep
+                let v = <#value_ty as ::kdl_config::KdlDecode>::decode(#decode_target, &child_ctx)?;
+                claims.claim_child(child_index);
                 ::kdl_config::helpers::resolve_scalar(
                     field_config.conflict,
                     &mut #field_ident,
@@ -1329,12 +1361,14 @@ fn generate_node_parser(
         }
     } else {
         quote! {
-            for #child_ident in node.children_named(#kdl_key) {
-                let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
-                    .map_err(|err| err.with_node(#child_ident))?;
-                if struct_config.deny_unknown {
-                    used_keys.mark_child(&#child_ident.name);
+            for (child_index, #child_ident) in node.iter_children().enumerate() {
+                if #child_ident.name_str() != #kdl_key {
+                    continue;
                 }
+                let child_ctx = ctx.with_child(#child_ident.name_str(), child_index);
+                #inject_prep
+                let v = <#value_ty as ::kdl_config::KdlDecode>::decode(#decode_target, &child_ctx)?;
+                claims.claim_child(child_index);
                 ::kdl_config::helpers::resolve_scalar(
                     field_config.conflict,
                     &mut #field_ident,
@@ -1378,9 +1412,10 @@ fn generate_node_parser(
         if !has_placement {
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
-                    for #child_ident in node.children() {
-                        let parsed = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
-                            .map_err(|err| err.with_node(#child_ident));
+                    for (child_index, #child_ident) in node.iter_children().enumerate() {
+                        let child_ctx = ctx.with_child(#child_ident.name_str(), child_index);
+                        let parsed = <#value_ty as ::kdl_config::KdlDecode>::decode(#child_ident, &child_ctx)
+                            .map_err(|err| err.with_context(child_ctx.source, child_ctx.path.as_ref(), Some(#child_ident.span().offset())));
                         let v = match parsed {
                             Ok(v) => v,
                             Err(err) => match err.kind {
@@ -1391,9 +1426,7 @@ fn generate_node_parser(
                                 _ => return Err(err),
                             },
                         };
-                        if struct_config.deny_unknown {
-                            used_keys.mark_child(&#child_ident.name);
-                        }
+                        claims.claim_child(child_index);
                         ::kdl_config::helpers::resolve_scalar(
                             field_config.conflict,
                             &mut #field_ident,
@@ -1460,7 +1493,18 @@ fn generate_flatten_parser(
     quote! {
         #mark_usage
         let _field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
-        let parsed = ::kdl_config::helpers::parse_flatten::<#value_ty>(node, config);
+        let parsed = ::kdl_config::helpers::parse_flatten::<#value_ty>(node, ctx);
+        if struct_config.deny_unknown {
+            for key in node.attrs().keys() {
+                claims.claim_attr(key);
+            }
+            for (idx, _) in node.args().iter().enumerate() {
+                claims.claim_arg(idx);
+            }
+            for (idx, _child) in node.iter_children().enumerate() {
+                claims.claim_child(idx);
+            }
+        }
         let #field_ident: #ty = match parsed {
             Ok(val) => {
                 #finalize_value
@@ -1493,16 +1537,41 @@ fn generate_node_vec_parser(
         field.inner_type().unwrap()
     };
     let elem_ty = extract_inner_type(inner_vec_ty).unwrap_or(inner_vec_ty);
-    let children_ident = format_ident!("__kdl_children_{}", field_ident);
     let child_ident = format_ident!("__kdl_child_{}", field_ident);
     let values_ident = format_ident!("__kdl_values_{}", field_ident);
+    let inject_node_ident = format_ident!("__kdl_inject_node_{}", field_ident);
+    let inject_value_ident = format_ident!("__kdl_inject_value_{}", field_ident);
+    let (inject_prep, decode_target) = if let Some(spec) = field.select.as_ref() {
+        if let Some(inject) = spec.opts.inject.as_ref() {
+            let inject_name = match inject {
+                InjectOpt::Implicit => "name".to_string(),
+                InjectOpt::Field(name) => name.clone(),
+            };
+            let consume = spec.opts.consume.unwrap_or(true);
+            let inject_extract = selector_inject_extract(
+                &spec.selector,
+                struct_name,
+                &field_name,
+                &child_ident,
+                &inject_value_ident,
+                &inject_node_ident,
+                consume,
+            );
+            let inject_attr = quote! {
+                let mut entry = ::kdl_config::KdlEntry::new(#inject_value_ident);
+                entry.set_name(Some(#inject_name));
+                #inject_node_ident.entries_mut().push(entry);
+            };
+            (quote! { #inject_extract #inject_attr }, quote! { &#inject_node_ident })
+        } else {
+            (quote! {}, quote! { #child_ident })
+        }
+    } else {
+        (quote! {}, quote! { #child_ident })
+    };
     let allow_child =
         field.placement.child || field.placement.children || field.placement.children_any;
-    let children_iter = if field.placement.children_any {
-        quote! { node.children() }
-    } else {
-        quote! { node.children_named(#kdl_key) }
-    };
+    let children_any = field.placement.children_any;
 
     let default_expr = generate_missing_expr(
         field,
@@ -1530,9 +1599,11 @@ fn generate_node_vec_parser(
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
                     let mut #values_ident: Vec<#elem_ty> = Vec::new();
-                    for #child_ident in node.children() {
-                        let parsed = <#elem_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
-                            .map_err(|err| err.with_node(#child_ident));
+                    for (child_index, #child_ident) in node.iter_children().enumerate() {
+                        let child_ctx = ctx.with_child(#child_ident.name_str(), child_index);
+                        #inject_prep
+                        let parsed = <#elem_ty as ::kdl_config::KdlDecode>::decode(#decode_target, &child_ctx)
+                            .map_err(|err| err.with_context(child_ctx.source, child_ctx.path.as_ref(), Some(#child_ident.span().offset())));
                         let v = match parsed {
                             Ok(v) => v,
                             Err(err) => match err.kind {
@@ -1543,9 +1614,7 @@ fn generate_node_vec_parser(
                                 _ => return Err(err),
                             },
                         };
-                        if struct_config.deny_unknown {
-                            used_keys.mark_child(&#child_ident.name);
-                        }
+                        claims.claim_child(child_index);
                         #values_ident.push(v);
                     }
                     if !#values_ident.is_empty() {
@@ -1561,17 +1630,19 @@ fn generate_node_vec_parser(
                 }
             }
         } else {
-            let #children_ident = #children_iter.collect::<Vec<_>>();
-            if !#children_ident.is_empty() {
-                let mut #values_ident = Vec::with_capacity(#children_ident.len());
-                for #child_ident in #children_ident {
-                    let v = <#elem_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
-                        .map_err(|err| err.with_node(#child_ident))?;
-                    if struct_config.deny_unknown {
-                        used_keys.mark_child(&#child_ident.name);
-                    }
-                    #values_ident.push(v);
+            let mut #values_ident = Vec::new();
+            for (child_index, #child_ident) in node.iter_children().enumerate() {
+                if !#children_any && #child_ident.name_str() != #kdl_key {
+                    continue;
                 }
+                let child_ctx = ctx.with_child(#child_ident.name_str(), child_index);
+                #inject_prep
+                let v = <#elem_ty as ::kdl_config::KdlDecode>::decode(#decode_target, &child_ctx)
+                    .map_err(|err| err.with_context(child_ctx.source, child_ctx.path.as_ref(), Some(#child_ident.span().offset())))?;
+                claims.claim_child(child_index);
+                #values_ident.push(v);
+            }
+            if !#values_ident.is_empty() {
                 #field_ident = Some(#values_ident);
             }
         }
@@ -1584,38 +1655,27 @@ fn generate_node_vec_parser(
     }
 }
 
-fn generate_registry_parser(
-    field: &FieldInfo,
+fn registry_key_extract(
+    selector: &SelectorAst,
     struct_name: &str,
-    field_overrides: &TokenStream,
-    mark_usage: TokenStream,
+    field_name: &str,
+    kdl_key: &str,
+    child_ident: &Ident,
+    key_val_ident: &Ident,
+    key_ident: &Ident,
+    node_copy_ident: &Ident,
+    consume: bool,
 ) -> TokenStream {
-    let field_ident = &field.ident;
-    let field_name = field.ident.to_string();
-    let kdl_key = &field.kdl_key;
-    let ty = &field.ty;
-    let container = field
-        .container
-        .as_ref()
-        .map(|s| quote! { #s })
-        .unwrap_or_else(|| quote! { #kdl_key });
-    let child_ident = format_ident!("__kdl_child_{}", field_ident);
-    let key_val_ident = format_ident!("__kdl_key_val_{}", field_ident);
-    let key_ident = format_ident!("__kdl_key_{}", field_ident);
-    let node_copy_ident = format_ident!("__kdl_node_copy_{}", field_ident);
-    let value_ident = format_ident!("__kdl_value_{}", field_ident);
-    let existing_idx_ident = format_ident!("__kdl_existing_idx_{}", field_ident);
-    let required = field.required;
-
-    let registry_key = field
-        .registry_key
-        .clone()
-        .unwrap_or(crate::attrs::RegistryKey::Arg(0));
-
-    let key_extract = match registry_key {
-        crate::attrs::RegistryKey::Arg(index) => {
+    match selector {
+        SelectorAst::Arg(index) => {
+            let idx = *index as usize;
+            let consume_expr = if consume {
+                quote! { #child_ident.without_arg(#idx) }
+            } else {
+                quote! { #child_ident.clone() }
+            };
             quote! {
-                let #key_val_ident = #child_ident.arg(#index).ok_or_else(|| {
+                let #key_val_ident = #child_ident.arg(#idx).ok_or_else(|| {
                     ::kdl_config::KdlConfigError::invalid_registry_key(
                         #struct_name,
                         #field_name,
@@ -1623,7 +1683,7 @@ fn generate_registry_parser(
                         "missing registry key",
                     )
                 })?;
-                let #key_ident = #key_val_ident.as_str().ok_or_else(|| {
+                let #key_ident = #key_val_ident.as_string().ok_or_else(|| {
                     ::kdl_config::KdlConfigError::invalid_registry_key(
                         #struct_name,
                         #field_name,
@@ -1631,10 +1691,15 @@ fn generate_registry_parser(
                         "registry key must be a string",
                     )
                 })?.to_string();
-                let #node_copy_ident = #child_ident.without_arg(#index);
+                let mut #node_copy_ident = #consume_expr;
             }
         }
-        crate::attrs::RegistryKey::Attr(name) => {
+        SelectorAst::Attr(name) => {
+            let consume_expr = if consume {
+                quote! { #child_ident.without_attr(#name) }
+            } else {
+                quote! { #child_ident.clone() }
+            };
             quote! {
                 let #key_val_ident = #child_ident.attr_values(#name).ok_or_else(|| {
                     ::kdl_config::KdlConfigError::invalid_registry_key(
@@ -1652,7 +1717,7 @@ fn generate_registry_parser(
                         "registry key attribute must have a single value",
                     ));
                 }
-                let #key_ident = #key_val_ident[0].as_str().ok_or_else(|| {
+                let #key_ident = #key_val_ident[0].as_string().ok_or_else(|| {
                     ::kdl_config::KdlConfigError::invalid_registry_key(
                         #struct_name,
                         #field_name,
@@ -1660,138 +1725,482 @@ fn generate_registry_parser(
                         "registry key must be a string",
                     )
                 })?.to_string();
-                let #node_copy_ident = #child_ident.without_attr(#name);
+                let mut #node_copy_ident = #consume_expr;
             }
         }
-        crate::attrs::RegistryKey::Function(path) => {
+        SelectorAst::Func(path) => {
             let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
-                let ident = syn::Ident::new(&path, proc_macro2::Span::call_site());
+                let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
                 quote! { #ident }
             });
             quote! {
                 let #key_ident = #key_fn(#child_ident)?;
-                let #node_copy_ident = #child_ident.clone();
+                let mut #node_copy_ident = #child_ident.clone();
             }
         }
-    };
-
-    if field.is_hashmap {
-        let (_key_ty, val_ty) = extract_hashmap_types(ty).expect("registry requires HashMap");
-        return quote! {
-            #mark_usage
-            let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
-            let mut #field_ident: #ty = ::std::collections::HashMap::new();
-
-            for #child_ident in node.children_named(#container) {
-                #key_extract
-                let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(&#node_copy_ident, config)
-                    .map_err(|err| err.with_node(&#node_copy_ident))?;
-                match field_config.conflict {
-                    ::kdl_config::ConflictPolicy::Error => {
-                        if #field_ident.contains_key(&#key_ident) {
+        SelectorAst::Any(selectors) => {
+            let mut attempts = Vec::new();
+            for selector in selectors {
+                let attempt = match selector {
+                    SelectorAst::Arg(index) => {
+                        let idx = *index as usize;
+                        let consume_expr = if consume {
+                            quote! { #child_ident.without_arg(#idx) }
+                        } else {
+                            quote! { #child_ident.clone() }
+                        };
+                        quote! {
+                            if #key_ident.is_none() {
+                                if let Some(#key_val_ident) = #child_ident.arg(#idx) {
+                                    let value = #key_val_ident.as_string().ok_or_else(|| {
+                                        ::kdl_config::KdlConfigError::invalid_registry_key(
+                                            #struct_name,
+                                            #field_name,
+                                            #kdl_key,
+                                            "registry key must be a string",
+                                        )
+                                    })?.to_string();
+                                    #key_ident = Some(value);
+                                    #node_copy_ident = Some(#consume_expr);
+                                }
+                            }
+                        }
+                    }
+                    SelectorAst::Attr(name) => {
+                        let consume_expr = if consume {
+                            quote! { #child_ident.without_attr(#name) }
+                        } else {
+                            quote! { #child_ident.clone() }
+                        };
+                        quote! {
+                            if #key_ident.is_none() {
+                                if let Some(#key_val_ident) = #child_ident.attr_values(#name) {
+                                    if #key_val_ident.len() != 1 {
+                                        return Err(::kdl_config::KdlConfigError::invalid_registry_key(
+                                            #struct_name,
+                                            #field_name,
+                                            #kdl_key,
+                                            "registry key attribute must have a single value",
+                                        ));
+                                    }
+                                    let value = #key_val_ident[0].as_string().ok_or_else(|| {
+                                        ::kdl_config::KdlConfigError::invalid_registry_key(
+                                            #struct_name,
+                                            #field_name,
+                                            #kdl_key,
+                                            "registry key must be a string",
+                                        )
+                                    })?.to_string();
+                                    #key_ident = Some(value);
+                                    #node_copy_ident = Some(#consume_expr);
+                                }
+                            }
+                        }
+                    }
+                    SelectorAst::Func(path) => {
+                        let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
+                            let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
+                            quote! { #ident }
+                        });
+                        quote! {
+                            if #key_ident.is_none() {
+                                let value = #key_fn(#child_ident)?;
+                                #key_ident = Some(value);
+                                #node_copy_ident = Some(#child_ident.clone());
+                            }
+                        }
+                    }
+                    SelectorAst::Name | SelectorAst::Any(_) => {
+                        quote! {
                             return Err(::kdl_config::KdlConfigError::invalid_registry_key(
                                 #struct_name,
                                 #field_name,
                                 #kdl_key,
-                                "duplicate registry key",
+                                "unsupported selector in registry any(...)",
                             ));
                         }
-                        #field_ident.insert(#key_ident.clone(), #value_ident);
                     }
-                    ::kdl_config::ConflictPolicy::First => {
-                        #field_ident.entry(#key_ident.clone()).or_insert(#value_ident);
-                    }
-                    ::kdl_config::ConflictPolicy::Last => {
-                        #field_ident.insert(#key_ident.clone(), #value_ident);
-                    }
-                    ::kdl_config::ConflictPolicy::Append => {
-                        return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                            #struct_name,
-                            #field_name,
-                            "append conflict policy is not supported for HashMap registry fields",
-                        ));
-                    }
-                }
+                };
+                attempts.push(attempt);
             }
-
-            if #required && #field_ident.is_empty() {
-                return Err(::kdl_config::KdlConfigError::missing_required(
+            quote! {
+                let mut #key_ident: ::core::option::Option<String> = None;
+                let mut #node_copy_ident: ::core::option::Option<::kdl_config::KdlNode> = None;
+                #(#attempts)*
+                let #key_ident = #key_ident.ok_or_else(|| {
+                    ::kdl_config::KdlConfigError::invalid_registry_key(
+                        #struct_name,
+                        #field_name,
+                        #kdl_key,
+                        "missing registry key",
+                    )
+                })?;
+                let mut #node_copy_ident = #node_copy_ident.unwrap_or_else(|| #child_ident.clone());
+            }
+        }
+        SelectorAst::Name => {
+            quote! {
+                return Err(::kdl_config::KdlConfigError::invalid_registry_key(
                     #struct_name,
                     #field_name,
-                    #container,
-                    ::kdl_config::Placement::Registry,
+                    #kdl_key,
+                    "registry key cannot be derived from name()",
                 ));
             }
-        };
-    }
-
-    let (val_ty, is_option_vec) = crate::attrs::extract_registry_vec_value(ty)
-        .expect("registry vec requires Vec<(String, T)>");
-
-    let finalize_vec = if is_option_vec {
-        quote! {
-            let #field_ident: #ty = if #field_ident.is_empty() { None } else { Some(#field_ident) };
         }
-    } else {
-        quote! {}
-    };
-
-    quote! {
-        #mark_usage
-        let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
-        let mut #field_ident: Vec<(String, #val_ty)> = Vec::new();
-
-        for #child_ident in node.children_named(#container) {
-            #key_extract
-            let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(&#node_copy_ident, config)
-                .map_err(|err| err.with_node(&#node_copy_ident))?;
-            match field_config.conflict {
-                ::kdl_config::ConflictPolicy::Error => {
-                    if #field_ident.iter().any(|(key, _)| key == &#key_ident) {
-                        return Err(::kdl_config::KdlConfigError::invalid_registry_key(
-                            #struct_name,
-                            #field_name,
-                            #kdl_key,
-                            "duplicate registry key",
-                        ));
-                    }
-                    #field_ident.push((#key_ident.clone(), #value_ident));
-                }
-                ::kdl_config::ConflictPolicy::First => {
-                    if !#field_ident.iter().any(|(key, _)| key == &#key_ident) {
-                        #field_ident.push((#key_ident.clone(), #value_ident));
-                    }
-                }
-                ::kdl_config::ConflictPolicy::Last => {
-                    if let Some(#existing_idx_ident) = #field_ident.iter().position(|(key, _)| key == &#key_ident) {
-                        #field_ident.remove(#existing_idx_ident);
-                    }
-                    #field_ident.push((#key_ident.clone(), #value_ident));
-                }
-                ::kdl_config::ConflictPolicy::Append => {
-                    #field_ident.push((#key_ident.clone(), #value_ident));
-                }
-            }
-        }
-
-        if #required && #field_ident.is_empty() {
-            return Err(::kdl_config::KdlConfigError::missing_required(
-                #struct_name,
-                #field_name,
-                #container,
-                ::kdl_config::Placement::Registry,
-            ));
-        }
-
-        #finalize_vec
     }
 }
 
-fn generate_children_map_parser(
+fn children_map_key_extract(
+    selector: &SelectorAst,
+    struct_name: &str,
+    field_name: &str,
+    kdl_key: &str,
+    key_ty: &syn::Type,
+    child_ident: &Ident,
+    key_val_ident: &Ident,
+    key_ident: &Ident,
+    node_copy_ident: &Ident,
+    missing_arg_error: &TokenStream,
+    missing_attr_error: &TokenStream,
+    consume: bool,
+) -> TokenStream {
+    match selector {
+        SelectorAst::Arg(index) => {
+            let idx = *index as usize;
+            let consume_expr = if consume {
+                quote! { #child_ident.without_arg(#idx) }
+            } else {
+                quote! { #child_ident.clone() }
+            };
+            quote! {
+                let #key_val_ident = #child_ident.arg(#idx).ok_or_else(|| {
+                    #missing_arg_error
+                })?;
+                let #key_ident = ::kdl_config::convert_value_checked::<#key_ty>(
+                    #key_val_ident,
+                    #struct_name,
+                    #field_name,
+                    #kdl_key,
+                    ::kdl_config::Placement::Children,
+                )?;
+                let mut #node_copy_ident = #consume_expr;
+            }
+        }
+        SelectorAst::Attr(name) => {
+            let consume_expr = if consume {
+                quote! { #child_ident.without_attr(#name) }
+            } else {
+                quote! { #child_ident.clone() }
+            };
+            quote! {
+                let #key_val_ident = #child_ident.attr_values(#name).ok_or_else(|| {
+                    #missing_attr_error
+                })?;
+                if #key_val_ident.len() != 1 {
+                    return Err(::kdl_config::KdlConfigError {
+                        struct_name: #struct_name.to_string(),
+                        field_name: Some(#field_name.to_string()),
+                        kdl_key: Some(#kdl_key.to_string()),
+                        placement: ::kdl_config::Placement::Children,
+                        required: false,
+                        kind: ::kdl_config::ErrorKind::Custom("map key attribute must have a single value".to_string()),
+                        node_path: None,
+                        location: None,
+                    });
+                }
+                let #key_ident = ::kdl_config::convert_value_checked::<#key_ty>(
+                    &#key_val_ident[0],
+                    #struct_name,
+                    #field_name,
+                    #kdl_key,
+                    ::kdl_config::Placement::Children,
+                )?;
+                let mut #node_copy_ident = #consume_expr;
+            }
+        }
+        SelectorAst::Func(path) => {
+            let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
+                let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
+                quote! { #ident }
+            });
+            quote! {
+                let #key_ident = #key_fn(#child_ident)?;
+                let mut #node_copy_ident = #child_ident.clone();
+            }
+        }
+        SelectorAst::Any(selectors) => {
+            let mut attempts = Vec::new();
+            for selector in selectors {
+                let attempt = match selector {
+                    SelectorAst::Arg(index) => {
+                        let idx = *index as usize;
+                        let consume_expr = if consume {
+                            quote! { #child_ident.without_arg(#idx) }
+                        } else {
+                            quote! { #child_ident.clone() }
+                        };
+                        quote! {
+                            if #key_ident.is_none() {
+                                if let Some(#key_val_ident) = #child_ident.arg(#idx) {
+                                    let value = ::kdl_config::convert_value_checked::<#key_ty>(
+                                        #key_val_ident,
+                                        #struct_name,
+                                        #field_name,
+                                        #kdl_key,
+                                        ::kdl_config::Placement::Children,
+                                    )?;
+                                    #key_ident = Some(value);
+                                    #node_copy_ident = Some(#consume_expr);
+                                }
+                            }
+                        }
+                    }
+                    SelectorAst::Attr(name) => {
+                        let consume_expr = if consume {
+                            quote! { #child_ident.without_attr(#name) }
+                        } else {
+                            quote! { #child_ident.clone() }
+                        };
+                        quote! {
+                            if #key_ident.is_none() {
+                                if let Some(#key_val_ident) = #child_ident.attr_values(#name) {
+                                    if #key_val_ident.len() != 1 {
+                                        return Err(::kdl_config::KdlConfigError {
+                                            struct_name: #struct_name.to_string(),
+                                            field_name: Some(#field_name.to_string()),
+                                            kdl_key: Some(#kdl_key.to_string()),
+                                            placement: ::kdl_config::Placement::Children,
+                                            required: false,
+                                            kind: ::kdl_config::ErrorKind::Custom("map key attribute must have a single value".to_string()),
+                                            node_path: None,
+                                            location: None,
+                                        });
+                                    }
+                                    let value = ::kdl_config::convert_value_checked::<#key_ty>(
+                                        &#key_val_ident[0],
+                                        #struct_name,
+                                        #field_name,
+                                        #kdl_key,
+                                        ::kdl_config::Placement::Children,
+                                    )?;
+                                    #key_ident = Some(value);
+                                    #node_copy_ident = Some(#consume_expr);
+                                }
+                            }
+                        }
+                    }
+                    SelectorAst::Func(path) => {
+                        let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
+                            let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
+                            quote! { #ident }
+                        });
+                        quote! {
+                            if #key_ident.is_none() {
+                                let value = #key_fn(#child_ident)?;
+                                #key_ident = Some(value);
+                                #node_copy_ident = Some(#child_ident.clone());
+                            }
+                        }
+                    }
+                    SelectorAst::Name | SelectorAst::Any(_) => {
+                        quote! {
+                            return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                                #struct_name,
+                                #field_name,
+                                "unsupported selector in children_map any(...)",
+                            ));
+                        }
+                    }
+                };
+                attempts.push(attempt);
+            }
+            quote! {
+                let mut #key_ident: ::core::option::Option<#key_ty> = None;
+                let mut #node_copy_ident: ::core::option::Option<::kdl_config::KdlNode> = None;
+                #(#attempts)*
+                let #key_ident = #key_ident.ok_or_else(|| {
+                    #missing_arg_error
+                })?;
+                let mut #node_copy_ident = #node_copy_ident.unwrap_or_else(|| #child_ident.clone());
+            }
+        }
+        SelectorAst::Name => {
+            quote! {
+                return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                    #struct_name,
+                    #field_name,
+                    "children_map key cannot be derived from name() in map_node mode",
+                ));
+            }
+        }
+    }
+}
+
+fn selector_inject_extract(
+    selector: &SelectorAst,
+    struct_name: &str,
+    field_name: &str,
+    child_ident: &Ident,
+    value_ident: &Ident,
+    node_copy_ident: &Ident,
+    consume: bool,
+) -> TokenStream {
+    let missing_error = quote! {
+        ::kdl_config::KdlConfigError::custom(
+            #struct_name,
+            format!("missing selector value for injected field '{}'", #field_name),
+        )
+    };
+
+    let attr_value_error = quote! {
+        ::kdl_config::KdlConfigError::custom(
+            #struct_name,
+            "selector attribute must have a single value",
+        )
+    };
+
+    match selector {
+        SelectorAst::Arg(index) => {
+            let idx = *index as usize;
+            let consume_expr = if consume {
+                quote! { #node_copy_ident = #node_copy_ident.without_arg(#idx); }
+            } else {
+                quote! {}
+            };
+            quote! {
+                let mut #node_copy_ident = #child_ident.clone();
+                let #value_ident = #child_ident.arg(#idx).ok_or_else(|| {
+                    #missing_error
+                })?.clone();
+                #consume_expr
+            }
+        }
+        SelectorAst::Attr(name) => {
+            let consume_expr = if consume {
+                quote! { #node_copy_ident = #node_copy_ident.without_attr(#name); }
+            } else {
+                quote! {}
+            };
+            quote! {
+                let mut #node_copy_ident = #child_ident.clone();
+                let values = #child_ident.attr_values(#name).ok_or_else(|| {
+                    #missing_error
+                })?;
+                if values.len() != 1 {
+                    return Err(#attr_value_error);
+                }
+                let #value_ident = values[0].clone();
+                #consume_expr
+            }
+        }
+        SelectorAst::Name => {
+            quote! {
+                let mut #node_copy_ident = #child_ident.clone();
+                let #value_ident = ::kdl_config::KdlValue::String(#child_ident.base_name().to_string());
+            }
+        }
+        SelectorAst::Func(path) => {
+            let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
+                let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
+                quote! { #ident }
+            });
+            quote! {
+                let mut #node_copy_ident = #child_ident.clone();
+                let value = #key_fn(#child_ident)?;
+                let #value_ident: ::kdl_config::KdlValue = value.into();
+            }
+        }
+        SelectorAst::Any(selectors) => {
+            let mut attempts = Vec::new();
+            for selector in selectors {
+                let attempt = match selector {
+                    SelectorAst::Arg(index) => {
+                        let idx = *index as usize;
+                        let consume_expr = if consume {
+                            quote! { #child_ident.without_arg(#idx) }
+                        } else {
+                            quote! { #child_ident.clone() }
+                        };
+                        quote! {
+                            if #value_ident.is_none() {
+                                if let Some(val) = #child_ident.arg(#idx) {
+                                    #value_ident = Some(val.clone());
+                                    #node_copy_ident = Some(#consume_expr);
+                                }
+                            }
+                        }
+                    }
+                    SelectorAst::Attr(name) => {
+                        let consume_expr = if consume {
+                            quote! { #child_ident.without_attr(#name) }
+                        } else {
+                            quote! { #child_ident.clone() }
+                        };
+                        quote! {
+                            if #value_ident.is_none() {
+                                if let Some(values) = #child_ident.attr_values(#name) {
+                                    if values.len() != 1 {
+                                        return Err(#attr_value_error);
+                                    }
+                                    #value_ident = Some(values[0].clone());
+                                    #node_copy_ident = Some(#consume_expr);
+                                }
+                            }
+                        }
+                    }
+                    SelectorAst::Name => {
+                        quote! {
+                            if #value_ident.is_none() {
+                                #value_ident = Some(::kdl_config::KdlValue::String(#child_ident.base_name().to_string()));
+                                #node_copy_ident = Some(#child_ident.clone());
+                            }
+                        }
+                    }
+                    SelectorAst::Func(path) => {
+                        let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
+                            let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
+                            quote! { #ident }
+                        });
+                        quote! {
+                            if #value_ident.is_none() {
+                                let value = #key_fn(#child_ident)?;
+                                #value_ident = Some(value.into());
+                                #node_copy_ident = Some(#child_ident.clone());
+                            }
+                        }
+                    }
+                    SelectorAst::Any(_) => {
+                        quote! {
+                            return Err(::kdl_config::KdlConfigError::custom(
+                                #struct_name,
+                                "unsupported selector in any(...) for injection",
+                            ));
+                        }
+                    }
+                };
+                attempts.push(attempt);
+            }
+            quote! {
+                let mut #value_ident: ::core::option::Option<::kdl_config::KdlValue> = None;
+                let mut #node_copy_ident: ::core::option::Option<::kdl_config::KdlNode> = None;
+                #(#attempts)*
+                let #value_ident = #value_ident.ok_or_else(|| {
+                    #missing_error
+                })?;
+                let #node_copy_ident = #node_copy_ident.unwrap_or_else(|| #child_ident.clone());
+            }
+        }
+    }
+}
+
+
+fn generate_collection_parser(
     field: &FieldInfo,
     struct_name: &str,
     field_overrides: &TokenStream,
     mark_usage: TokenStream,
+    collection: &crate::attrs::CollectionSpec,
 ) -> TokenStream {
     let field_ident = &field.ident;
     let field_name = field.ident.to_string();
@@ -1804,28 +2213,78 @@ fn generate_children_map_parser(
     let node_copy_ident = format_ident!("__kdl_node_copy_{}", field_ident);
     let existing_idx_ident = format_ident!("__kdl_existing_idx_{}", field_ident);
     let required = field.required;
-    let map_node = field.map_node.as_ref().map(|s| quote! { #s });
+    let is_registry = matches!(collection.mode, CollectionMode::Registry { .. });
 
-    let (children_map_kind, key_ty, val_ty) =
-        extract_children_map_types(ty).expect("children_map requires HashMap or Vec<(K, V)>");
+    let (collection_kind, key_ty_opt, val_ty) = if is_registry {
+        if field.is_hashmap {
+            let (_key_ty, val_ty) = extract_hashmap_types(ty).expect("registry requires HashMap");
+            (ChildrenMapKind::HashMap, None, val_ty)
+        } else {
+            let (val_ty, is_option_vec) = crate::attrs::extract_registry_vec_value(ty)
+                .expect("registry vec requires Vec<(String, T)>");
+            let kind = if is_option_vec {
+                ChildrenMapKind::OptionVec
+            } else {
+                ChildrenMapKind::Vec
+            };
+            (kind, None, val_ty)
+        }
+    } else {
+        let (kind, key_ty, val_ty) =
+            extract_children_map_types(ty).expect("children_map requires HashMap or Vec<(K, V)>");
+        (kind, Some(key_ty), val_ty)
+    };
+    let key_ty = if is_registry {
+        None
+    } else {
+        Some(key_ty_opt.expect("children_map requires key type"))
+    };
 
-    let missing_key = if let Some(map_node) = map_node.as_ref() {
+    let (container_name, map_node_name) = match &collection.mode {
+        CollectionMode::Registry { container } => (Some(container.as_str()), None),
+        CollectionMode::ChildrenMapNode { node } => (None, Some(node.as_str())),
+        CollectionMode::ChildrenMapAll => (None, None),
+    };
+    let container = container_name
+        .map(|s| quote! { #s })
+        .unwrap_or_else(|| quote! { #kdl_key });
+    let map_node = map_node_name.map(|s| quote! { #s });
+
+    let missing_key = if is_registry {
+        quote! { #container }
+    } else if let Some(map_node) = map_node.as_ref() {
         quote! { #map_node }
     } else {
         quote! { #kdl_key }
     };
+    let missing_placement = if is_registry {
+        quote! { ::kdl_config::Placement::Registry }
+    } else {
+        quote! { ::kdl_config::Placement::Children }
+    };
 
-    let duplicate_error = quote! {
-        return Err(::kdl_config::KdlConfigError {
-            struct_name: #struct_name.to_string(),
-            field_name: Some(#field_name.to_string()),
-            kdl_key: Some(#kdl_key.to_string()),
-            placement: ::kdl_config::Placement::Children,
-            required: false,
-            kind: ::kdl_config::ErrorKind::Custom("duplicate map key".to_string()),
-            node_path: None,
-            location: None,
-        });
+    let duplicate_error = if is_registry {
+        quote! {
+            return Err(::kdl_config::KdlConfigError::invalid_registry_key(
+                #struct_name,
+                #field_name,
+                #kdl_key,
+                "duplicate registry key",
+            ));
+        }
+    } else {
+        quote! {
+            return Err(::kdl_config::KdlConfigError {
+                struct_name: #struct_name.to_string(),
+                field_name: Some(#field_name.to_string()),
+                kdl_key: Some(#kdl_key.to_string()),
+                placement: ::kdl_config::Placement::Children,
+                required: false,
+                kind: ::kdl_config::ErrorKind::Custom("duplicate map key".to_string()),
+                node_path: None,
+                location: None,
+            });
+        }
     };
 
     let missing_arg_error = quote! {
@@ -1853,69 +2312,92 @@ fn generate_children_map_parser(
         }
     };
 
-    let registry_key = field
-        .registry_key
-        .clone()
-        .unwrap_or(crate::attrs::RegistryKey::Arg(0));
+    let inject_name = collection.inject.as_ref().map(|inject| match inject {
+        InjectOpt::Implicit => "name".to_string(),
+        InjectOpt::Field(name) => name.clone(),
+    });
 
-    let key_extract = if map_node.is_some() {
-        match registry_key {
-            crate::attrs::RegistryKey::Arg(index) => {
-                quote! {
-                    let #key_val_ident = #child_ident.arg(#index).ok_or_else(|| {
-                        #missing_arg_error
-                    })?;
-                    let #key_ident = ::kdl_config::convert_value_checked::<#key_ty>(
-                        #key_val_ident,
+    let consume = collection.consume;
+    let selector = collection.selector.clone();
+    let inject_selector = selector.clone();
+
+    let inject_value_ident = format_ident!("__kdl_inject_value_{}", field_ident);
+    let inject_extract = if inject_name.is_some() {
+        selector_inject_extract(
+            &inject_selector,
+            struct_name,
+            &field_name,
+            &child_ident,
+            &inject_value_ident,
+            &node_copy_ident,
+            consume,
+        )
+    } else {
+        quote! {}
+    };
+
+    let key_from_inject = if inject_name.is_some() {
+        if is_registry {
+            quote! {
+                let #key_ident = #inject_value_ident.as_string().ok_or_else(|| {
+                    ::kdl_config::KdlConfigError::invalid_registry_key(
                         #struct_name,
                         #field_name,
                         #kdl_key,
-                        ::kdl_config::Placement::Children,
-                    )?;
-                    let #node_copy_ident = #child_ident.without_arg(#index);
-                }
+                        "registry key must be a string",
+                    )
+                })?.to_string();
             }
-            crate::attrs::RegistryKey::Attr(name) => {
-                quote! {
-                    let #key_val_ident = #child_ident.attr_values(#name).ok_or_else(|| {
-                        #missing_attr_error
-                    })?;
-                    if #key_val_ident.len() != 1 {
-                        return Err(::kdl_config::KdlConfigError {
-                            struct_name: #struct_name.to_string(),
-                            field_name: Some(#field_name.to_string()),
-                            kdl_key: Some(#kdl_key.to_string()),
-                            placement: ::kdl_config::Placement::Children,
-                            required: false,
-                            kind: ::kdl_config::ErrorKind::Custom("map key attribute must have a single value".to_string()),
-                            node_path: None,
-                            location: None,
-                        });
-                    }
-                    let #key_ident = ::kdl_config::convert_value_checked::<#key_ty>(
-                        &#key_val_ident[0],
-                        #struct_name,
-                        #field_name,
-                        #kdl_key,
-                        ::kdl_config::Placement::Children,
-                    )?;
-                    let #node_copy_ident = #child_ident.without_attr(#name);
-                }
-            }
-            crate::attrs::RegistryKey::Function(path) => {
-                let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
-                    let ident = syn::Ident::new(&path, proc_macro2::Span::call_site());
-                    quote! { #ident }
-                });
-                quote! {
-                    let #key_ident = #key_fn(#child_ident)?;
-                    let #node_copy_ident = #child_ident.clone();
-                }
+        } else {
+            let key_ty = key_ty.as_ref().expect("children_map requires key type");
+            quote! {
+                let #key_ident = ::kdl_config::convert_value_checked::<#key_ty>(
+                    &#inject_value_ident,
+                    #struct_name,
+                    #field_name,
+                    #kdl_key,
+                    ::kdl_config::Placement::Children,
+                )?;
             }
         }
     } else {
+        quote! {}
+    };
+
+    let key_extract = if inject_name.is_some() {
+        quote! { #inject_extract #key_from_inject }
+    } else if is_registry {
+        registry_key_extract(
+            &selector,
+            struct_name,
+            &field_name,
+            kdl_key,
+            &child_ident,
+            &key_val_ident,
+            &key_ident,
+            &node_copy_ident,
+            consume,
+        )
+    } else if map_node.is_some() {
+        let key_ty = key_ty.as_ref().expect("children_map requires key type");
+        children_map_key_extract(
+            &selector,
+            struct_name,
+            &field_name,
+            kdl_key,
+            key_ty,
+            &child_ident,
+            &key_val_ident,
+            &key_ident,
+            &node_copy_ident,
+            &missing_arg_error,
+            &missing_attr_error,
+            consume,
+        )
+    } else {
+        let key_ty = key_ty.as_ref().expect("children_map requires key type");
         quote! {
-            let #key_val_ident = ::kdl_config::Value::String(#child_ident.name.clone());
+            let #key_val_ident = ::kdl_config::KdlValue::String(#child_ident.name_str().to_string());
             let #key_ident = ::kdl_config::convert_value_checked::<#key_ty>(
                 &#key_val_ident,
                 #struct_name,
@@ -1923,121 +2405,229 @@ fn generate_children_map_parser(
                 #kdl_key,
                 ::kdl_config::Placement::Children,
             )?;
+            let mut #node_copy_ident = #child_ident.clone();
         }
     };
 
-    let (field_init, map_insert, finalize_vec) = match children_map_kind {
-        ChildrenMapKind::HashMap => (
-            quote! { let mut #field_ident: #ty = ::std::collections::HashMap::new(); },
-            quote! {
-                match field_config.conflict {
-                    ::kdl_config::ConflictPolicy::Error => {
-                        if #field_ident.contains_key(&#key_ident) {
-                            #duplicate_error
-                        }
-                        #field_ident.insert(#key_ident, #value_ident);
-                    }
-                    ::kdl_config::ConflictPolicy::First => {
-                        #field_ident.entry(#key_ident).or_insert(#value_ident);
-                    }
-                    ::kdl_config::ConflictPolicy::Last => {
-                        #field_ident.insert(#key_ident, #value_ident);
-                    }
-                    ::kdl_config::ConflictPolicy::Append => {
-                        return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                            #struct_name,
-                            #field_name,
-                            "append conflict policy is not supported for children_map HashMap fields",
-                        ));
-                    }
-                }
-            },
-            quote! {},
-        ),
-        ChildrenMapKind::Vec => (
-            quote! { let mut #field_ident: Vec<(#key_ty, #val_ty)> = Vec::new(); },
-            quote! {
-                match field_config.conflict {
-                    ::kdl_config::ConflictPolicy::Error => {
-                        if #field_ident.iter().any(|(key, _)| key == &#key_ident) {
-                            #duplicate_error
-                        }
-                        #field_ident.push((#key_ident, #value_ident));
-                    }
-                    ::kdl_config::ConflictPolicy::First => {
-                        if !#field_ident.iter().any(|(key, _)| key == &#key_ident) {
-                            #field_ident.push((#key_ident, #value_ident));
-                        }
-                    }
-                    ::kdl_config::ConflictPolicy::Last => {
-                        if let Some(#existing_idx_ident) = #field_ident.iter().position(|(key, _)| key == &#key_ident) {
-                            #field_ident.remove(#existing_idx_ident);
-                        }
-                        #field_ident.push((#key_ident, #value_ident));
-                    }
-                    ::kdl_config::ConflictPolicy::Append => {
-                        #field_ident.push((#key_ident, #value_ident));
-                    }
-                }
-            },
-            quote! {},
-        ),
-        ChildrenMapKind::OptionVec => (
-            quote! { let mut #field_ident: Vec<(#key_ty, #val_ty)> = Vec::new(); },
-            quote! {
-                match field_config.conflict {
-                    ::kdl_config::ConflictPolicy::Error => {
-                        if #field_ident.iter().any(|(key, _)| key == &#key_ident) {
-                            #duplicate_error
-                        }
-                        #field_ident.push((#key_ident, #value_ident));
-                    }
-                    ::kdl_config::ConflictPolicy::First => {
-                        if !#field_ident.iter().any(|(key, _)| key == &#key_ident) {
-                            #field_ident.push((#key_ident, #value_ident));
-                        }
-                    }
-                    ::kdl_config::ConflictPolicy::Last => {
-                        if let Some(#existing_idx_ident) = #field_ident.iter().position(|(key, _)| key == &#key_ident) {
-                            #field_ident.remove(#existing_idx_ident);
-                        }
-                        #field_ident.push((#key_ident, #value_ident));
-                    }
-                    ::kdl_config::ConflictPolicy::Append => {
-                        #field_ident.push((#key_ident, #value_ident));
-                    }
-                }
-            },
-            quote! {
-                let #field_ident: #ty = if #field_ident.is_empty() { None } else { Some(#field_ident) };
-            },
-        ),
+    let inject_attr = if let Some(name) = inject_name.as_ref() {
+        quote! {
+            let mut entry = ::kdl_config::KdlEntry::new(#inject_value_ident);
+            entry.set_name(Some(#name));
+            #node_copy_ident.entries_mut().push(entry);
+        }
+    } else {
+        quote! {}
     };
 
-    let map_loop = if let Some(map_node) = map_node {
+    let (field_init, map_insert, finalize_vec) = match collection_kind {
+        ChildrenMapKind::HashMap => {
+            let field_init = if is_registry {
+                quote! { let mut #field_ident: #ty = ::std::collections::HashMap::new(); }
+            } else {
+                quote! { let mut #field_ident: #ty = ::std::collections::HashMap::new(); }
+            };
+            let map_insert = if is_registry {
+                quote! {
+                    match field_config.conflict {
+                        ::kdl_config::ConflictPolicy::Error => {
+                            if #field_ident.contains_key(&#key_ident) {
+                                #duplicate_error
+                            }
+                            #field_ident.insert(#key_ident.clone(), #value_ident);
+                        }
+                        ::kdl_config::ConflictPolicy::First => {
+                            #field_ident.entry(#key_ident.clone()).or_insert(#value_ident);
+                        }
+                        ::kdl_config::ConflictPolicy::Last => {
+                            #field_ident.insert(#key_ident.clone(), #value_ident);
+                        }
+                        ::kdl_config::ConflictPolicy::Append => {
+                            return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                                #struct_name,
+                                #field_name,
+                                "append conflict policy is not supported for HashMap registry fields",
+                            ));
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    match field_config.conflict {
+                        ::kdl_config::ConflictPolicy::Error => {
+                            if #field_ident.contains_key(&#key_ident) {
+                                #duplicate_error
+                            }
+                            #field_ident.insert(#key_ident, #value_ident);
+                        }
+                        ::kdl_config::ConflictPolicy::First => {
+                            #field_ident.entry(#key_ident).or_insert(#value_ident);
+                        }
+                        ::kdl_config::ConflictPolicy::Last => {
+                            #field_ident.insert(#key_ident, #value_ident);
+                        }
+                        ::kdl_config::ConflictPolicy::Append => {
+                            return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                                #struct_name,
+                                #field_name,
+                                "append conflict policy is not supported for children_map HashMap fields",
+                            ));
+                        }
+                    }
+                }
+            };
+            (field_init, map_insert, quote! {})
+        }
+        ChildrenMapKind::Vec => {
+            let (field_init, map_insert) = if is_registry {
+                (
+                    quote! { let mut #field_ident: Vec<(String, #val_ty)> = Vec::new(); },
+                    quote! {
+                        match field_config.conflict {
+                            ::kdl_config::ConflictPolicy::Error => {
+                                if #field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                                    #duplicate_error
+                                }
+                                #field_ident.push((#key_ident.clone(), #value_ident));
+                            }
+                            ::kdl_config::ConflictPolicy::First => {
+                                if !#field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                                    #field_ident.push((#key_ident.clone(), #value_ident));
+                                }
+                            }
+                            ::kdl_config::ConflictPolicy::Last => {
+                                if let Some(#existing_idx_ident) = #field_ident.iter().position(|(key, _)| key == &#key_ident) {
+                                    #field_ident.remove(#existing_idx_ident);
+                                }
+                                #field_ident.push((#key_ident.clone(), #value_ident));
+                            }
+                            ::kdl_config::ConflictPolicy::Append => {
+                                #field_ident.push((#key_ident.clone(), #value_ident));
+                            }
+                        }
+                    },
+                )
+            } else {
+                (
+                    {
+                        let key_ty = key_ty.expect("children_map requires key type");
+                        quote! { let mut #field_ident: Vec<(#key_ty, #val_ty)> = Vec::new(); }
+                    },
+                    quote! {
+                        match field_config.conflict {
+                            ::kdl_config::ConflictPolicy::Error => {
+                                if #field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                                    #duplicate_error
+                                }
+                                #field_ident.push((#key_ident, #value_ident));
+                            }
+                            ::kdl_config::ConflictPolicy::First => {
+                                if !#field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                                    #field_ident.push((#key_ident, #value_ident));
+                                }
+                            }
+                            ::kdl_config::ConflictPolicy::Last => {
+                                if let Some(#existing_idx_ident) = #field_ident.iter().position(|(key, _)| key == &#key_ident) {
+                                    #field_ident.remove(#existing_idx_ident);
+                                }
+                                #field_ident.push((#key_ident, #value_ident));
+                            }
+                            ::kdl_config::ConflictPolicy::Append => {
+                                #field_ident.push((#key_ident, #value_ident));
+                            }
+                        }
+                    },
+                )
+            };
+            (field_init, map_insert, quote! {})
+        }
+        ChildrenMapKind::OptionVec => {
+            let (field_init, map_insert) = if is_registry {
+                (
+                    quote! { let mut #field_ident: Vec<(String, #val_ty)> = Vec::new(); },
+                    quote! {
+                        match field_config.conflict {
+                            ::kdl_config::ConflictPolicy::Error => {
+                                if #field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                                    #duplicate_error
+                                }
+                                #field_ident.push((#key_ident.clone(), #value_ident));
+                            }
+                            ::kdl_config::ConflictPolicy::First => {
+                                if !#field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                                    #field_ident.push((#key_ident.clone(), #value_ident));
+                                }
+                            }
+                            ::kdl_config::ConflictPolicy::Last => {
+                                if let Some(#existing_idx_ident) = #field_ident.iter().position(|(key, _)| key == &#key_ident) {
+                                    #field_ident.remove(#existing_idx_ident);
+                                }
+                                #field_ident.push((#key_ident.clone(), #value_ident));
+                            }
+                            ::kdl_config::ConflictPolicy::Append => {
+                                #field_ident.push((#key_ident.clone(), #value_ident));
+                            }
+                        }
+                    },
+                )
+            } else {
+                (
+                    {
+                        let key_ty = key_ty.expect("children_map requires key type");
+                        quote! { let mut #field_ident: Vec<(#key_ty, #val_ty)> = Vec::new(); }
+                    },
+                    quote! {
+                        match field_config.conflict {
+                            ::kdl_config::ConflictPolicy::Error => {
+                                if #field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                                    #duplicate_error
+                                }
+                                #field_ident.push((#key_ident, #value_ident));
+                            }
+                            ::kdl_config::ConflictPolicy::First => {
+                                if !#field_ident.iter().any(|(key, _)| key == &#key_ident) {
+                                    #field_ident.push((#key_ident, #value_ident));
+                                }
+                            }
+                            ::kdl_config::ConflictPolicy::Last => {
+                                if let Some(#existing_idx_ident) = #field_ident.iter().position(|(key, _)| key == &#key_ident) {
+                                    #field_ident.remove(#existing_idx_ident);
+                                }
+                                #field_ident.push((#key_ident, #value_ident));
+                            }
+                            ::kdl_config::ConflictPolicy::Append => {
+                                #field_ident.push((#key_ident, #value_ident));
+                            }
+                        }
+                    },
+                )
+            };
+            let finalize_vec = if is_registry {
+                quote! {
+                    let #field_ident: #ty = if #field_ident.is_empty() { None } else { Some(#field_ident) };
+                }
+            } else {
+                quote! {
+                    let #field_ident: #ty = if #field_ident.is_empty() { None } else { Some(#field_ident) };
+                }
+            };
+            (field_init, map_insert, finalize_vec)
+        }
+    };
+
+    let filter = if is_registry {
         quote! {
-            if struct_config.deny_unknown {
-                used_keys.mark_child(#map_node);
+            if #child_ident.name_str() != #container {
+                continue;
             }
-            for #child_ident in node.children_named(#map_node) {
-                #key_extract
-                let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(&#node_copy_ident, config)
-                    .map_err(|err| err.with_node(&#node_copy_ident))?;
-                #map_insert
+        }
+    } else if let Some(map_node) = map_node.as_ref() {
+        quote! {
+            if #child_ident.name_str() != #map_node {
+                continue;
             }
         }
     } else {
-        quote! {
-            for #child_ident in node.children() {
-                if struct_config.deny_unknown {
-                    used_keys.mark_child(&#child_ident.name);
-                }
-                #key_extract
-                let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
-                    .map_err(|err| err.with_node(#child_ident))?;
-                #map_insert
-            }
-        }
+        quote! {}
     };
 
     quote! {
@@ -2045,16 +2635,26 @@ fn generate_children_map_parser(
         let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
         #field_init
 
-        #map_loop
+        for (child_index, #child_ident) in node.iter_children().enumerate() {
+            #filter
+            let child_ctx = ctx.with_child(#child_ident.name_str(), child_index);
+            #key_extract
+            #inject_attr
+            let #value_ident = <#val_ty as ::kdl_config::KdlDecode>::decode(&#node_copy_ident, &child_ctx)
+                .map_err(|err| err.with_context(child_ctx.source, child_ctx.path.as_ref(), Some(#child_ident.span().offset())))?;
+            #map_insert
+            claims.claim_child(child_index);
+        }
 
         if #required && #field_ident.is_empty() {
             return Err(::kdl_config::KdlConfigError::missing_required(
                 #struct_name,
                 #field_name,
                 #missing_key,
-                ::kdl_config::Placement::Children,
+                #missing_placement,
             ));
         }
+
         #finalize_vec
     }
 }
@@ -2129,7 +2729,7 @@ fn generate_literal_default_expr(lit: &DefaultLiteral, ty: &syn::Type) -> TokenS
             } else {
                 quote! {
                     ::kdl_config::FromKdlValue::from_value(
-                        &::kdl_config::Value::Int(#n)
+                        &::kdl_config::KdlValue::Integer(#n)
                     ).expect(concat!("invalid default value for ", stringify!(#ty)))
                 }
             }
@@ -2140,7 +2740,7 @@ fn generate_literal_default_expr(lit: &DefaultLiteral, ty: &syn::Type) -> TokenS
             } else {
                 quote! {
                     ::kdl_config::FromKdlValue::from_value(
-                        &::kdl_config::Value::Float(#f)
+                        &::kdl_config::KdlValue::Float(#f)
                     ).expect(concat!("invalid default value for ", stringify!(#ty)))
                 }
             }
@@ -2151,7 +2751,7 @@ fn generate_literal_default_expr(lit: &DefaultLiteral, ty: &syn::Type) -> TokenS
             } else {
                 quote! {
                     ::kdl_config::FromKdlValue::from_value(
-                        &::kdl_config::Value::Bool(#b)
+                        &::kdl_config::KdlValue::Bool(#b)
                     ).expect(concat!("invalid default value for ", stringify!(#ty)))
                 }
             }
@@ -2162,7 +2762,7 @@ fn generate_literal_default_expr(lit: &DefaultLiteral, ty: &syn::Type) -> TokenS
             } else {
                 quote! {
                     ::kdl_config::FromKdlValue::from_value(
-                        &::kdl_config::Value::String(::std::string::String::from(#s))
+                        &::kdl_config::KdlValue::String(::std::string::String::from(#s))
                     ).expect(concat!("invalid default value for ", stringify!(#ty)))
                 }
             }

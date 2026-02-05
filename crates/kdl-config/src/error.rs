@@ -1,6 +1,13 @@
 use std::fmt;
 
-use crate::types::{Node, NodeLocation};
+use crate::context::Source;
+use crate::node_path::NodePath;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeLocation {
+    pub line: usize,
+    pub column: usize,
+}
 
 #[derive(Debug, Clone)]
 pub struct KdlConfigError {
@@ -10,7 +17,7 @@ pub struct KdlConfigError {
     pub placement: Placement,
     pub required: bool,
     pub kind: ErrorKind,
-    pub node_path: Option<String>,
+    pub node_path: Option<NodePath>,
     pub location: Option<NodeLocation>,
 }
 
@@ -194,12 +201,20 @@ impl fmt::Display for KdlConfigError {
 impl std::error::Error for KdlConfigError {}
 
 impl KdlConfigError {
-    pub fn with_node(mut self, node: &Node) -> Self {
-        if self.location.is_none() {
-            self.location = node.location();
-        }
+    pub fn with_context(
+        mut self,
+        source: Option<&Source>,
+        path: Option<&NodePath>,
+        offset: Option<usize>,
+    ) -> Self {
         if self.node_path.is_none() {
-            self.node_path = node.path().map(|s| s.to_string());
+            self.node_path = path.cloned();
+        }
+        if self.location.is_none() {
+            if let (Some(source), Some(offset)) = (source, offset) {
+                let (line, column) = source.location(offset);
+                self.location = Some(NodeLocation { line, column });
+            }
         }
         self
     }

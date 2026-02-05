@@ -1,10 +1,20 @@
 use crate::error::{KdlConfigError, Placement};
-use crate::Value;
+use kdl::KdlValue;
 use std::path::PathBuf;
 
 pub trait FromKdlValue: Sized {
     const TYPE_NAME: &'static str;
-    fn from_value(value: &Value) -> Option<Self>;
+    fn from_value(value: &KdlValue) -> Option<Self>;
+}
+
+fn kdl_value_type_name(value: &KdlValue) -> &'static str {
+    match value {
+        KdlValue::Null => "null",
+        KdlValue::Bool(_) => "bool",
+        KdlValue::Integer(_) => "int",
+        KdlValue::Float(_) => "float",
+        KdlValue::String(_) => "string",
+    }
 }
 
 /// Context for converting a KDL value into a typed field.
@@ -68,9 +78,9 @@ impl<'a> ConvertContext<'a> {
 impl FromKdlValue for String {
     const TYPE_NAME: &'static str = "string";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::String(s) => Some(s.clone()),
+            KdlValue::String(s) => Some(s.clone()),
             _ => None,
         }
     }
@@ -79,10 +89,9 @@ impl FromKdlValue for String {
 impl FromKdlValue for PathBuf {
     const TYPE_NAME: &'static str = "path";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Path(p) => Some(p.clone()),
-            Value::String(s) => Some(PathBuf::from(s)),
+            KdlValue::String(s) => Some(PathBuf::from(s)),
             _ => None,
         }
     }
@@ -91,9 +100,9 @@ impl FromKdlValue for PathBuf {
 impl FromKdlValue for bool {
     const TYPE_NAME: &'static str = "bool";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Bool(b) => Some(*b),
+            KdlValue::Bool(b) => Some(*b),
             _ => None,
         }
     }
@@ -102,9 +111,11 @@ impl FromKdlValue for bool {
 impl FromKdlValue for i64 {
     const TYPE_NAME: &'static str = "i64";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Int(n) if *n >= i64::MIN as i128 && *n <= i64::MAX as i128 => Some(*n as i64),
+            KdlValue::Integer(n) if *n >= i64::MIN as i128 && *n <= i64::MAX as i128 => {
+                Some(*n as i64)
+            }
             _ => None,
         }
     }
@@ -113,9 +124,9 @@ impl FromKdlValue for i64 {
 impl FromKdlValue for i128 {
     const TYPE_NAME: &'static str = "i128";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Int(n) => Some(*n),
+            KdlValue::Integer(n) => Some(*n),
             _ => None,
         }
     }
@@ -124,9 +135,9 @@ impl FromKdlValue for i128 {
 impl FromKdlValue for u64 {
     const TYPE_NAME: &'static str = "u64";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Int(n) if *n >= 0 && *n <= u64::MAX as i128 => Some(*n as u64),
+            KdlValue::Integer(n) if *n >= 0 && *n <= u64::MAX as i128 => Some(*n as u64),
             _ => None,
         }
     }
@@ -135,9 +146,11 @@ impl FromKdlValue for u64 {
 impl FromKdlValue for i32 {
     const TYPE_NAME: &'static str = "i32";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Int(n) if *n >= i32::MIN as i128 && *n <= i32::MAX as i128 => Some(*n as i32),
+            KdlValue::Integer(n) if *n >= i32::MIN as i128 && *n <= i32::MAX as i128 => {
+                Some(*n as i32)
+            }
             _ => None,
         }
     }
@@ -146,9 +159,9 @@ impl FromKdlValue for i32 {
 impl FromKdlValue for u32 {
     const TYPE_NAME: &'static str = "u32";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Int(n) if *n >= 0 && *n <= u32::MAX as i128 => Some(*n as u32),
+            KdlValue::Integer(n) if *n >= 0 && *n <= u32::MAX as i128 => Some(*n as u32),
             _ => None,
         }
     }
@@ -157,9 +170,9 @@ impl FromKdlValue for u32 {
 impl FromKdlValue for usize {
     const TYPE_NAME: &'static str = "usize";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Int(n) if *n >= 0 => {
+            KdlValue::Integer(n) if *n >= 0 => {
                 if *n <= usize::MAX as i128 {
                     Some(*n as usize)
                 } else {
@@ -174,10 +187,10 @@ impl FromKdlValue for usize {
 impl FromKdlValue for f64 {
     const TYPE_NAME: &'static str = "f64";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Float(f) => Some(*f),
-            Value::Int(n) => Some(*n as f64),
+            KdlValue::Float(f) => Some(*f),
+            KdlValue::Integer(n) => Some(*n as f64),
             _ => None,
         }
     }
@@ -186,10 +199,10 @@ impl FromKdlValue for f64 {
 impl FromKdlValue for f32 {
     const TYPE_NAME: &'static str = "f32";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Float(f) => Some(*f as f32),
-            Value::Int(n) => Some(*n as f32),
+            KdlValue::Float(f) => Some(*f as f32),
+            KdlValue::Integer(n) => Some(*n as f32),
             _ => None,
         }
     }
@@ -198,33 +211,24 @@ impl FromKdlValue for f32 {
 impl<T: FromKdlValue> FromKdlValue for Vec<T> {
     const TYPE_NAME: &'static str = "array";
 
-    fn from_value(value: &Value) -> Option<Self> {
-        match value {
-            Value::Array(arr) => {
-                let mut result = Vec::with_capacity(arr.len());
-                for item in arr {
-                    result.push(T::from_value(item)?);
-                }
-                Some(result)
-            }
-            val => Some(vec![T::from_value(val)?]),
-        }
+    fn from_value(value: &KdlValue) -> Option<Self> {
+        Some(vec![T::from_value(value)?])
     }
 }
 
 impl<T: FromKdlValue> FromKdlValue for Option<T> {
     const TYPE_NAME: &'static str = "option";
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &KdlValue) -> Option<Self> {
         match value {
-            Value::Null => Some(None),
+            KdlValue::Null => Some(None),
             _ => T::from_value(value).map(Some),
         }
     }
 }
 
 pub fn convert_value<T: FromKdlValue>(
-    value: &Value,
+    value: &KdlValue,
     struct_name: &str,
     field_name: &str,
     kdl_key: &str,
@@ -237,19 +241,19 @@ pub fn convert_value<T: FromKdlValue>(
             kdl_key,
             placement,
             T::TYPE_NAME,
-            value.type_name(),
+            kdl_value_type_name(value),
         )
     })
 }
 
 pub fn convert_value_checked<T: FromKdlValue>(
-    value: &Value,
+    value: &KdlValue,
     struct_name: &str,
     field_name: &str,
     kdl_key: &str,
     placement: Placement,
 ) -> Result<T, KdlConfigError> {
-    if let Value::Int(n) = value {
+    if let KdlValue::Integer(n) = value {
         if T::from_value(value).is_none() {
             return Err(KdlConfigError::out_of_range(
                 struct_name,
@@ -266,7 +270,7 @@ pub fn convert_value_checked<T: FromKdlValue>(
 }
 
 pub fn convert_value_ctx<T: FromKdlValue>(
-    value: &Value,
+    value: &KdlValue,
     ctx: ConvertContext<'_>,
 ) -> Result<T, KdlConfigError> {
     convert_value(
@@ -279,7 +283,7 @@ pub fn convert_value_ctx<T: FromKdlValue>(
 }
 
 pub fn convert_value_checked_ctx<T: FromKdlValue>(
-    value: &Value,
+    value: &KdlValue,
     ctx: ConvertContext<'_>,
 ) -> Result<T, KdlConfigError> {
     convert_value_checked(
@@ -300,7 +304,7 @@ pub trait ValueConvertExt {
     ) -> Result<T, KdlConfigError>;
 }
 
-impl ValueConvertExt for Value {
+impl ValueConvertExt for KdlValue {
     fn convert_with<T: FromKdlValue>(&self, ctx: ConvertContext<'_>) -> Result<T, KdlConfigError> {
         convert_value_ctx(self, ctx)
     }

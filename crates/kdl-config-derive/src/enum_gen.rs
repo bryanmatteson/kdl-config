@@ -6,11 +6,11 @@ use syn::{
 };
 
 use crate::attrs::{
-    extract_inner_type, is_option_type, parse_struct_attrs, serde_rename_from_attrs, FieldInfo,
-    StructAttrs,
+    FieldInfo, SelectSpec, SelectorAst, StructAttrs, extract_inner_type, is_option_type,
+    parse_struct_attrs, serde_rename_from_attrs,
 };
 use crate::parse_gen::{generate_field_parser, generate_skip_marks, generate_struct_overrides};
-use crate::render_gen::{render_body_with_accessor, FieldAccessor};
+use crate::render_gen::{FieldAccessor, render_body_with_accessor};
 
 #[derive(Debug)]
 enum LiteralTag {
@@ -214,11 +214,11 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
     let expected_node_name = struct_attrs.resolved_node_name(&enum_name_str);
     let validate_name = if let Some(ref node_name) = expected_node_name {
         quote! {
-            if node.name != #node_name {
+            if !ctx.allow_any_name && node.name_str() != #node_name {
                 return Err(::kdl_config::KdlConfigError::node_name_mismatch(
                     #enum_name_str,
                     #node_name,
-                    &node.name,
+                    node.name_str(),
                 ));
             }
         }
@@ -227,6 +227,14 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
     };
 
     let struct_overrides = generate_struct_overrides(&struct_attrs);
+    let discr_select = if let Some(spec) = struct_attrs.selector_spec.clone() {
+        spec
+    } else {
+        let selector = struct_attrs.selector.clone().unwrap_or(SelectorAst::Arg(0));
+        let opts = struct_attrs.selector_opts.clone();
+        SelectSpec { selector, opts }
+    };
+    let discr_extract = generate_discriminator_extract(&discr_select, &enum_name_str);
 
     let valid_variants_tokens: Vec<TokenStream> = variants
         .iter()
@@ -244,12 +252,13 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
         .collect();
 
     Ok(quote! {
-        impl ::kdl_config::KdlParse for #enum_name {
-            fn from_node(node: &::kdl_config::Node, config: &::kdl_config::ParseConfig) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
+        impl ::kdl_config::KdlDecode for #enum_name {
+            fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
+                use ::kdl_config::KdlNodeExt as _;
                 #validate_name
 
                 let struct_overrides = #struct_overrides;
-                let struct_config = ::kdl_config::resolve_struct(config, struct_overrides);
+                let struct_config = ::kdl_config::resolve_struct(ctx.config, struct_overrides);
                 let enum_config = ::kdl_config::ParseConfig {
                     default_placement: struct_config.default_placement,
                     default_bool: struct_config.bool_mode,
@@ -257,30 +266,27 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
                     default_conflict: struct_config.conflict,
                     deny_unknown: struct_config.deny_unknown,
                 };
-
-                let discr = match node.arg(0) {
-                    Some(value) => value,
-                    None => {
-                        return Err(::kdl_config::KdlConfigError::missing_required(
-                            #enum_name_str,
-                            "variant",
-                            "arg[0]",
-                            ::kdl_config::Placement::AttrPositional,
-                        ));
-                    }
-                };
-                let discr_display = match discr {
-                    ::kdl_config::Value::String(s) => s.clone(),
-                    _ => ::kdl_config::render_value(discr),
+                let (discr, variant_node, discr_key, discr_placement) = { #discr_extract };
+                let discr_display = match &discr {
+                    ::kdl_config::KdlValue::String(s) => s.to_string(),
+                    other => other.to_string(),
                 };
 
                 #(#parse_arms)*
 
-                Err(::kdl_config::KdlConfigError::invalid_variant(
-                    #enum_name_str,
-                    discr_display,
-                    vec![#(#valid_variants_tokens),*],
-                ))
+                Err(::kdl_config::KdlConfigError {
+                    struct_name: #enum_name_str.to_string(),
+                    field_name: Some("variant".to_string()),
+                    kdl_key: Some(discr_key),
+                    placement: discr_placement,
+                    required: false,
+                    kind: ::kdl_config::ErrorKind::InvalidVariant {
+                        value: discr_display,
+                        valid_variants: vec![#(#valid_variants_tokens),*],
+                    },
+                    node_path: None,
+                    location: None,
+                })
             }
         }
 
@@ -321,8 +327,8 @@ fn generate_parse_arm(
     let parse_body = match &variant.kind {
         VariantKind::Unit => {
             quote! {
-                let variant_node = node.without_first_arg();
-                if !variant_node.args().is_empty() || !variant_node.attrs().is_empty() || !variant_node.children().is_empty() {
+                let variant_node = variant_node.clone();
+                if !variant_node.args().is_empty() || !variant_node.attrs().is_empty() || variant_node.iter_children().next().is_some() {
                     return Err(::kdl_config::KdlConfigError::custom(
                         #enum_name_str,
                         format!("variant '{}' does not accept values", #kdl_name),
@@ -333,9 +339,14 @@ fn generate_parse_arm(
         }
         VariantKind::Newtype(inner_ty) => {
             quote! {
-                let mut variant_node = node.without_first_arg();
-                variant_node.name = #kdl_name.to_string();
-                let value = <#inner_ty as ::kdl_config::KdlParse>::from_node(&variant_node, &enum_config)?;
+                let variant_node = variant_node.clone();
+                let enum_ctx = ::kdl_config::DecodeContext {
+                    config: &enum_config,
+                    source: ctx.source,
+                    path: ctx.path.clone(),
+                    allow_any_name: true,
+                };
+                let value = <#inner_ty as ::kdl_config::KdlDecode>::decode(&variant_node, &enum_ctx)?;
                 Ok(Self::#variant_ident(value))
             }
         }
@@ -394,8 +405,8 @@ fn generate_parse_arm(
 
             let tuple_len = types.len();
             quote! {
-                let variant_node = node.without_first_arg();
-                if !variant_node.attrs().is_empty() || !variant_node.children().is_empty() {
+                let variant_node = variant_node.clone();
+                if !variant_node.attrs().is_empty() || variant_node.iter_children().next().is_some() {
                     return Err(::kdl_config::KdlConfigError::custom(
                         #enum_name_str,
                         format!("variant '{}' does not accept attributes or children", #kdl_name),
@@ -424,7 +435,7 @@ fn generate_parse_arm(
                 .collect();
             let skip_marks: Vec<TokenStream> = skipped_infos
                 .iter()
-                .map(|field| generate_skip_marks(field))
+                .map(|field| generate_skip_marks(field, &struct_name_str))
                 .collect();
             let field_names: Vec<&Ident> = fields.iter().map(|f| &f.ident).collect();
 
@@ -434,16 +445,15 @@ fn generate_parse_arm(
                 .collect();
 
             quote! {
-                let mut variant_node = node.without_first_arg();
-                variant_node.name = #kdl_name.to_string();
+                let variant_node = variant_node.clone();
                 let node = &variant_node;
-                let mut used_keys = ::kdl_config::helpers::UsedKeys::new();
+                let mut claims = ::kdl_config::helpers::Claims::new();
 
                 #(#field_parsers)*
                 #(#skip_marks)*
 
                 if struct_config.deny_unknown {
-                    used_keys.check_unknowns(&variant_node, #struct_name_str)?;
+                    claims.check_unknowns(&variant_node, #struct_name_str)?;
                 }
 
                 Ok(Self::#variant_ident { #(#field_names,)* #(#skipped_fields)* })
@@ -525,11 +535,221 @@ fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> Tok
             );
 
             quote! {
-                Self::#variant_ident { #(#bindings),* } => {
+                &Self::#variant_ident { #(ref #bindings),* } => {
                     let rendered = #render_body;
                     ::kdl_config::insert_arg(&rendered, &#tag_render)
                 }
             }
+        }
+    }
+}
+
+fn generate_discriminator_extract(select: &SelectSpec, enum_name_str: &str) -> TokenStream {
+    let missing_selector_error = quote! {
+        ::kdl_config::KdlConfigError::missing_required(
+            #enum_name_str,
+            "variant",
+            "selector",
+            ::kdl_config::Placement::Unknown,
+        )
+    };
+    let consume = select.opts.consume.unwrap_or(true);
+    let selector = &select.selector;
+
+    match selector {
+        SelectorAst::Arg(index) => {
+            let idx = *index as usize;
+            let key = format!("arg[{idx}]");
+            let consume_expr = if consume {
+                quote! { node.without_arg(#idx) }
+            } else {
+                quote! { node.clone() }
+            };
+            quote! {
+                {
+                    let value = node.arg(#idx).ok_or_else(|| {
+                        ::kdl_config::KdlConfigError::missing_required(
+                            #enum_name_str,
+                            "variant",
+                            #key,
+                            ::kdl_config::Placement::AttrPositional,
+                        )
+                    })?;
+                    let variant_node = #consume_expr;
+                    (value.clone(), variant_node, #key.to_string(), ::kdl_config::Placement::AttrPositional)
+                }
+            }
+        }
+        SelectorAst::Attr(name) => {
+            let consume_expr = if consume {
+                quote! { node.without_attr(#name) }
+            } else {
+                quote! { node.clone() }
+            };
+            quote! {
+                {
+                    let values = node.attr_values(#name).ok_or_else(|| {
+                        ::kdl_config::KdlConfigError::missing_required(
+                            #enum_name_str,
+                            "variant",
+                            #name,
+                            ::kdl_config::Placement::AttrKeyed,
+                        )
+                    })?;
+                    if values.len() != 1 {
+                        return Err(::kdl_config::KdlConfigError::too_many(
+                            #enum_name_str,
+                            "variant",
+                            #name,
+                            ::kdl_config::Placement::AttrKeyed,
+                            values.len(),
+                        ));
+                    }
+                    let value = values[0].clone();
+                    let variant_node = #consume_expr;
+                    (value, variant_node, #name.to_string(), ::kdl_config::Placement::AttrKeyed)
+                }
+            }
+        }
+        SelectorAst::Name => {
+            quote! {
+                {
+                    let value = ::kdl_config::KdlValue::String(node.base_name().to_string());
+                    let variant_node = node.clone();
+                    (value, variant_node, "name()".to_string(), ::kdl_config::Placement::Unknown)
+                }
+            }
+        }
+        SelectorAst::Func(path) => {
+            let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
+                let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
+                quote! { #ident }
+            });
+            let key = format!("func({path})");
+            quote! {
+                {
+                    let value = #key_fn(node)?;
+                    let value: ::kdl_config::KdlValue = value.into();
+                    let variant_node = node.clone();
+                    (value, variant_node, #key.to_string(), ::kdl_config::Placement::Unknown)
+                }
+            }
+        }
+        SelectorAst::Any(selectors) => {
+            let mut attempts = Vec::new();
+            for selector in selectors {
+                let attempt = match selector {
+                    SelectorAst::Arg(index) => {
+                        let idx = *index as usize;
+                        let key = format!("arg[{idx}]");
+                        let consume_expr = if consume {
+                            quote! { node.without_arg(#idx) }
+                        } else {
+                            quote! { node.clone() }
+                        };
+                        quote! {
+                            if discr.is_none() {
+                                if let Some(val) = node.arg(#idx) {
+                                    discr = Some(val.clone());
+                                    variant_node = Some(#consume_expr);
+                                    discr_key = Some(#key.to_string());
+                                    discr_placement = Some(::kdl_config::Placement::AttrPositional);
+                                }
+                            }
+                        }
+                    }
+                    SelectorAst::Attr(name) => {
+                        let consume_expr = if consume {
+                            quote! { node.without_attr(#name) }
+                        } else {
+                            quote! { node.clone() }
+                        };
+                        quote! {
+                            if discr.is_none() {
+                                if let Some(values) = node.attr_values(#name) {
+                                    if values.len() != 1 {
+                                        return Err(::kdl_config::KdlConfigError::too_many(
+                                            #enum_name_str,
+                                            "variant",
+                                            #name,
+                                            ::kdl_config::Placement::AttrKeyed,
+                                            values.len(),
+                                        ));
+                                    }
+                                    discr = Some(values[0].clone());
+                                    variant_node = Some(#consume_expr);
+                                    discr_key = Some(#name.to_string());
+                                    discr_placement = Some(::kdl_config::Placement::AttrKeyed);
+                                }
+                            }
+                        }
+                    }
+                    SelectorAst::Name => {
+                        quote! {
+                            if discr.is_none() {
+                                discr = Some(::kdl_config::KdlValue::String(node.base_name().to_string()));
+                                variant_node = Some(node.clone());
+                                discr_key = Some("name()".to_string());
+                                discr_placement = Some(::kdl_config::Placement::Unknown);
+                            }
+                        }
+                    }
+                    SelectorAst::Func(path) => {
+                        let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
+                            let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
+                            quote! { #ident }
+                        });
+                        let key = format!("func({path})");
+                        quote! {
+                            if discr.is_none() {
+                                let value = #key_fn(node)?;
+                                discr = Some(value.into());
+                                variant_node = Some(node.clone());
+                                discr_key = Some(#key.to_string());
+                                discr_placement = Some(::kdl_config::Placement::Unknown);
+                            }
+                        }
+                    }
+                    SelectorAst::Any(_) => {
+                        quote! {
+                            return Err(::kdl_config::KdlConfigError::custom(
+                                #enum_name_str,
+                                "unsupported nested selector in any(...)",
+                            ));
+                        }
+                    }
+                };
+                attempts.push(attempt);
+            }
+            quote! {
+                {
+                    let mut discr: ::core::option::Option<::kdl_config::KdlValue> = None;
+                    let mut variant_node: ::core::option::Option<::kdl_config::KdlNode> = None;
+                    let mut discr_key: ::core::option::Option<String> = None;
+                    let mut discr_placement: ::core::option::Option<::kdl_config::Placement> = None;
+                    #(#attempts)*
+                    let discr = discr.ok_or_else(|| {
+                        #missing_selector_error
+                    })?;
+                    let variant_node = variant_node.unwrap_or_else(|| node.clone());
+                    let discr_key = discr_key.unwrap_or_else(|| "selector".to_string());
+                    let discr_placement = discr_placement.unwrap_or(::kdl_config::Placement::Unknown);
+                    (discr, variant_node, discr_key, discr_placement)
+                }
+            }
+        }
+    }
+}
+
+fn tag_kdl_value_expr(tag: &VariantTag) -> TokenStream {
+    match tag {
+        VariantTag::String(s) => quote! { ::kdl_config::KdlValue::String(#s.to_string()) },
+        VariantTag::Literal(LiteralTag::Int(n)) => quote! { ::kdl_config::KdlValue::Integer(#n) },
+        VariantTag::Literal(LiteralTag::Float(f)) => {
+            quote! { ::kdl_config::KdlValue::Float(#f) }
+        }
+        VariantTag::Literal(LiteralTag::Bool(b)) => {
+            quote! { ::kdl_config::KdlValue::Bool(#b) }
         }
     }
 }
@@ -550,11 +770,13 @@ fn tag_value_expr(tag: &VariantTag) -> TokenStream {
 fn tag_match_expr(tag: &VariantTag) -> TokenStream {
     match tag {
         VariantTag::String(s) => {
-            quote! { matches!(discr, ::kdl_config::Value::String(val) if val == #s) }
+            quote! {
+                matches!(&discr, ::kdl_config::KdlValue::String(val) if val.as_str() == #s)
+            }
         }
         VariantTag::Literal(_) => {
-            let value_expr = tag_value_expr(tag);
-            quote! { discr == &#value_expr }
+            let value_expr = tag_kdl_value_expr(tag);
+            quote! { discr == #value_expr }
         }
     }
 }

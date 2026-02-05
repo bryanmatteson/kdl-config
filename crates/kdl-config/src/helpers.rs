@@ -1,9 +1,67 @@
 use std::collections::HashSet;
 
-use crate::config::{ConflictPolicy, FlagStyle, ParseConfig};
+use crate::config::{ConflictPolicy, FlagStyle};
 use crate::error::{ErrorKind, KdlConfigError, Placement};
-use crate::types::{Node, Value};
-use crate::KdlParse;
+use crate::node_ext::KdlNodeExt;
+use crate::KdlDecode;
+use kdl::{KdlNode, KdlValue};
+
+#[derive(Debug, Default)]
+pub struct Claims {
+    attrs: HashSet<String>,
+    args: Vec<bool>,
+    children: Vec<bool>,
+}
+
+impl Claims {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn claim_attr(&mut self, key: &str) {
+        self.attrs.insert(key.to_string());
+    }
+
+    pub fn claim_arg(&mut self, index: usize) {
+        if index >= self.args.len() {
+            self.args.resize(index + 1, false);
+        }
+        self.args[index] = true;
+    }
+
+    pub fn claim_child(&mut self, index: usize) {
+        if index >= self.children.len() {
+            self.children.resize(index + 1, false);
+        }
+        self.children[index] = true;
+    }
+
+    pub fn check_unknowns(&self, node: &KdlNode, struct_name: &str) -> Result<(), KdlConfigError> {
+        let mut arg_index = 0usize;
+        for entry in node.entries() {
+            if let Some(name) = entry.name() {
+                let key = name.value();
+                if !self.attrs.contains(key) {
+                    return Err(KdlConfigError::unknown_attribute(struct_name, key));
+                }
+            } else {
+                if self.args.get(arg_index).copied().unwrap_or(false) {
+                    arg_index += 1;
+                    continue;
+                }
+                return Err(KdlConfigError::unknown_argument(struct_name, arg_index));
+            }
+        }
+
+        for (index, _child) in node.iter_children().enumerate() {
+            if !self.children.get(index).copied().unwrap_or(false) {
+                return Err(KdlConfigError::unknown_child(struct_name, _child.name().value()));
+            }
+        }
+
+        Ok(())
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct UsedKeys {
@@ -34,29 +92,33 @@ impl UsedKeys {
         self.flags.insert(token.to_string());
     }
 
-    pub fn check_unknowns(&self, node: &Node, struct_name: &str) -> Result<(), KdlConfigError> {
-        for key in node.attrs().keys() {
-            if !self.attrs.contains(key) {
-                return Err(KdlConfigError::unknown_attribute(struct_name, key));
-            }
-        }
-
-        for child in node.children() {
-            if !self.children.contains(&child.name) {
-                return Err(KdlConfigError::unknown_child(struct_name, &child.name));
-            }
-        }
-
-        for (index, arg) in node.args().iter().enumerate() {
-            if self.args.contains(&index) {
-                continue;
-            }
-            if let Value::String(token) = arg {
-                if self.flags.contains(token) {
-                    continue;
+    pub fn check_unknowns(&self, node: &KdlNode, struct_name: &str) -> Result<(), KdlConfigError> {
+        let mut arg_index = 0usize;
+        for entry in node.entries() {
+            if let Some(name) = entry.name() {
+                let key = name.value();
+                if !self.attrs.contains(key) {
+                    return Err(KdlConfigError::unknown_attribute(struct_name, key));
                 }
+            } else {
+                if !self.args.contains(&arg_index) {
+                    if let KdlValue::String(token) = entry.value() {
+                        if self.flags.contains(token) {
+                            arg_index += 1;
+                            continue;
+                        }
+                    }
+                    return Err(KdlConfigError::unknown_argument(struct_name, arg_index));
+                }
+                arg_index += 1;
             }
-            return Err(KdlConfigError::unknown_argument(struct_name, index));
+        }
+
+        for child in node.iter_children() {
+            let name = child.name().value();
+            if !self.children.contains(name) {
+                return Err(KdlConfigError::unknown_child(struct_name, name));
+            }
         }
 
         Ok(())
@@ -72,7 +134,7 @@ pub fn flag_names_for_key(key: &str, style: FlagStyle) -> (String, String) {
 }
 
 pub fn find_flag(
-    node: &Node,
+    node: &KdlNode,
     pos: &str,
     neg: &str,
     struct_name: &str,
@@ -82,7 +144,7 @@ pub fn find_flag(
 }
 
 fn find_flag_marked(
-    node: &Node,
+    node: &KdlNode,
     pos: &str,
     neg: &str,
     struct_name: &str,
@@ -93,7 +155,7 @@ fn find_flag_marked(
     let mut found_neg = false;
 
     for arg in node.args() {
-        if let Value::String(s) = arg {
+        if let KdlValue::String(s) = arg {
             if s == pos {
                 found_pos = true;
                 if let Some(keys) = used_keys.as_deref_mut() {
@@ -122,7 +184,7 @@ fn find_flag_marked(
 }
 
 pub fn find_flag_with_style(
-    node: &Node,
+    node: &KdlNode,
     key: &str,
     style: FlagStyle,
     custom_pos: Option<String>,
@@ -142,8 +204,120 @@ pub fn find_flag_with_style(
     )
 }
 
+/// Scan flag tokens and return the resolved bool plus arg indices (if any).
+pub fn scan_flag_with_style(
+    node: &KdlNode,
+    key: &str,
+    style: FlagStyle,
+    custom_pos: Option<String>,
+    custom_neg: Option<String>,
+    struct_name: &str,
+    field_name: &str,
+) -> Result<Option<(bool, Vec<usize>)>, KdlConfigError> {
+    if custom_pos.is_some() || custom_neg.is_some() {
+        let pos = custom_pos.ok_or_else(|| {
+            KdlConfigError::custom(struct_name, "flag override requires both flag and neg_flag")
+        })?;
+        let neg = custom_neg.ok_or_else(|| {
+            KdlConfigError::custom(struct_name, "flag override requires both flag and neg_flag")
+        })?;
+        return scan_flag_tokens(node, &pos, &neg, None, None, struct_name, field_name);
+    }
+
+    let (pos1, neg1) = match style {
+        FlagStyle::WithWithout => (format!("with-{}", key), format!("without-{}", key)),
+        _ => (key.to_string(), format!("no-{}", key)),
+    };
+
+    if style != FlagStyle::Both {
+        let (other_pos, other_neg) = match style {
+            FlagStyle::WithWithout => (key.to_string(), format!("no-{}", key)),
+            FlagStyle::ValueNo => (format!("with-{}", key), format!("without-{}", key)),
+            FlagStyle::Both => unreachable!(),
+        };
+
+        return scan_flag_tokens(
+            node,
+            &pos1,
+            &neg1,
+            Some((&other_pos, &other_neg)),
+            None,
+            struct_name,
+            field_name,
+        );
+    }
+
+    let (pos2, neg2) = (format!("with-{}", key), format!("without-{}", key));
+    scan_flag_tokens(
+        node,
+        &pos1,
+        &neg1,
+        None,
+        Some((&pos2, &neg2)),
+        struct_name,
+        field_name,
+    )
+}
+
+fn scan_flag_tokens(
+    node: &KdlNode,
+    pos1: &str,
+    neg1: &str,
+    other_style: Option<(&str, &str)>,
+    alt_style: Option<(&str, &str)>,
+    struct_name: &str,
+    field_name: &str,
+) -> Result<Option<(bool, Vec<usize>)>, KdlConfigError> {
+    let mut pos_indices: Vec<usize> = Vec::new();
+    let mut neg_indices: Vec<usize> = Vec::new();
+    let mut arg_index = 0usize;
+
+    for entry in node.entries() {
+        if entry.name().is_some() {
+            continue;
+        }
+        let value = entry.value();
+        if let KdlValue::String(s) = value {
+            if let Some((other_pos, other_neg)) = other_style {
+                if s == other_pos || s == other_neg {
+                    return Err(KdlConfigError::incompatible_placement(
+                        struct_name,
+                        field_name,
+                        "flag token is not valid for the configured flag style",
+                    ));
+                }
+            }
+
+            if s == pos1 {
+                pos_indices.push(arg_index);
+            } else if s == neg1 {
+                neg_indices.push(arg_index);
+            } else if let Some((alt_pos, alt_neg)) = alt_style {
+                if s == alt_pos {
+                    pos_indices.push(arg_index);
+                } else if s == alt_neg {
+                    neg_indices.push(arg_index);
+                }
+            }
+        }
+        arg_index += 1;
+    }
+
+    match (pos_indices.is_empty(), neg_indices.is_empty()) {
+        (true, true) => Ok(None),
+        (false, false) => Err(KdlConfigError::conflicting_flags(
+            struct_name,
+            field_name,
+            pos1,
+            neg1,
+        )),
+        (false, true) => Ok(Some((true, pos_indices))),
+        (true, false) => Ok(Some((false, neg_indices))),
+    }
+}
+
 pub fn find_flag_with_style_marked(
-    node: &Node,
+    node: &KdlNode,
     key: &str,
     style: FlagStyle,
     custom_pos: Option<String>,
@@ -175,7 +349,7 @@ pub fn find_flag_with_style_marked(
         };
 
         for arg in node.args() {
-            if let Value::String(s) = arg {
+            if let KdlValue::String(s) = arg {
                 if s == &other_pos || s == &other_neg {
                     return Err(KdlConfigError::incompatible_placement(
                         struct_name,
@@ -196,7 +370,7 @@ pub fn find_flag_with_style_marked(
     let mut found_neg2 = false;
 
     for arg in node.args() {
-        if let Value::String(s) = arg {
+        if let KdlValue::String(s) = arg {
             if s == &pos1 {
                 found_pos1 = true;
                 if let Some(keys) = used_keys.as_deref_mut() {
@@ -263,14 +437,14 @@ pub fn find_flag_with_style_marked(
     }
 }
 
-pub fn parse_flatten<T: KdlParse>(node: &Node, config: &ParseConfig) -> Result<T, KdlConfigError> {
-    match T::from_node(node, config) {
+pub fn parse_flatten<T: KdlDecode>(node: &KdlNode, ctx: &crate::DecodeContext) -> Result<T, KdlConfigError> {
+    match T::decode(node, ctx) {
         Ok(val) => Ok(val),
         Err(err) => match &err.kind {
             ErrorKind::NodeNameMismatch { expected, .. } => {
                 let mut clone = node.clone();
-                clone.name = expected.clone();
-                T::from_node(&clone, config)
+                clone.set_name(expected.clone());
+                T::decode(&clone, ctx)
             }
             _ => Err(err),
         },
@@ -278,11 +452,11 @@ pub fn parse_flatten<T: KdlParse>(node: &Node, config: &ParseConfig) -> Result<T
 }
 
 pub fn expect_arg<'a>(
-    node: &'a Node,
+    node: &'a KdlNode,
     index: usize,
     struct_name: &str,
     field_name: &str,
-) -> Result<&'a Value, KdlConfigError> {
+) -> Result<&'a KdlValue, KdlConfigError> {
     node.arg(index).ok_or_else(|| {
         KdlConfigError::missing_required(
             struct_name,
@@ -294,11 +468,11 @@ pub fn expect_arg<'a>(
 }
 
 pub fn expect_attr<'a>(
-    node: &'a Node,
+    node: &'a KdlNode,
     key: &str,
     struct_name: &str,
     field_name: &str,
-) -> Result<&'a Value, KdlConfigError> {
+) -> Result<&'a KdlValue, KdlConfigError> {
     node.attr(key).ok_or_else(|| {
         KdlConfigError::missing_required(struct_name, field_name, key, Placement::AttrKeyed)
     })

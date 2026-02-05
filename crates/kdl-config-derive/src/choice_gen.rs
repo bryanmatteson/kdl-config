@@ -83,7 +83,7 @@ pub fn generate_kdl_choice_impl(
                 VariantKind::Newtype(ty) => {
                     quote! {
                         #kdl_name => {
-                            let inner = <#ty as ::kdl_config::KdlParse>::from_node(node, config)?;
+                            let inner = <#ty as ::kdl_config::KdlDecode>::decode(node, ctx)?;
                             return Ok(Self::#ident(inner));
                         }
                     }
@@ -91,7 +91,7 @@ pub fn generate_kdl_choice_impl(
                 VariantKind::Unit => {
                     quote! {
                         #kdl_name => {
-                            if !node.args().is_empty() || !node.attrs().is_empty() || !node.children().is_empty() {
+                            if !node.args().is_empty() || !node.attrs().is_empty() || node.iter_children().next().is_some() {
                                 return Err(::kdl_config::KdlConfigError::custom(
                                     #enum_name_str,
                                     format!("choice '{}' does not accept values", #kdl_name),
@@ -209,22 +209,29 @@ pub fn generate_kdl_choice_impl(
     };
 
     Ok(quote! {
-        impl ::kdl_config::KdlParse for #enum_name {
-            fn from_node(
-                node: &::kdl_config::Node,
-                config: &::kdl_config::ParseConfig,
+        impl ::kdl_config::KdlDecode for #enum_name {
+            fn decode(
+                node: &::kdl_config::KdlNode,
+                ctx: &::kdl_config::DecodeContext,
             ) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
-                let node_name = node.name.as_str();
-                match node_name {
-                    #(#parse_arms)*
-                    _ => {}
-                }
+                let result = (|| {
+                    use ::kdl_config::KdlNodeExt as _;
+                    let node_name = node.name_str();
+                    match node_name {
+                        #(#parse_arms)*
+                        _ => {}
+                    }
 
-                Err(::kdl_config::KdlConfigError::no_matching_choice(
-                    #enum_name_str,
-                    node_name,
-                    &[#(#valid_variant_names),*],
-                ))
+                    Err(::kdl_config::KdlConfigError::no_matching_choice(
+                        #enum_name_str,
+                        node_name,
+                        &[#(#valid_variant_names),*],
+                    ))
+                })();
+
+                result.map_err(|err| {
+                    err.with_context(ctx.source, ctx.path.as_ref(), Some(node.span().offset()))
+                })
             }
         }
 

@@ -3,8 +3,8 @@ use quote::quote;
 use syn::Ident;
 
 use crate::attrs::{
-    has_child_placement, has_value_placement, is_value_type, BoolMode, DefaultPlacement, FieldInfo,
-    FlagStyle, RenderPlacement, StructAttrs,
+    has_child_placement, has_value_placement, is_value_type, BoolMode, CollectionMode,
+    DefaultPlacement, FieldInfo, FlagStyle, RenderPlacement, StructAttrs,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -14,15 +14,14 @@ enum FieldKind {
     Node,
     NodeVec,
     Flatten,
-    Registry,
-    ChildrenMap,
+    Collection,
     Modifier,
 }
 
 pub(crate) struct FieldAccessor {
-    value: TokenStream,
-    reference: TokenStream,
-    bool_value: TokenStream,
+    pub(crate) value: TokenStream,
+    pub(crate) reference: TokenStream,
+    pub(crate) bool_value: TokenStream,
 }
 
 impl FieldAccessor {
@@ -107,9 +106,14 @@ pub(crate) fn render_body_with_accessor(
             flatten_fields.push(field);
             continue;
         }
-        if field.children_map {
-            children_map_fields.push(field);
-            continue;
+        if let Some(collection) = field.collection.as_ref() {
+            if matches!(
+                collection.mode,
+                CollectionMode::ChildrenMapAll | CollectionMode::ChildrenMapNode { .. }
+            ) {
+                children_map_fields.push(field);
+                continue;
+            }
         }
         let kind = field_kind(field);
         let render_placement = render_placement_for(struct_attrs, field, kind);
@@ -223,9 +227,14 @@ pub(crate) fn render_node_body_with_accessor(
             flatten_fields.push(field);
             continue;
         }
-        if field.children_map {
-            children_map_fields.push(field);
-            continue;
+        if let Some(collection) = field.collection.as_ref() {
+            if matches!(
+                collection.mode,
+                CollectionMode::ChildrenMapAll | CollectionMode::ChildrenMapNode { .. }
+            ) {
+                children_map_fields.push(field);
+                continue;
+            }
         }
         let kind = field_kind(field);
         let render_placement = render_placement_for(struct_attrs, field, kind);
@@ -313,11 +322,8 @@ fn field_kind(field: &FieldInfo) -> FieldKind {
     if field.flatten {
         return FieldKind::Flatten;
     }
-    if field.placement.registry {
-        return FieldKind::Registry;
-    }
-    if field.children_map {
-        return FieldKind::ChildrenMap;
+    if field.collection.is_some() {
+        return FieldKind::Collection;
     }
 
     let has_value = has_value_placement(&field.placement);
@@ -362,11 +368,13 @@ fn render_placement_for(
         return render;
     }
 
-    if field.placement.registry {
-        return RenderPlacement::Registry;
-    }
-    if field.children_map {
-        return RenderPlacement::Children;
+    if let Some(collection) = field.collection.as_ref() {
+        return match collection.mode {
+            CollectionMode::Registry { .. } => RenderPlacement::Registry,
+            CollectionMode::ChildrenMapAll | CollectionMode::ChildrenMapNode { .. } => {
+                RenderPlacement::Children
+            }
+        };
     }
     if field.placement.children_any {
         if field.is_vec || field.is_option_vec {
@@ -415,8 +423,7 @@ fn render_placement_for(
         FieldKind::Node => RenderPlacement::Child,
         FieldKind::NodeVec => RenderPlacement::Children,
         FieldKind::Flatten => RenderPlacement::Child,
-        FieldKind::Registry => RenderPlacement::Registry,
-        FieldKind::ChildrenMap => RenderPlacement::Children,
+        FieldKind::Collection => RenderPlacement::Children,
         FieldKind::Modifier => RenderPlacement::Child,
     }
 }
@@ -860,8 +867,12 @@ fn render_registry_fields(
     for field in fields {
         let access = accessor(field);
         let container = field
-            .container
-            .clone()
+            .collection
+            .as_ref()
+            .and_then(|spec| match &spec.mode {
+                CollectionMode::Registry { container } => Some(container.clone()),
+                _ => None,
+            })
             .unwrap_or_else(|| field.kdl_key.clone());
         let cond = render_condition(field, &access);
         let reference = &access.reference;
@@ -1509,8 +1520,12 @@ fn render_registry_fields_node(
     for field in fields {
         let access = accessor(field);
         let container = field
-            .container
-            .clone()
+            .collection
+            .as_ref()
+            .and_then(|spec| match &spec.mode {
+                CollectionMode::Registry { container } => Some(container.clone()),
+                _ => None,
+            })
             .unwrap_or_else(|| field.kdl_key.clone());
         let cond = render_condition(field, &access);
         let reference = &access.reference;

@@ -1,23 +1,24 @@
-use std::ops::{Deref, DerefMut};
-
-use crate::{parse_config, to_kdl, KdlConfigError, KdlParse, KdlRender, ParseConfig};
+use crate::{DecodeContext, KdlDecode, KdlUpdate, ParseConfig, Source, UpdateContext};
+use crate::{KdlConfigError, KdlDocument};
 
 #[derive(Debug, Clone)]
-pub struct RoundTrip<T> {
+pub struct RoundTripAst<T> {
     value: T,
+    doc: KdlDocument,
+    root_index: usize,
     original: String,
-    canonical: String,
-    node_name: String,
     dirty: bool,
+    config: ParseConfig,
 }
 
-impl<T> RoundTrip<T> {
+impl<T> RoundTripAst<T> {
     pub fn value(&self) -> &T {
         &self.value
     }
 
-    pub fn value_mut(&mut self) -> RoundTripMut<'_, T> {
-        RoundTripMut { inner: self }
+    pub fn value_mut(&mut self) -> &mut T {
+        self.dirty = true;
+        &mut self.value
     }
 
     pub fn into_inner(self) -> T {
@@ -27,94 +28,52 @@ impl<T> RoundTrip<T> {
     pub fn original(&self) -> &str {
         &self.original
     }
-
-    pub fn canonical(&self) -> &str {
-        &self.canonical
-    }
-
-    pub fn node_name(&self) -> &str {
-        &self.node_name
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        self.dirty
-    }
-
-    pub fn mark_dirty(&mut self) {
-        self.dirty = true;
-    }
-
-    pub fn set_value(&mut self, value: T) {
-        self.value = value;
-        self.dirty = true;
-    }
 }
 
-impl<T: KdlRender> RoundTrip<T> {
-    pub fn to_kdl(&self) -> String {
-        let rendered = to_kdl(&self.value, &self.node_name);
-        if self.dirty {
-            return rendered;
+impl<T: KdlUpdate> RoundTripAst<T> {
+    pub fn to_kdl(&mut self) -> Result<String, KdlConfigError> {
+        if !self.dirty {
+            return Ok(self.original.clone());
         }
-        if rendered == self.canonical {
-            self.original.clone()
-        } else {
-            rendered
+        let ctx = UpdateContext::new(&self.config);
+        if let Some(node) = self.doc.nodes_mut().get_mut(self.root_index) {
+            self.value.update(node, &ctx)?;
         }
+        Ok(self.doc.to_string())
     }
 }
 
-pub struct RoundTripMut<'a, T> {
-    inner: &'a mut RoundTrip<T>,
-}
-
-impl<'a, T> Deref for RoundTripMut<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner.value
-    }
-}
-
-impl<'a, T> DerefMut for RoundTripMut<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner.value
-    }
-}
-
-impl<'a, T> Drop for RoundTripMut<'a, T> {
-    fn drop(&mut self) {
-        self.inner.dirty = true;
-    }
-}
-
-pub fn parse_str_roundtrip<T: KdlParse + KdlRender>(
+pub fn parse_str_roundtrip<T: KdlDecode + KdlUpdate>(
     contents: &str,
-) -> Result<RoundTrip<T>, KdlConfigError> {
-    parse_str_with_config_roundtrip(contents, &ParseConfig::default())
+) -> Result<RoundTripAst<T>, KdlConfigError> {
+    parse_str_roundtrip_with_config(contents, &ParseConfig::default())
 }
 
-pub fn parse_str_with_config_roundtrip<T: KdlParse + KdlRender>(
+pub fn parse_str_roundtrip_with_config<T: KdlDecode + KdlUpdate>(
     contents: &str,
     config: &ParseConfig,
-) -> Result<RoundTrip<T>, KdlConfigError> {
-    let root = parse_config(contents)?;
-    let children = root.children();
-    match children.len() {
+) -> Result<RoundTripAst<T>, KdlConfigError> {
+    let doc: KdlDocument = contents
+        .parse()
+        .map_err(|e: kdl::KdlError| KdlConfigError::custom("KDL Document", e.to_string()))?;
+    let source = Source::new(contents.to_string());
+    let ctx = DecodeContext::new(config, Some(&source));
+    let nodes = doc.nodes();
+    match nodes.len() {
         0 => Err(KdlConfigError::custom(
             "KDL Document",
             "expected a single top-level node, found none",
         )),
         1 => {
-            let node = &children[0];
-            let value = T::from_node(node, config)?;
-            let canonical = to_kdl(&value, &node.name);
-            Ok(RoundTrip {
+            let node = &nodes[0];
+            let value = T::decode(node, &ctx.with_root(node.name().value(), 0))?;
+            Ok(RoundTripAst {
                 value,
+                doc,
+                root_index: 0,
                 original: contents.to_string(),
-                canonical,
-                node_name: node.name.clone(),
                 dirty: false,
+                config: *config,
             })
         }
         count => Err(KdlConfigError::custom(

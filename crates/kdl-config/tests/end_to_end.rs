@@ -966,9 +966,12 @@ fn registry_key_arg_uses_custom_index() {
     assert_eq!(parsed.items.get("beta").unwrap().value, 10);
 }
 
-fn registry_key_from_attr(node: &kdl_config::Node) -> Result<String, kdl_config::KdlConfigError> {
+fn registry_key_from_attr(
+    node: &kdl_config::KdlNode,
+) -> Result<String, kdl_config::KdlConfigError> {
+    use kdl_config::KdlNodeExt as _;
     node.attr("key")
-        .and_then(|value| value.as_str())
+        .and_then(|value| value.as_string())
         .map(|val| val.to_string())
         .ok_or_else(|| kdl_config::KdlConfigError::custom("registry key", "missing key attribute"))
 }
@@ -1144,4 +1147,49 @@ fn renders_enum_tuple_variants_and_non_string_tags() {
 
     let rendered = kdl_config::to_kdl(&TaggedEnum::Enabled, "choice");
     assert_eq!(rendered.trim(), "choice #true");
+}
+
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node = "choice", selector = attr("type"), preserve)]
+enum SelectAttrEnum {
+    #[kdl(tag = "alpha")]
+    Alpha {
+        #[kdl(attr, rename = "type")]
+        r#type: String,
+        #[kdl(attr)]
+        value: i64,
+    },
+    #[kdl(tag = "beta")]
+    Beta,
+}
+
+#[test]
+fn parses_enum_with_select_attr_preserve() {
+    let parsed =
+        parse_named::<SelectAttrEnum>("choice type=\"alpha\" value=7", "choice").unwrap();
+    assert_eq!(
+        parsed,
+        SelectAttrEnum::Alpha {
+            r#type: "alpha".into(),
+            value: 7,
+        }
+    );
+}
+
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node = "choice", selector = any(attr("type"), arg(0)))]
+enum AnySelectorEnum {
+    #[kdl(tag = "alpha")]
+    Alpha,
+    #[kdl(tag = "beta")]
+    Beta,
+}
+
+#[test]
+fn parses_enum_with_any_selector() {
+    let parsed = parse_named::<AnySelectorEnum>("choice type=\"alpha\"", "choice").unwrap();
+    assert_eq!(parsed, AnySelectorEnum::Alpha);
+
+    let parsed = parse_named::<AnySelectorEnum>("choice beta", "choice").unwrap();
+    assert_eq!(parsed, AnySelectorEnum::Beta);
 }

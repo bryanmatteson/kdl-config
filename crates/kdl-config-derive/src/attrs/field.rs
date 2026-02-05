@@ -3,8 +3,8 @@
 use proc_macro2::Span;
 
 use super::types::{
-    BoolMode, ConflictPolicy, DefaultLiteral, DefaultSpec, FlagStyle, RegistryKey, RenderPlacement,
-    SchemaTypeOverride,
+    BoolMode, ConflictPolicy, DefaultLiteral, DefaultSpec, FlagStyle, InjectOpt, RenderPlacement,
+    SchemaTypeOverride, SelectOpts, SelectSpec, SelectorAst,
 };
 
 /// Field placement specification.
@@ -75,7 +75,7 @@ pub struct FieldAttrs {
     pub children_map: bool,
     pub flatten: bool,
     pub map_node: Option<String>,
-    pub registry_key: Option<RegistryKey>,
+    pub select: Option<SelectSpec>,
     pub default: Option<DefaultSpec>,
     pub skip: bool,
     pub skip_serializing_if: Option<String>,
@@ -146,7 +146,13 @@ pub struct RawFieldAttrs {
     pub required: bool,
     pub optional: bool,
 
-    // === Registry keys ===
+    // === Selectors ===
+    pub selector: Option<SelectorAst>,
+    pub select: Option<SelectSpec>,
+    pub consume: Option<bool>,
+    pub inject: Option<InjectOpt>,
+
+    // === Legacy registry keys ===
     pub key_arg: Option<usize>,
     pub key_attr: Option<String>,
     pub key_fn: Option<String>,
@@ -222,16 +228,93 @@ impl RawFieldAttrs {
         // Resolve flatten
         let flatten = self.flatten.unwrap_or(false);
 
-        // Resolve registry key
-        let registry_key = if let Some(idx) = self.key_arg {
-            Some(RegistryKey::Arg(idx))
-        } else if let Some(attr) = self.key_attr {
-            Some(RegistryKey::Attr(attr))
-        } else if let Some(func) = self.key_fn {
-            Some(RegistryKey::Function(func))
-        } else {
-            None
-        };
+        // Resolve selector (select/selector/key_*)
+        let mut select = self.select;
+        if let Some(selector) = self.selector {
+            if select.is_some() {
+                return Err(syn::Error::new(
+                    span,
+                    "field cannot specify both select(...) and selector=...",
+                ));
+            }
+            select = Some(SelectSpec {
+                selector,
+                opts: SelectOpts::default(),
+            });
+        }
+
+        if select.is_none() {
+            if let Some(idx) = self.key_arg {
+                select = Some(SelectSpec {
+                    selector: SelectorAst::Arg(idx as u32),
+                    opts: SelectOpts::default(),
+                });
+            } else if let Some(attr) = self.key_attr {
+                select = Some(SelectSpec {
+                    selector: SelectorAst::Attr(attr),
+                    opts: SelectOpts::default(),
+                });
+            } else if let Some(func) = self.key_fn {
+                select = Some(SelectSpec {
+                    selector: SelectorAst::Func(func),
+                    opts: SelectOpts::default(),
+                });
+            }
+        }
+
+        if let Some(consume) = self.consume {
+            match select.as_mut() {
+                Some(spec) => {
+                    if spec.opts.consume.is_some() {
+                        return Err(syn::Error::new(
+                            span,
+                            "field cannot specify consume/preserve more than once",
+                        ));
+                    }
+                    spec.opts.consume = Some(consume);
+                }
+                None => {
+                    return Err(syn::Error::new(
+                        span,
+                        "consume/preserve requires selector or select(...)",
+                    ));
+                }
+            }
+        }
+
+        if let Some(inject) = self.inject {
+            match select.as_mut() {
+                Some(spec) => {
+                    if spec.opts.inject.is_some() {
+                        return Err(syn::Error::new(
+                            span,
+                            "field cannot specify inject more than once",
+                        ));
+                    }
+                    spec.opts.inject = Some(inject);
+                }
+                None => {
+                    return Err(syn::Error::new(
+                        span,
+                        "inject requires selector or select(...)",
+                    ));
+                }
+            }
+        }
+
+        if let Some(spec) = select.as_ref() {
+            if let Some(InjectOpt::Implicit) = spec.opts.inject {
+                match spec.selector {
+                    SelectorAst::Attr(ref name) if name == "name" => {}
+                    _ => {
+                        return Err(syn::Error::new(
+                            span,
+                            "inject (implicit) is only valid with select(attr(\"name\"), ...)",
+                        ));
+                    }
+                }
+            }
+        }
 
         // Resolve default
         let mut default_count = 0u8;
@@ -279,7 +362,7 @@ impl RawFieldAttrs {
             children_map: self.children_map,
             flatten,
             map_node: self.map_node,
-            registry_key,
+            select,
             default,
             skip: self.skip,
             skip_serializing_if: self.skip_serializing_if,

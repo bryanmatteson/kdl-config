@@ -7,7 +7,8 @@ use crate::attrs::{
     extract_children_map_types, extract_hashmap_types, extract_inner_type,
     extract_registry_vec_value, has_child_placement, has_value_placement, is_option_type,
     is_value_type, parse_field_attrs, parse_struct_attrs, serde_rename_from_attrs, BoolMode,
-    ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle, SchemaTypeOverride, StructAttrs,
+    CollectionMode, ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle, SchemaTypeOverride,
+    SelectorAst, StructAttrs,
 };
 
 pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -100,8 +101,10 @@ fn field_kind(field: &FieldInfo) -> SchemaFieldKind {
     if field.is_modifier {
         return SchemaFieldKind::Modifier;
     }
-    if field.placement.registry {
-        return SchemaFieldKind::Registry;
+    if let Some(collection) = field.collection.as_ref() {
+        if matches!(collection.mode, CollectionMode::Registry { .. }) {
+            return SchemaFieldKind::Registry;
+        }
     }
 
     let has_value = has_value_placement(&field.placement);
@@ -562,7 +565,10 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             });
         }
 
-        if field.placement.registry {
+        if matches!(
+            field.collection.as_ref().map(|spec| &spec.mode),
+            Some(CollectionMode::Registry { .. })
+        ) {
             let container = if resolved_name.is_some() {
                 kdl_key.clone()
             } else {
@@ -571,10 +577,13 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             let val_ty = registry_value_type(field).expect(
                 "registry placement requires HashMap<String, V> or Vec<(String, V)> field type",
             );
-            let default_key = crate::attrs::RegistryKey::Arg(0);
-            let key_schema = Some(registry_key_schema_expr(
-                field.registry_key.as_ref().unwrap_or(&default_key),
-            ));
+            let default_selector = SelectorAst::Arg(0);
+            let selector = field
+                .collection
+                .as_ref()
+                .map(|spec| &spec.selector)
+                .unwrap_or(&default_selector);
+            let key_schema = selector_key_schema_expr(selector);
             child_inserts.push(registry_child_insert(
                 val_ty,
                 &container,
@@ -585,23 +594,30 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             continue;
         }
 
-        if field.children_map {
+        if matches!(
+            field.collection.as_ref().map(|spec| &spec.mode),
+            Some(CollectionMode::ChildrenMapNode { .. } | CollectionMode::ChildrenMapAll)
+        ) {
             let (_kind, key_ty, val_ty) = extract_children_map_types(&field.ty)
                 .expect("children_map placement requires HashMap<K, V> or Vec<(K, V)>");
             register_calls.push(quote! {
                 <#val_ty as ::kdl_config::schema::KdlSchema>::register_definitions(registry);
             });
 
-            let node_name = field.map_node.clone().unwrap_or_else(|| "*".to_string());
-            let key_ty = field.map_node.as_ref().map(|_| key_ty);
-            let key_schema = if field.map_node.is_some() {
-                let default_key = crate::attrs::RegistryKey::Arg(0);
-                Some(registry_key_schema_expr(
-                    field.registry_key.as_ref().unwrap_or(&default_key),
-                ))
-            } else {
-                None
-            };
+            let (node_name, key_ty, key_schema) =
+                match field.collection.as_ref().map(|spec| &spec.mode) {
+                    Some(CollectionMode::ChildrenMapNode { node }) => {
+                        let default_selector = SelectorAst::Arg(0);
+                        let selector = field
+                            .collection
+                            .as_ref()
+                            .map(|spec| &spec.selector)
+                            .unwrap_or(&default_selector);
+                        (node.clone(), Some(key_ty), selector_key_schema_expr(selector))
+                    }
+                Some(CollectionMode::ChildrenMapAll) => ("*".to_string(), None, None),
+                _ => ("*".to_string(), None, None),
+                };
             child_inserts.push(children_map_child_insert(
                 val_ty,
                 key_ty,
@@ -1104,32 +1120,33 @@ fn variant_tag_literal_expr(tag: &VariantTag) -> TokenStream {
     }
 }
 
-fn registry_key_schema_expr(key: &crate::attrs::RegistryKey) -> TokenStream {
-    match key {
-        crate::attrs::RegistryKey::Arg(index) => quote! {
+fn selector_key_schema_expr(selector: &SelectorAst) -> Option<TokenStream> {
+    match selector {
+        SelectorAst::Arg(index) => Some(quote! {
             ::kdl_config::schema::RegistryKeySchema {
                 source: ::kdl_config::schema::RegistryKeySource::Arg,
                 arg_index: Some(#index),
                 attr: None,
                 func: None,
             }
-        },
-        crate::attrs::RegistryKey::Attr(name) => quote! {
+        }),
+        SelectorAst::Attr(name) => Some(quote! {
             ::kdl_config::schema::RegistryKeySchema {
                 source: ::kdl_config::schema::RegistryKeySource::Attr,
                 arg_index: None,
                 attr: Some(#name.to_string()),
                 func: None,
             }
-        },
-        crate::attrs::RegistryKey::Function(path) => quote! {
+        }),
+        SelectorAst::Func(path) => Some(quote! {
             ::kdl_config::schema::RegistryKeySchema {
                 source: ::kdl_config::schema::RegistryKeySource::Function,
                 arg_index: None,
                 attr: None,
                 func: Some(#path.to_string()),
             }
-        },
+        }),
+        SelectorAst::Name | SelectorAst::Any(_) => None,
     }
 }
 

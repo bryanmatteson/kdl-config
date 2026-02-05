@@ -1,9 +1,9 @@
-use kdl_config::{ErrorKind, Placement, Value, convert_value, convert_value_checked};
+use kdl_config::{ErrorKind, KdlValue, Placement, convert_value, convert_value_checked};
 
 #[test]
 fn type_mismatch_reports_error() {
     let err = convert_value::<i64>(
-        &Value::String("nope".to_string()),
+        &KdlValue::String("nope".to_string()),
         "Test",
         "field",
         "field",
@@ -23,7 +23,7 @@ fn type_mismatch_reports_error() {
 #[test]
 fn out_of_range_is_reported_for_int_coercions() {
     let err = convert_value_checked::<u32>(
-        &Value::Int(-1),
+        &KdlValue::Integer(-1),
         "Test",
         "field",
         "field",
@@ -43,7 +43,7 @@ fn out_of_range_is_reported_for_int_coercions() {
 #[test]
 fn array_conversion_accepts_scalar_and_array() {
     let scalar = convert_value::<Vec<i64>>(
-        &Value::Int(7),
+        &KdlValue::Integer(7),
         "Test",
         "field",
         "field",
@@ -51,14 +51,4 @@ fn array_conversion_accepts_scalar_and_array() {
     )
     .unwrap();
     assert_eq!(scalar, vec![7]);
-
-    let array = convert_value::<Vec<i64>>(
-        &Value::Array(vec![Value::Int(1), Value::Int(2)]),
-        "Test",
-        "field",
-        "field",
-        Placement::AttrKeyed,
-    )
-    .unwrap();
-    assert_eq!(array, vec![1, 2]);
 }

@@ -3,10 +3,11 @@
 //! Uses manual `parse_nested_meta` for consistent parsing of all KDL attributes.
 
 use syn::{Attribute, Field};
+use syn::spanned::Spanned;
 
 use super::container::StructAttrs;
 use super::field::{FieldAttrs, RawFieldAttrs};
-use super::types::RenameStrategy;
+use super::types::{InjectOpt, RenameStrategy, SelectOpts, SelectSpec, SelectorAst};
 
 /// Parse struct-level attributes from `#[kdl(...)]`.
 pub fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
@@ -158,6 +159,51 @@ fn parse_struct_meta(
                     }
                 };
             }
+        }
+        Some("selector") => {
+            let value: Expr = meta.value()?.parse()?;
+            let selector = parse_selector_expr(&value)?;
+            if result.selector.is_some() || result.selector_spec.is_some() {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "selector is already specified for this enum",
+                ));
+            }
+            result.selector = Some(selector);
+        }
+        Some("consume") => {
+            if result.selector_opts.consume.is_some() {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "consume/preserve already specified for this enum",
+                ));
+            }
+            result.selector_opts.consume = Some(true);
+        }
+        Some("preserve") => {
+            if result.selector_opts.consume.is_some() {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "consume/preserve already specified for this enum",
+                ));
+            }
+            result.selector_opts.consume = Some(false);
+        }
+        Some("select") => {
+            let spec = parse_select_spec(meta)?;
+            if spec.opts.inject.is_some() {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "select(...) inject is not supported on enums",
+                ));
+            }
+            if result.selector.is_some() || result.selector_spec.is_some() {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "selector is already specified for this enum",
+                ));
+            }
+            result.selector_spec = Some(spec);
         }
         Some("deny_unknown") => {
             result.deny_unknown = Some(true);
@@ -412,6 +458,47 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
         Some("required") => raw.required = true,
         Some("optional") => raw.optional = true,
 
+        // Selectors
+        Some("selector") => {
+            let value: Expr = meta.value()?.parse()?;
+            let selector = parse_selector_expr(&value)?;
+            if raw.selector.is_some() {
+                return Err(syn::Error::new_spanned(
+                    value,
+                    "selector is already specified for this field",
+                ));
+            }
+            raw.selector = Some(selector);
+        }
+        Some("select") => {
+            if raw.select.is_some() {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "select(...) is already specified for this field",
+                ));
+            }
+            let spec = parse_select_spec(meta)?;
+            raw.select = Some(spec);
+        }
+        Some("consume") => {
+            if raw.consume.is_some() {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "consume/preserve already specified for this field",
+                ));
+            }
+            raw.consume = Some(true);
+        }
+        Some("preserve") => {
+            if raw.consume.is_some() {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "consume/preserve already specified for this field",
+                ));
+            }
+            raw.consume = Some(false);
+        }
+
         // Registry keys
         Some("key_arg") => {
             let value: Expr = meta.value()?.parse()?;
@@ -665,6 +752,280 @@ fn parse_schema_meta(
     }
 
     Ok(())
+}
+
+fn parse_select_spec(meta: &syn::meta::ParseNestedMeta) -> syn::Result<SelectSpec> {
+    use syn::parse::Parse;
+    use syn::{Expr, ExprAssign, ExprPath, Lit, Token};
+
+    let args = meta
+        .input
+        .parse_terminated(Expr::parse, Token![,])?
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    if args.is_empty() {
+        return Err(syn::Error::new(
+            meta.path.span(),
+            "select(...) requires a selector",
+        ));
+    }
+
+    let mut selector: Option<SelectorAst> = None;
+    let mut opts = SelectOpts::default();
+
+    for expr in args {
+        match expr {
+            Expr::Path(ExprPath { path, .. }) if path.is_ident("consume") => {
+                if opts.consume.is_some() {
+                    return Err(syn::Error::new(
+                        path.span(),
+                        "consume/preserve already specified",
+                    ));
+                }
+                opts.consume = Some(true);
+            }
+            Expr::Path(ExprPath { path, .. }) if path.is_ident("preserve") => {
+                if opts.consume.is_some() {
+                    return Err(syn::Error::new(
+                        path.span(),
+                        "consume/preserve already specified",
+                    ));
+                }
+                opts.consume = Some(false);
+            }
+            Expr::Path(ExprPath { path, .. }) if path.is_ident("inject") => {
+                if opts.inject.is_some() {
+                    return Err(syn::Error::new(path.span(), "inject already specified"));
+                }
+                opts.inject = Some(InjectOpt::Implicit);
+            }
+            Expr::Assign(ExprAssign { left, right, .. }) => {
+                let (left_ident, left_span) = match left.as_ref() {
+                    Expr::Path(p) => (p.path.get_ident().map(|i| i.to_string()), p.path.span()),
+                    other => {
+                        return Err(syn::Error::new_spanned(
+                            other,
+                            "invalid select option",
+                        ));
+                    }
+                };
+                if matches!(left_ident.as_deref(), Some("inject")) {
+                    if opts.inject.is_some() {
+                        return Err(syn::Error::new(
+                            left_span,
+                            "inject already specified",
+                        ));
+                    }
+                    let field = match *right {
+                        Expr::Lit(syn::ExprLit {
+                            lit: Lit::Str(s),
+                            ..
+                        }) => s.value(),
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                other,
+                                "inject must be a string literal",
+                            ));
+                        }
+                    };
+                    opts.inject = Some(InjectOpt::Field(field));
+                } else {
+                    let selector_expr = Expr::Assign(ExprAssign {
+                        attrs: Vec::new(),
+                        left,
+                        right,
+                        eq_token: <Token![=]>::default(),
+                    });
+                    let selector_ast = parse_selector_expr(&selector_expr)?;
+                    if selector.is_some() {
+                        return Err(syn::Error::new(
+                            left_span,
+                            "multiple selectors in select(...)",
+                        ));
+                    }
+                    selector = Some(selector_ast);
+                }
+            }
+            other => {
+                let selector_ast = parse_selector_expr(&other)?;
+                if selector.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "multiple selectors in select(...)",
+                    ));
+                }
+                selector = Some(selector_ast);
+            }
+        }
+    }
+
+    let selector = selector.ok_or_else(|| {
+        syn::Error::new(meta.path.span(), "select(...) requires a selector")
+    })?;
+
+    Ok(SelectSpec { selector, opts })
+}
+
+fn parse_selector_expr(expr: &syn::Expr) -> syn::Result<SelectorAst> {
+    use syn::{Expr, ExprAssign, ExprCall, ExprLit, ExprPath, Lit};
+
+    match expr {
+        Expr::Assign(ExprAssign { left, right, .. }) => {
+            let path = match left.as_ref() {
+                Expr::Path(ExprPath { path, .. }) => path,
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "selector assignment must be an identifier",
+                    ));
+                }
+            };
+            let ident = path.get_ident().map(|i| i.to_string());
+            match ident.as_deref() {
+                Some("arg") => match right.as_ref() {
+                    Expr::Lit(ExprLit { lit: Lit::Int(lit), .. }) => {
+                        Ok(SelectorAst::Arg(lit.base10_parse()?))
+                    }
+                    other => Err(syn::Error::new_spanned(
+                        other,
+                        "arg selector requires an integer literal",
+                    )),
+                },
+                Some("attr") => match right.as_ref() {
+                    Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) => {
+                        Ok(SelectorAst::Attr(lit.value()))
+                    }
+                    other => Err(syn::Error::new_spanned(
+                        other,
+                        "attr selector requires a string literal",
+                    )),
+                },
+                Some("func") => match right.as_ref() {
+                    Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) => {
+                        Ok(SelectorAst::Func(lit.value()))
+                    }
+                    other => Err(syn::Error::new_spanned(
+                        other,
+                        "func selector requires a string literal",
+                    )),
+                },
+                Some("name") => Err(syn::Error::new_spanned(
+                    left,
+                    "name() selector does not take arguments",
+                )),
+                _ => Err(syn::Error::new_spanned(
+                    left,
+                    "unknown selector assignment",
+                )),
+            }
+        }
+        Expr::Call(ExprCall { func, args, .. }) => {
+            let path = match &**func {
+                Expr::Path(ExprPath { path, .. }) => path,
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "selector function must be an identifier",
+                    ));
+                }
+            };
+            let ident = path.get_ident().map(|i| i.to_string());
+            match ident.as_deref() {
+                Some("arg") => {
+                    if args.len() != 1 {
+                        return Err(syn::Error::new_spanned(
+                            args,
+                            "arg(...) expects a single integer",
+                        ));
+                    }
+                    let arg = args.first().unwrap();
+                    let idx = match arg {
+                        Expr::Lit(ExprLit { lit: Lit::Int(i), .. }) => i.base10_parse::<u32>()?,
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                other,
+                                "arg(...) expects an integer literal",
+                            ));
+                        }
+                    };
+                    Ok(SelectorAst::Arg(idx))
+                }
+                Some("attr") => {
+                    if args.len() != 1 {
+                        return Err(syn::Error::new_spanned(
+                            args,
+                            "attr(...) expects a single string",
+                        ));
+                    }
+                    let arg = args.first().unwrap();
+                    let name = match arg {
+                        Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) => s.value(),
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                other,
+                                "attr(...) expects a string literal",
+                            ));
+                        }
+                    };
+                    Ok(SelectorAst::Attr(name))
+                }
+                Some("name") => {
+                    if !args.is_empty() {
+                        return Err(syn::Error::new_spanned(
+                            args,
+                            "name() does not take arguments",
+                        ));
+                    }
+                    Ok(SelectorAst::Name)
+                }
+                Some("func") => {
+                    if args.len() != 1 {
+                        return Err(syn::Error::new_spanned(
+                            args,
+                            "func(...) expects a single string",
+                        ));
+                    }
+                    let arg = args.first().unwrap();
+                    let name = match arg {
+                        Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) => s.value(),
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                other,
+                                "func(...) expects a string literal",
+                            ));
+                        }
+                    };
+                    Ok(SelectorAst::Func(name))
+                }
+                Some("any") => {
+                    if args.is_empty() {
+                        return Err(syn::Error::new_spanned(
+                            args,
+                            "any(...) requires at least one selector",
+                        ));
+                    }
+                    let mut selectors = Vec::new();
+                    for arg in args {
+                        match parse_selector_expr(&arg)? {
+                            SelectorAst::Any(nested) => selectors.extend(nested),
+                            other => selectors.push(other),
+                        }
+                    }
+                    Ok(SelectorAst::Any(selectors))
+                }
+                _ => Err(syn::Error::new_spanned(
+                    path,
+                    "unknown selector function",
+                )),
+            }
+        }
+        Expr::Path(ExprPath { path, .. }) if path.is_ident("name") => Ok(SelectorAst::Name),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "invalid selector expression",
+        )),
+    }
 }
 
 // Helper functions for parsing enum values

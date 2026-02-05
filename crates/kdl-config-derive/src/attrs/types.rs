@@ -116,12 +116,103 @@ pub enum SchemaTypeOverride {
     Null,
 }
 
-/// Registry key extraction method.
+/// Selector AST for locating values in a KDL node.
 #[derive(Debug, Clone)]
-pub enum RegistryKey {
-    Arg(usize),
+pub enum SelectorAst {
+    Arg(u32),
     Attr(String),
-    Function(String),
+    Name,
+    Func(String),
+    Any(Vec<SelectorAst>),
+}
+
+impl quote::ToTokens for SelectorAst {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            SelectorAst::Arg(idx) => tokens.extend(quote! { ::kdl_config::SelectorAst::Arg(#idx) }),
+            SelectorAst::Attr(name) => {
+                tokens.extend(quote! { ::kdl_config::SelectorAst::Attr(#name.to_string()) })
+            }
+            SelectorAst::Name => tokens.extend(quote! { ::kdl_config::SelectorAst::Name }),
+            SelectorAst::Func(path) => {
+                tokens.extend(quote! { ::kdl_config::SelectorAst::Func(#path.to_string()) })
+            }
+            SelectorAst::Any(list) => {
+                tokens.extend(quote! { ::kdl_config::SelectorAst::Any(vec![#(#list),*]) })
+            }
+        }
+    }
+}
+
+/// Select options for selector use.
+#[derive(Debug, Clone, Default)]
+pub struct SelectOpts {
+    pub consume: Option<bool>,
+    pub inject: Option<InjectOpt>,
+}
+
+impl quote::ToTokens for SelectOpts {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let consume = match self.consume {
+            Some(v) => quote! { Some(#v) },
+            None => quote! { None },
+        };
+        let inject = match &self.inject {
+            Some(opt) => quote! { Some(#opt) },
+            None => quote! { None },
+        };
+        tokens.extend(quote! { ::kdl_config::SelectOpts { consume: #consume, inject: #inject } });
+    }
+}
+
+/// Inject options for selectors.
+#[derive(Debug, Clone)]
+pub enum InjectOpt {
+    Implicit,
+    Field(String),
+}
+
+impl quote::ToTokens for InjectOpt {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            InjectOpt::Implicit => tokens.extend(quote! { ::kdl_config::InjectOpt::Implicit }),
+            InjectOpt::Field(name) => {
+                tokens.extend(quote! { ::kdl_config::InjectOpt::Field(#name.to_string()) })
+            }
+        }
+    }
+}
+
+/// Selector + options.
+#[derive(Debug, Clone)]
+pub struct SelectSpec {
+    pub selector: SelectorAst,
+    pub opts: SelectOpts,
+}
+
+impl quote::ToTokens for SelectSpec {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let selector = &self.selector;
+        let opts = &self.opts;
+        tokens.extend(quote! { ::kdl_config::SelectSpec { selector: #selector, opts: #opts } });
+    }
+}
+
+/// Collection mode for registry/children_map fields.
+#[derive(Debug, Clone)]
+pub enum CollectionMode {
+    Registry { container: String },
+    ChildrenMapAll,
+    ChildrenMapNode { node: String },
+}
+
+/// Derived collection specification.
+#[derive(Debug, Clone)]
+pub struct CollectionSpec {
+    pub mode: CollectionMode,
+    pub selector: SelectorAst,
+    pub consume: bool,
+    pub inject: Option<InjectOpt>,
 }
 
 /// Kind of children map container.

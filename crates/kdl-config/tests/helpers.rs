@@ -1,11 +1,9 @@
-use kdl_config::{helpers, ErrorKind, FlagStyle, Modifier, Node, Placement, Value};
+use kdl_config::{KdlDocument, KdlNode, helpers, ErrorKind, FlagStyle, Placement};
 
-fn node_with_flags(flags: &[&str]) -> Node {
-    let mut node = Node::named("config").with_modifier(Modifier::Inherit);
-    for flag in flags {
-        node.add_arg(Value::String((*flag).to_string()));
-    }
-    node
+fn node_with_flags(flags: &[&str]) -> KdlNode {
+    let args = flags.join(" ");
+    let doc: KdlDocument = format!("config {args}").parse().expect("valid kdl");
+    doc.nodes().first().expect("missing node").clone()
 }
 
 #[test]
