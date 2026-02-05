@@ -11,6 +11,7 @@ use crate::attrs::{
 };
 use crate::parse_gen::{generate_field_parser, generate_skip_marks, generate_struct_overrides};
 use crate::render_gen::{FieldAccessor, render_body_with_accessor};
+use crate::update_gen;
 
 #[derive(Debug)]
 enum LiteralTag {
@@ -251,6 +252,13 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
         .map(|variant| generate_render_arm(variant, &struct_attrs))
         .collect();
 
+    let update_arms: Vec<TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            generate_update_arm(enum_name, &enum_name_str, variant, &struct_attrs, &discr_select)
+        })
+        .collect();
+
     Ok(quote! {
         impl ::kdl_config::KdlDecode for #enum_name {
             fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
@@ -310,6 +318,16 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
 
             fn render_node(&self, name: &str) -> ::kdl_config::Node {
                 ::kdl_config::render_child_node(self, name)
+            }
+        }
+
+        impl ::kdl_config::KdlUpdate for #enum_name {
+            fn update(&self, node: &mut ::kdl_config::KdlNode, ctx: &::kdl_config::UpdateContext) -> ::core::result::Result<(), ::kdl_config::KdlConfigError> {
+                use ::kdl_config::KdlNodeExt as _;
+                match self {
+                    #(#update_arms)*
+                }
+                Ok(())
             }
         }
     })
@@ -539,6 +557,182 @@ fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> Tok
                     let rendered = #render_body;
                     ::kdl_config::insert_arg(&rendered, &#tag_render)
                 }
+            }
+        }
+    }
+}
+
+fn generate_update_arm(
+    enum_name: &Ident,
+    _enum_name_str: &str,
+    variant: &VariantInfo,
+    struct_attrs: &StructAttrs,
+    discr_select: &SelectSpec,
+) -> TokenStream {
+    let variant_ident = &variant.ident;
+    let discr_value_expr = tag_kdl_value_expr(&variant.tag);
+    let discr_set = generate_discriminator_set(discr_select, &discr_value_expr);
+
+    match &variant.kind {
+        VariantKind::Unit => {
+            quote! {
+                Self::#variant_ident => {
+                    node.entries_mut().clear();
+                    if let Some(children) = node.children_mut() {
+                        children.nodes_mut().clear();
+                    }
+                    #discr_set
+                }
+            }
+        }
+        VariantKind::Newtype(_inner_ty) => {
+            quote! {
+                Self::#variant_ident(inner) => {
+                    #discr_set
+                    inner.update(node, ctx)?;
+                }
+            }
+        }
+        VariantKind::Tuple(types) => {
+            let mut bindings = Vec::new();
+            let mut updates = Vec::new();
+            for (idx, ty) in types.iter().enumerate() {
+                let binding = format_ident!("v{}", idx);
+                bindings.push(binding.clone());
+                let pos_index = idx + 1;
+                if is_option_type(ty) {
+                    updates.push(quote! {
+                        if let Some(value) = #binding {
+                            let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(value.clone()));
+                            ::kdl_config::update_or_insert_positional(node, #pos_index, v);
+                        } else {
+                            ::kdl_config::remove_positional_entry(node, #pos_index);
+                        }
+                    });
+                } else {
+                    updates.push(quote! {
+                        let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(#binding.clone()));
+                        ::kdl_config::update_or_insert_positional(node, #pos_index, v);
+                    });
+                }
+            }
+
+            quote! {
+                Self::#variant_ident(#(#bindings),*) => {
+                    #discr_set
+                    #(#updates)*
+                }
+            }
+        }
+        VariantKind::Struct { fields, .. } => {
+            let bindings: Vec<&Ident> = fields.iter().map(|f| &f.ident).collect();
+            let update_fields: Vec<TokenStream> = fields
+                .iter()
+                .filter(|field| !field.is_skipped)
+                .map(|field| {
+                    update_gen::generate_field_update(field, enum_name, struct_attrs, FieldAccessor::binding)
+                })
+                .collect();
+            quote! {
+                &Self::#variant_ident { #(ref #bindings),* } => {
+                    #discr_set
+                    #(#update_fields)*
+                }
+            }
+        }
+    }
+}
+
+fn generate_discriminator_set(select: &SelectSpec, value_expr: &TokenStream) -> TokenStream {
+    let selector = &select.selector;
+    match selector {
+        SelectorAst::Arg(index) => {
+            let idx = *index as usize;
+            quote! {
+                let discr_value: ::kdl_config::KdlValue = #value_expr;
+                ::kdl_config::update_or_insert_positional(node, #idx, discr_value);
+            }
+        }
+        SelectorAst::Attr(name) => {
+            quote! {
+                let discr_value: ::kdl_config::KdlValue = #value_expr;
+                ::kdl_config::update_or_insert_attr(node, #name, discr_value);
+            }
+        }
+        SelectorAst::Name => {
+            quote! {
+                let discr_value: ::kdl_config::KdlValue = #value_expr;
+                let name = match discr_value {
+                    ::kdl_config::KdlValue::String(s) => s,
+                    other => other.to_string(),
+                };
+                node.set_name(name);
+            }
+        }
+        SelectorAst::Func(_) => {
+            quote! {}
+        }
+        SelectorAst::Any(selectors) => {
+            let mut check_blocks = Vec::new();
+            let mut fallback_blocks = Vec::new();
+            for sel in selectors {
+                match sel {
+                    SelectorAst::Arg(index) => {
+                        let idx = *index as usize;
+                        check_blocks.push(quote! {
+                            if !set {
+                                if node.arg(#idx).is_some() {
+                                    ::kdl_config::update_or_insert_positional(node, #idx, discr_value.clone());
+                                    set = true;
+                                }
+                            }
+                        });
+                        fallback_blocks.push(quote! {
+                            if !set {
+                                ::kdl_config::update_or_insert_positional(node, #idx, discr_value.clone());
+                                set = true;
+                            }
+                        });
+                    }
+                    SelectorAst::Attr(name) => {
+                        check_blocks.push(quote! {
+                            if !set {
+                                if node.attr_values(#name).is_some() {
+                                    ::kdl_config::update_or_insert_attr(node, #name, discr_value.clone());
+                                    set = true;
+                                }
+                            }
+                        });
+                        fallback_blocks.push(quote! {
+                            if !set {
+                                ::kdl_config::update_or_insert_attr(node, #name, discr_value.clone());
+                                set = true;
+                            }
+                        });
+                    }
+                    SelectorAst::Name => {
+                        check_blocks.push(quote! {
+                            if !set {
+                                let name = match discr_value.clone() {
+                                    ::kdl_config::KdlValue::String(s) => s,
+                                    other => other.to_string(),
+                                };
+                                node.set_name(name);
+                                set = true;
+                            }
+                        });
+                        fallback_blocks.push(quote! {});
+                    }
+                    SelectorAst::Func(_) => {}
+                    SelectorAst::Any(_) => {}
+                }
+            }
+
+            quote! {
+                let discr_value: ::kdl_config::KdlValue = #value_expr;
+                let mut set = false;
+                #(#check_blocks)*
+                #(#fallback_blocks)*
             }
         }
     }

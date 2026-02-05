@@ -135,6 +135,35 @@ pub fn generate_kdl_choice_impl(
         })
         .collect();
 
+    let update_arms: Vec<TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let ident = &variant.ident;
+            let kdl_name = &variant.kdl_name;
+            match &variant.kind {
+                VariantKind::Newtype(_ty) => {
+                    quote! {
+                        Self::#ident(inner) => {
+                            node.set_name(#kdl_name.to_string());
+                            inner.update(node, ctx)?;
+                        }
+                    }
+                }
+                VariantKind::Unit => {
+                    quote! {
+                        Self::#ident => {
+                            node.set_name(#kdl_name.to_string());
+                            node.entries_mut().clear();
+                            if let Some(children) = node.children_mut() {
+                                children.nodes_mut().clear();
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
     let schema_choices: Vec<TokenStream> = variants
         .iter()
         .map(|variant| {
@@ -245,6 +274,19 @@ pub fn generate_kdl_choice_impl(
                 match self {
                     #(#render_arms)*
                 }
+            }
+        }
+
+        impl ::kdl_config::KdlUpdate for #enum_name {
+            fn update(
+                &self,
+                node: &mut ::kdl_config::KdlNode,
+                ctx: &::kdl_config::UpdateContext,
+            ) -> ::core::result::Result<(), ::kdl_config::KdlConfigError> {
+                match self {
+                    #(#update_arms)*
+                }
+                Ok(())
             }
         }
         #schema_impl

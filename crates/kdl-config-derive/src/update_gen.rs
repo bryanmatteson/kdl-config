@@ -1,10 +1,9 @@
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 
 use crate::attrs::{
     has_child_placement, has_value_placement, is_value_type, BoolMode, CollectionMode,
-    ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle, RenderPlacement, SelectorAst,
-    StructAttrs,
+    DefaultPlacement, FieldInfo, FlagStyle, RenderPlacement, SelectorAst, StructAttrs,
 };
 use crate::render_gen::FieldAccessor;
 
@@ -58,7 +57,7 @@ pub fn generate_update_impl(
     }
 }
 
-fn generate_field_update(
+pub(crate) fn generate_field_update(
     field: &FieldInfo,
     struct_name: &syn::Ident,
     struct_attrs: &StructAttrs,
@@ -69,13 +68,21 @@ fn generate_field_update(
     let kdl_key = field.kdl_key.clone();
     let struct_name_str = struct_name.to_string();
 
+    if field.is_modifier {
+        let update_body = generate_update_modifier(field, &access);
+        return quote! {
+            #update_body
+            let _ = (#field_name, #kdl_key);
+        };
+    }
+
     let cond = render_condition(field, &access);
     let kind = field_kind(field);
     let render_placement = render_placement_for(struct_attrs, field, kind);
 
     let update_body = match render_placement {
-        RenderPlacement::Attr => generate_update_attr(field, &access, &struct_name_str),
-        RenderPlacement::Value => generate_update_value(field, &access, &struct_name_str),
+        RenderPlacement::Attr => generate_update_attr(field, &access),
+        RenderPlacement::Value => generate_update_value(field, &access),
         RenderPlacement::Child => generate_update_child(field, &access, &struct_name_str),
         RenderPlacement::Children => generate_update_children(field, &access, &struct_name_str),
         RenderPlacement::Registry => generate_update_collection(field, &access, &struct_name_str),
@@ -190,12 +197,8 @@ fn render_placement_for(
     }
 
     if let Some(collection) = field.collection.as_ref() {
-        return match collection.mode {
-            CollectionMode::Registry { .. } => RenderPlacement::Registry,
-            CollectionMode::ChildrenMapAll | CollectionMode::ChildrenMapNode { .. } => {
-                RenderPlacement::Children
-            }
-        };
+        let _ = collection;
+        return RenderPlacement::Registry;
     }
 
     if field.placement.children_any {
@@ -246,9 +249,8 @@ fn render_placement_for(
     }
 }
 
-fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor, struct_name: &str) -> TokenStream {
+fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor) -> TokenStream {
     let kdl_key = &field.kdl_key;
-    let field_name = field.ident.to_string();
 
     let is_bool = field.is_bool;
     let bool_mode = field.bool_mode.clone();
@@ -350,7 +352,7 @@ fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor, struct_name: 
     let bool_mode_tokens = bool_mode_tokens(bool_mode.unwrap_or(BoolMode::PresenceAndValue));
     let flag_style_tokens = flag_style_tokens(flag_style.unwrap_or(FlagStyle::Both));
     let bool_opt_expr = if field.is_optional {
-        quote! { #reference.clone() }
+        quote! { *#reference }
     } else {
         quote! { Some(#bool_value) }
     };
@@ -432,9 +434,8 @@ fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor, struct_name: 
     }
 }
 
-fn generate_update_value(field: &FieldInfo, access: &FieldAccessor, struct_name: &str) -> TokenStream {
+fn generate_update_value(field: &FieldInfo, access: &FieldAccessor) -> TokenStream {
     let kdl_key = &field.kdl_key;
-    let field_name = field.ident.to_string();
 
     if field.is_vec || field.is_option_vec {
         let reference = &access.reference;
@@ -451,10 +452,11 @@ fn generate_update_value(field: &FieldInfo, access: &FieldAccessor, struct_name:
                         }
                     }
                     if target_child.is_none() {
-                        let mut new_child = ::kdl_config::KdlNode::new(#kdl_key);
-                        node.ensure_children().nodes_mut().push(new_child);
-                        let last = node.children_mut().unwrap().nodes_mut().len() - 1;
-                        target_child = node.children_mut().unwrap().nodes_mut().get_mut(last);
+                        let new_child = ::kdl_config::KdlNode::new(#kdl_key);
+                        let children = node.ensure_children();
+                        children.nodes_mut().push(new_child);
+                        let last = children.nodes().len() - 1;
+                        target_child = children.nodes_mut().get_mut(last);
                     }
                     if let Some(child) = target_child {
                         child.entries_mut().retain(|entry| entry.name().is_none());
@@ -482,10 +484,11 @@ fn generate_update_value(field: &FieldInfo, access: &FieldAccessor, struct_name:
                     }
                 }
                 if target_child.is_none() {
-                    let mut new_child = ::kdl_config::KdlNode::new(#kdl_key);
-                    node.ensure_children().nodes_mut().push(new_child);
-                    let last = node.children_mut().unwrap().nodes_mut().len() - 1;
-                    target_child = node.children_mut().unwrap().nodes_mut().get_mut(last);
+                    let new_child = ::kdl_config::KdlNode::new(#kdl_key);
+                    let children = node.ensure_children();
+                    children.nodes_mut().push(new_child);
+                    let last = children.nodes().len() - 1;
+                    target_child = children.nodes_mut().get_mut(last);
                 }
                 if let Some(child) = target_child {
                     child.entries_mut().retain(|entry| entry.name().is_none());
@@ -511,10 +514,11 @@ fn generate_update_value(field: &FieldInfo, access: &FieldAccessor, struct_name:
                     }
                 }
                 if target_child.is_none() {
-                    let mut new_child = ::kdl_config::KdlNode::new(#kdl_key);
-                    node.ensure_children().nodes_mut().push(new_child);
-                    let last = node.children_mut().unwrap().nodes_mut().len() - 1;
-                    target_child = node.children_mut().unwrap().nodes_mut().get_mut(last);
+                    let new_child = ::kdl_config::KdlNode::new(#kdl_key);
+                    let children = node.ensure_children();
+                    children.nodes_mut().push(new_child);
+                    let last = children.nodes().len() - 1;
+                    target_child = children.nodes_mut().get_mut(last);
                 }
                 if let Some(child) = target_child {
                     child.entries_mut().retain(|entry| entry.name().is_none());
@@ -541,10 +545,11 @@ fn generate_update_value(field: &FieldInfo, access: &FieldAccessor, struct_name:
                 }
             }
             if target_child.is_none() {
-                let mut new_child = ::kdl_config::KdlNode::new(#kdl_key);
-                node.ensure_children().nodes_mut().push(new_child);
-                let last = node.children_mut().unwrap().nodes_mut().len() - 1;
-                target_child = node.children_mut().unwrap().nodes_mut().get_mut(last);
+                let new_child = ::kdl_config::KdlNode::new(#kdl_key);
+                let children = node.ensure_children();
+                children.nodes_mut().push(new_child);
+                let last = children.nodes().len() - 1;
+                target_child = children.nodes_mut().get_mut(last);
             }
             if let Some(child) = target_child {
                 child.entries_mut().retain(|entry| entry.name().is_none());
@@ -556,9 +561,36 @@ fn generate_update_value(field: &FieldInfo, access: &FieldAccessor, struct_name:
     }
 }
 
+fn generate_update_modifier(field: &FieldInfo, access: &FieldAccessor) -> TokenStream {
+    let cond = render_condition(field, access);
+    let modifier_expr = if field.is_optional {
+        let reference = &access.reference;
+        quote! { (*#reference).unwrap_or(::kdl_config::Modifier::Inherit) }
+    } else {
+        let value = &access.value;
+        quote! { #value }
+    };
+
+    quote! {
+        if #cond {
+            let modifier = #modifier_expr;
+            let base = node.base_name().to_string();
+            let name = match modifier {
+                ::kdl_config::Modifier::Inherit => base,
+                ::kdl_config::Modifier::Append => format!("+{}", base),
+                ::kdl_config::Modifier::Remove => format!("-{}", base),
+                ::kdl_config::Modifier::Replace => format!("!{}", base),
+            };
+            node.set_name(name);
+        } else {
+            let base = node.base_name().to_string();
+            node.set_name(base);
+        }
+    }
+}
+
 fn generate_update_child(field: &FieldInfo, access: &FieldAccessor, struct_name: &str) -> TokenStream {
     let kdl_key = &field.kdl_key;
-    let field_name = field.ident.to_string();
 
     if field.is_optional {
         let reference = &access.reference;
@@ -588,7 +620,7 @@ fn generate_update_child(field: &FieldInfo, access: &FieldAccessor, struct_name:
             }
         }
     } else {
-        let value = &access.value;
+        let reference = &access.reference;
         quote! {
             let mut target_child: ::core::option::Option<&mut ::kdl_config::KdlNode> = None;
             if let Some(children) = node.children_mut() {
@@ -600,9 +632,9 @@ fn generate_update_child(field: &FieldInfo, access: &FieldAccessor, struct_name:
                 }
             }
             if let Some(child) = target_child {
-                #value.update(child, ctx)?;
+                #reference.update(child, ctx)?;
             } else {
-                let rendered = ::kdl_config::to_kdl(#value, #kdl_key);
+                let rendered = ::kdl_config::to_kdl(#reference, #kdl_key);
                 let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: kdl::KdlError| {
                     ::kdl_config::KdlConfigError::custom(#struct_name, e.to_string())
                 })?;
@@ -659,7 +691,7 @@ fn generate_update_children(field: &FieldInfo, access: &FieldAccessor, struct_na
                     }
                 }
             } else if let Some(children) = node.children_mut() {
-                children.nodes_mut().retain(|child| !#filter_expr);
+                children.nodes_mut().retain(|child| !(#filter_expr));
             }
         }
     } else {
@@ -702,7 +734,6 @@ fn generate_update_children(field: &FieldInfo, access: &FieldAccessor, struct_na
 }
 
 fn generate_update_collection(field: &FieldInfo, access: &FieldAccessor, struct_name: &str) -> TokenStream {
-    let kdl_key = &field.kdl_key;
     let field_name = field.ident.to_string();
     let collection = field.collection.as_ref().expect("collection spec");
     let (container, map_node, all_children) = match &collection.mode {
@@ -735,7 +766,7 @@ fn generate_update_collection(field: &FieldInfo, access: &FieldAccessor, struct_
 
     let key_extract = generate_collection_key_extract(selector, struct_name, &field_name, key_ty.as_ref(), is_registry);
     let key_set_child = generate_collection_key_set(selector, quote! { child });
-    let key_set_new = generate_collection_key_set(selector, quote! { new_node });
+    let key_set_new = generate_collection_key_set(selector, quote! { &mut new_node });
 
     let insert_render = match &collection.mode {
         CollectionMode::Registry { container } => {
@@ -784,7 +815,7 @@ fn generate_update_collection(field: &FieldInfo, access: &FieldAccessor, struct_
                 if used.get(idx).copied().unwrap_or(false) {
                     continue;
                 }
-                if !#filter {
+                if !(#filter) {
                     continue;
                 }
                 if let Some(existing_key) = { #key_extract } {
@@ -802,16 +833,17 @@ fn generate_update_collection(field: &FieldInfo, access: &FieldAccessor, struct_
         }
     };
 
+    let reference = &access.reference;
     let update_entries = if is_hashmap {
         quote! {
-            let reference = #access.reference;
+            let reference = #reference;
             for (key, value) in reference.iter() {
                 #iter_body
             }
         }
     } else if is_option_vec {
         quote! {
-            if let Some(entries) = #access.reference {
+            if let Some(entries) = #reference {
                 for (key, value) in entries {
                     #iter_body
                 }
@@ -819,7 +851,7 @@ fn generate_update_collection(field: &FieldInfo, access: &FieldAccessor, struct_
         }
     } else {
         quote! {
-            let reference = #access.reference;
+            let reference = #reference;
             for (key, value) in reference.iter() {
                 #iter_body
             }
