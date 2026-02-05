@@ -5,7 +5,7 @@ use std::str::FromStr;
 use crate::schema::{KdlNodeSchema, KdlSchema, SchemaRef, SchemaRegistry, SchemaType, SchemaValue};
 use crate::{
     FromKdlValue, KdlConfigError, KdlParse, KdlRender, Node, NodeRenderer, ParseConfig, Placement,
-    Value,
+    Value, convert_value_checked, parse_str_roundtrip, parse_str_with_config,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -284,6 +284,18 @@ impl KdlSchema for Weight {
 
     fn register_definitions(registry: &mut SchemaRegistry) {
         <f64 as KdlSchema>::register_definitions(registry);
+    }
+}
+
+impl KdlParse for Weight {
+    fn from_node(node: &Node, _config: &ParseConfig) -> Result<Self, KdlConfigError> {
+        convert_value_checked::<Weight>(
+            &node.value(),
+            "Weight",
+            "weight",
+            "weight",
+            Placement::Value,
+        )
     }
 }
 
