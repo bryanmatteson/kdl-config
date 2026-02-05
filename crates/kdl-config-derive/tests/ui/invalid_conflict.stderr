@@ -1,0 +1,5 @@
+error: invalid conflict policy, expected one of: error, first, last, append
+ --> tests/ui/invalid_conflict.rs:5:28
+  |
+5 |     #[kdl(attr, conflict = "nope")]
+  |                            ^^^^^^

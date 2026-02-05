@@ -1,0 +1,5 @@
+error: invalid default_bool, expected one of: presence+value, value-only, presence-only
+ --> tests/ui/invalid_default_bool.rs:4:22
+  |
+4 | #[kdl(default_bool = "nope")]
+  |                      ^^^^^^

@@ -1,6 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeLocation {
+    pub line: usize,
+    pub column: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Modifier {
     #[default]
@@ -187,6 +193,8 @@ pub struct Node {
     pub name: String,
     pub modifier: Modifier,
     pub name_repr: Option<String>,
+    pub location: Option<NodeLocation>,
+    pub path: Option<String>,
     args: Vec<Value>,
     arg_reprs: Vec<Option<String>>,
     attrs: HashMap<String, Vec<Value>>,
@@ -213,6 +221,16 @@ impl Node {
 
     pub fn with_name_repr(mut self, repr: impl Into<String>) -> Self {
         self.name_repr = Some(repr.into());
+        self
+    }
+
+    pub fn with_location(mut self, location: NodeLocation) -> Self {
+        self.location = Some(location);
+        self
+    }
+
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
         self
     }
 
@@ -293,6 +311,14 @@ impl Node {
 
     pub fn name_repr(&self) -> Option<&str> {
         self.name_repr.as_deref()
+    }
+
+    pub fn location(&self) -> Option<NodeLocation> {
+        self.location
+    }
+
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
     }
 
     pub fn attr_repr(&self, key: &str) -> Option<&str> {
@@ -394,6 +420,12 @@ impl Node {
 
         if other.name_repr.is_some() {
             self.name_repr = other.name_repr.clone();
+        }
+        if other.location.is_some() {
+            self.location = other.location;
+        }
+        if other.path.is_some() {
+            self.path = other.path.clone();
         }
 
         if matches!(policy, MergeModifierPolicy::Preserve) {

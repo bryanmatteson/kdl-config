@@ -1,0 +1,5 @@
+error: invalid rename_all value, expected one of: kebab-case, snake_case, lowercase, UPPERCASE, none
+ --> tests/ui/invalid_rename_all.rs:4:20
+  |
+4 | #[kdl(rename_all = "nope")]
+  |                    ^^^^^^

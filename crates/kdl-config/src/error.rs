@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::types::{Node, NodeLocation};
+
 #[derive(Debug, Clone)]
 pub struct KdlConfigError {
     pub struct_name: String,
@@ -8,6 +10,8 @@ pub struct KdlConfigError {
     pub placement: Placement,
     pub required: bool,
     pub kind: ErrorKind,
+    pub node_path: Option<String>,
+    pub location: Option<NodeLocation>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +163,14 @@ impl fmt::Display for KdlConfigError {
             write!(f, " field '{field}'")?;
         }
 
+        if let Some(location) = self.location {
+            write!(f, " at line {}, column {}", location.line, location.column)?;
+        }
+
+        if let Some(ref path) = self.node_path {
+            write!(f, " (path: {path})")?;
+        }
+
         if let Some(ref key) = self.kdl_key {
             if self.field_name.as_deref() != Some(key.as_str()) {
                 write!(f, " (kdl key: '{key}')")?;
@@ -182,6 +194,16 @@ impl fmt::Display for KdlConfigError {
 impl std::error::Error for KdlConfigError {}
 
 impl KdlConfigError {
+    pub fn with_node(mut self, node: &Node) -> Self {
+        if self.location.is_none() {
+            self.location = node.location();
+        }
+        if self.node_path.is_none() {
+            self.node_path = node.path().map(|s| s.to_string());
+        }
+        self
+    }
+
     pub fn missing_required(
         struct_name: impl Into<String>,
         field_name: impl Into<String>,
@@ -195,6 +217,8 @@ impl KdlConfigError {
             placement,
             required: true,
             kind: ErrorKind::MissingRequired,
+            node_path: None,
+            location: None,
         }
     }
 
@@ -212,6 +236,8 @@ impl KdlConfigError {
             placement,
             required: false,
             kind: ErrorKind::TooManyValues { count },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -233,6 +259,8 @@ impl KdlConfigError {
                 expected,
                 actual: actual.into(),
             },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -254,6 +282,8 @@ impl KdlConfigError {
                 value: value.into(),
                 target_type,
             },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -273,6 +303,8 @@ impl KdlConfigError {
                 pos: pos.into(),
                 neg: neg.into(),
             },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -292,6 +324,8 @@ impl KdlConfigError {
             kind: ErrorKind::AmbiguousPlacement {
                 details: details.into(),
             },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -310,6 +344,8 @@ impl KdlConfigError {
                 expected: expected.into(),
                 actual: actual.into(),
             },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -322,6 +358,8 @@ impl KdlConfigError {
             placement: Placement::AttrKeyed,
             required: false,
             kind: ErrorKind::UnknownAttribute { key: key_string },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -334,6 +372,8 @@ impl KdlConfigError {
             placement: Placement::Child,
             required: false,
             kind: ErrorKind::UnknownChild { name: name_string },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -352,6 +392,8 @@ impl KdlConfigError {
             kind: ErrorKind::InvalidRegistryKey {
                 reason: reason.into(),
             },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -363,6 +405,8 @@ impl KdlConfigError {
             placement: Placement::AttrPositional,
             required: false,
             kind: ErrorKind::UnknownArgument { index },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -381,6 +425,8 @@ impl KdlConfigError {
                 value: value.into(),
                 valid_variants,
             },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -402,6 +448,8 @@ impl KdlConfigError {
                 value: value.into(),
                 message: message.into(),
             },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -420,6 +468,8 @@ impl KdlConfigError {
                 discriminator: discriminator.to_string(),
                 valid_choices: valid_choices.iter().map(|s| s.to_string()).collect(),
             },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -437,6 +487,8 @@ impl KdlConfigError {
             kind: ErrorKind::IncompatiblePlacement {
                 reason: reason.into(),
             },
+            node_path: None,
+            location: None,
         }
     }
 
@@ -448,6 +500,8 @@ impl KdlConfigError {
             placement: Placement::Unknown,
             required: false,
             kind: ErrorKind::Custom(message.into()),
+            node_path: None,
+            location: None,
         }
     }
 }

@@ -1,0 +1,5 @@
+error: invalid flag_style, expected one of: both, value|no, with|without
+ --> tests/ui/invalid_flag_style.rs:5:30
+  |
+5 |     #[kdl(attr, flag_style = "nope")]
+  |                              ^^^^^^

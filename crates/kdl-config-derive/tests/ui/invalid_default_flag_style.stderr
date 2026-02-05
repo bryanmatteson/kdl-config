@@ -1,0 +1,5 @@
+error: invalid default_flag_style, expected one of: both, value|no, with|without
+ --> tests/ui/invalid_default_flag_style.rs:4:28
+  |
+4 | #[kdl(default_flag_style = "nope")]
+  |                            ^^^^^^

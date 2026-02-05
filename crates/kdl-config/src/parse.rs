@@ -1,7 +1,40 @@
 use crate::error::{ErrorKind, KdlConfigError, Placement};
 use crate::render::is_valid_identifier;
-use crate::types::{Modifier, Node, Value};
+use crate::types::{Modifier, Node, NodeLocation, Value};
 use kdl::{KdlDocument, KdlNode, KdlValue};
+
+struct LineIndex {
+    line_starts: Vec<usize>,
+    len: usize,
+}
+
+impl LineIndex {
+    fn new(contents: &str) -> Self {
+        let mut line_starts = vec![0];
+        for (idx, byte) in contents.bytes().enumerate() {
+            if byte == b'\n' {
+                line_starts.push(idx + 1);
+            }
+        }
+        Self {
+            line_starts,
+            len: contents.len(),
+        }
+    }
+
+    fn location(&self, offset: usize) -> NodeLocation {
+        let offset = offset.min(self.len);
+        let line_idx = match self.line_starts.binary_search(&offset) {
+            Ok(idx) => idx,
+            Err(idx) => idx.saturating_sub(1),
+        };
+        let line_start = self.line_starts.get(line_idx).copied().unwrap_or(0);
+        NodeLocation {
+            line: line_idx + 1,
+            column: offset.saturating_sub(line_start) + 1,
+        }
+    }
+}
 
 pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
     let document: KdlDocument = contents
@@ -13,12 +46,15 @@ pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
             placement: Placement::Unknown,
             required: true,
             kind: ErrorKind::Parse(e.to_string()),
+            node_path: None,
+            location: None,
         })?;
 
     let mut root = Node::new();
+    let index = LineIndex::new(contents);
 
-    for node in document.nodes() {
-        let child = parse_kdl_node(node)?;
+    for (idx, node) in document.nodes().iter().enumerate() {
+        let child = parse_kdl_node(node, &index, None, idx)?;
         root.add_child(child);
     }
 
@@ -35,6 +71,8 @@ pub fn parse_node(contents: &str) -> Result<Node, KdlConfigError> {
             placement: Placement::Unknown,
             required: true,
             kind: ErrorKind::Parse(e.to_string()),
+            node_path: None,
+            location: None,
         })?;
 
     let nodes = document.nodes();
@@ -43,7 +81,10 @@ pub fn parse_node(contents: &str) -> Result<Node, KdlConfigError> {
             "KDL Node",
             "expected a single node, found none",
         )),
-        1 => parse_kdl_node(&nodes[0]),
+        1 => {
+            let index = LineIndex::new(contents);
+            parse_kdl_node(&nodes[0], &index, None, 0)
+        }
         count => Err(KdlConfigError::custom(
             "KDL Node",
             format!("expected a single node, found {count}"),
@@ -51,7 +92,12 @@ pub fn parse_node(contents: &str) -> Result<Node, KdlConfigError> {
     }
 }
 
-pub(crate) fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
+pub(crate) fn parse_kdl_node(
+    node: &KdlNode,
+    index: &LineIndex,
+    parent_path: Option<&str>,
+    child_index: usize,
+) -> Result<Node, KdlConfigError> {
     let name_ident = node.name();
     let raw_name = name_ident.value();
     let repr = name_ident.repr();
@@ -68,7 +114,15 @@ pub(crate) fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
     } else {
         parse_node_name(raw_name)
     };
-    let mut result = Node::named(name).with_modifier(modifier);
+    let path = match parent_path {
+        Some(parent) => format!("{parent}/{name}[{child_index}]"),
+        None => format!("/{name}[{child_index}]"),
+    };
+    let location = node.span().offset();
+    let mut result = Node::named(name)
+        .with_modifier(modifier)
+        .with_location(index.location(location))
+        .with_path(path);
     if let Some(repr) = repr {
         if repr.starts_with('"') || repr.starts_with('#') || repr.starts_with('r') {
             result = result.with_name_repr(repr.to_string());
@@ -100,8 +154,8 @@ pub(crate) fn parse_kdl_node(node: &KdlNode) -> Result<Node, KdlConfigError> {
     }
 
     if let Some(children) = node.children() {
-        for child in children.nodes() {
-            let child_node = parse_kdl_node(child)?;
+        for (idx, child) in children.nodes().iter().enumerate() {
+            let child_node = parse_kdl_node(child, index, result.path(), idx)?;
             result.add_child(child_node);
         }
     }

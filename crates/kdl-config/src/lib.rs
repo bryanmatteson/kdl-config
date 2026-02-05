@@ -41,7 +41,7 @@ pub use render::{
 pub use round_trip::{
     RoundTrip, RoundTripMut, parse_str_roundtrip, parse_str_with_config_roundtrip,
 };
-pub use types::{MergeModifierPolicy, Modifier, Node, Value};
+pub use types::{MergeModifierPolicy, Modifier, Node, NodeLocation, Value};
 
 /// Trait for parsing a typed configuration from a KDL Node.
 pub trait KdlParse: Sized {

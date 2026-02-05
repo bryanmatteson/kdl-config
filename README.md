@@ -236,9 +236,28 @@ union Choice {
 }
 ```
 
+## Layered Configs
+
+Load and merge multiple KDL layers (later layers override earlier ones) with `KdlLoader`.
+Modifiers on node names control merge behavior: `+name` appends, `-name` removes, and `!name` replaces.
+
+```rust
+use kdl_config::KdlLoader;
+
+let loader = KdlLoader::new()
+    .add_layer("config/base.kdl")
+    .add_layer("config/override.kdl");
+
+// Merge into a single root node.
+let merged = loader.load_merged().unwrap();
+
+// Or parse directly into a typed config.
+let config: Config = loader.load().unwrap();
+```
+
 ## Round-trip Rendering
 
-Use round-trip helpers to preserve the original KDL if nothing changes:
+Use round-trip helpers to preserve the original KDL when the canonical rendering matches the input:
 
 ```rust
 use kdl_config::round_trip::parse_str_roundtrip;

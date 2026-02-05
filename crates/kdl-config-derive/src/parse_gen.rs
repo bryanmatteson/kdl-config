@@ -78,22 +78,26 @@ pub fn generate_parse_impl(
     quote! {
         impl ::kdl_config::KdlParse for #struct_name {
             fn from_node(node: &::kdl_config::Node, config: &::kdl_config::ParseConfig) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
-                #validate_name
-                let struct_overrides = #struct_overrides;
-                let struct_config = ::kdl_config::resolve_struct(config, struct_overrides);
-                let mut used_keys = ::kdl_config::helpers::UsedKeys::new();
+                let result = (|| {
+                    #validate_name
+                    let struct_overrides = #struct_overrides;
+                    let struct_config = ::kdl_config::resolve_struct(config, struct_overrides);
+                    let mut used_keys = ::kdl_config::helpers::UsedKeys::new();
 
-                #(#field_parsers)*
-                #(#skip_marks)*
+                    #(#field_parsers)*
+                    #(#skip_marks)*
 
-                if struct_config.deny_unknown {
-                    used_keys.check_unknowns(node, #struct_name_str)?;
-                }
+                    if struct_config.deny_unknown {
+                        used_keys.check_unknowns(node, #struct_name_str)?;
+                    }
 
-                Ok(Self {
-                    #(#field_names,)*
-                    #(#skipped_fields: ::std::default::Default::default(),)*
-                })
+                    Ok(Self {
+                        #(#field_names,)*
+                        #(#skipped_fields: ::std::default::Default::default(),)*
+                    })
+                })();
+
+                result.map_err(|err| err.with_node(node))
             }
         }
     }
@@ -1307,7 +1311,8 @@ fn generate_node_parser(
     let explicit_child_loop = if field.placement.children_any {
         quote! {
             for #child_ident in node.children() {
-                let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
+                let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
+                    .map_err(|err| err.with_node(#child_ident))?;
                 if struct_config.deny_unknown {
                     used_keys.mark_child(&#child_ident.name);
                 }
@@ -1325,7 +1330,8 @@ fn generate_node_parser(
     } else {
         quote! {
             for #child_ident in node.children_named(#kdl_key) {
-                let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
+                let v = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
+                    .map_err(|err| err.with_node(#child_ident))?;
                 if struct_config.deny_unknown {
                     used_keys.mark_child(&#child_ident.name);
                 }
@@ -1373,7 +1379,8 @@ fn generate_node_parser(
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
                     for #child_ident in node.children() {
-                        let parsed = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config);
+                        let parsed = <#value_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
+                            .map_err(|err| err.with_node(#child_ident));
                         let v = match parsed {
                             Ok(v) => v,
                             Err(err) => match err.kind {
@@ -1524,7 +1531,8 @@ fn generate_node_vec_parser(
                 ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
                     let mut #values_ident: Vec<#elem_ty> = Vec::new();
                     for #child_ident in node.children() {
-                        let parsed = <#elem_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config);
+                        let parsed = <#elem_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
+                            .map_err(|err| err.with_node(#child_ident));
                         let v = match parsed {
                             Ok(v) => v,
                             Err(err) => match err.kind {
@@ -1557,7 +1565,8 @@ fn generate_node_vec_parser(
             if !#children_ident.is_empty() {
                 let mut #values_ident = Vec::with_capacity(#children_ident.len());
                 for #child_ident in #children_ident {
-                    let v = <#elem_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
+                    let v = <#elem_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
+                        .map_err(|err| err.with_node(#child_ident))?;
                     if struct_config.deny_unknown {
                         used_keys.mark_child(&#child_ident.name);
                     }
@@ -1675,7 +1684,8 @@ fn generate_registry_parser(
 
             for #child_ident in node.children_named(#container) {
                 #key_extract
-                let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(&#node_copy_ident, config)?;
+                let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(&#node_copy_ident, config)
+                    .map_err(|err| err.with_node(&#node_copy_ident))?;
                 match field_config.conflict {
                     ::kdl_config::ConflictPolicy::Error => {
                         if #field_ident.contains_key(&#key_ident) {
@@ -1733,7 +1743,8 @@ fn generate_registry_parser(
 
         for #child_ident in node.children_named(#container) {
             #key_extract
-            let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(&#node_copy_ident, config)?;
+            let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(&#node_copy_ident, config)
+                .map_err(|err| err.with_node(&#node_copy_ident))?;
             match field_config.conflict {
                 ::kdl_config::ConflictPolicy::Error => {
                     if #field_ident.iter().any(|(key, _)| key == &#key_ident) {
@@ -1812,6 +1823,8 @@ fn generate_children_map_parser(
             placement: ::kdl_config::Placement::Children,
             required: false,
             kind: ::kdl_config::ErrorKind::Custom("duplicate map key".to_string()),
+            node_path: None,
+            location: None,
         });
     };
 
@@ -1823,6 +1836,8 @@ fn generate_children_map_parser(
             placement: ::kdl_config::Placement::Children,
             required: false,
             kind: ::kdl_config::ErrorKind::Custom("missing map key argument".to_string()),
+            node_path: None,
+            location: None,
         }
     };
     let missing_attr_error = quote! {
@@ -1833,6 +1848,8 @@ fn generate_children_map_parser(
             placement: ::kdl_config::Placement::Children,
             required: false,
             kind: ::kdl_config::ErrorKind::Custom("missing map key attribute".to_string()),
+            node_path: None,
+            location: None,
         }
     };
 
@@ -1871,6 +1888,8 @@ fn generate_children_map_parser(
                             placement: ::kdl_config::Placement::Children,
                             required: false,
                             kind: ::kdl_config::ErrorKind::Custom("map key attribute must have a single value".to_string()),
+                            node_path: None,
+                            location: None,
                         });
                     }
                     let #key_ident = ::kdl_config::convert_value_checked::<#key_ty>(
@@ -2002,7 +2021,8 @@ fn generate_children_map_parser(
             }
             for #child_ident in node.children_named(#map_node) {
                 #key_extract
-                let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(&#node_copy_ident, config)?;
+                let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(&#node_copy_ident, config)
+                    .map_err(|err| err.with_node(&#node_copy_ident))?;
                 #map_insert
             }
         }
@@ -2013,7 +2033,8 @@ fn generate_children_map_parser(
                     used_keys.mark_child(&#child_ident.name);
                 }
                 #key_extract
-                let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)?;
+                let #value_ident = <#val_ty as ::kdl_config::KdlParse>::from_node(#child_ident, config)
+                    .map_err(|err| err.with_node(#child_ident))?;
                 #map_insert
             }
         }

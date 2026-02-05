@@ -12,7 +12,7 @@
     serde   = ["dep:serde"]
 
 [dependencies]
-    kdl.workspace               = true
+    kdl                         = { workspace = true, features = ["span"] }
     kdl-config-derive.workspace = true
     num-traits                  = "0.2.19"
     serde                       = { version = "1", features = ["derive"], optional = true }

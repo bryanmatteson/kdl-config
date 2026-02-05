@@ -1,0 +1,5 @@
+error: invalid default_conflict, expected one of: error, first, last, append
+ --> tests/ui/invalid_default_conflict.rs:4:26
+  |
+4 | #[kdl(default_conflict = "nope")]
+  |                          ^^^^^^

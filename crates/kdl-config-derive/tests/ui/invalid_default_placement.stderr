@@ -1,0 +1,5 @@
+error: invalid default_placement, expected one of: exhaustive, attr, value, child
+ --> tests/ui/invalid_default_placement.rs:4:27
+  |
+4 | #[kdl(default_placement = "nope")]
+  |                           ^^^^^^

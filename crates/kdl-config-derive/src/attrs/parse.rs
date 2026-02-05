@@ -77,9 +77,18 @@ fn parse_struct_meta(
                 lit: Lit::Str(s), ..
             }) = value
             {
-                result.rename_all =
-                    parse_rename_strategy(&s.value()).unwrap_or(super::types::RenameStrategy::None);
-                result.rename_all_explicit = true;
+                match parse_rename_strategy(&s.value()) {
+                    Some(strategy) => {
+                        result.rename_all = strategy;
+                        result.rename_all_explicit = true;
+                    }
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            s,
+                            "invalid rename_all value, expected one of: kebab-case, snake_case, lowercase, UPPERCASE, none",
+                        ));
+                    }
+                }
             }
         }
         Some("default_placement") => {
@@ -88,7 +97,15 @@ fn parse_struct_meta(
                 lit: Lit::Str(s), ..
             }) = value
             {
-                result.default_placement = parse_default_placement(&s.value());
+                result.default_placement = match parse_default_placement(&s.value()) {
+                    Some(placement) => Some(placement),
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            s,
+                            "invalid default_placement, expected one of: exhaustive, attr, value, child",
+                        ));
+                    }
+                };
             }
         }
         Some("default_bool") => {
@@ -97,7 +114,15 @@ fn parse_struct_meta(
                 lit: Lit::Str(s), ..
             }) = value
             {
-                result.default_bool = parse_bool_mode(&s.value());
+                result.default_bool = match parse_bool_mode(&s.value()) {
+                    Some(mode) => Some(mode),
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            s,
+                            "invalid default_bool, expected one of: presence+value, value-only, presence-only",
+                        ));
+                    }
+                };
             }
         }
         Some("default_flag_style") => {
@@ -106,7 +131,15 @@ fn parse_struct_meta(
                 lit: Lit::Str(s), ..
             }) = value
             {
-                result.default_flag_style = parse_flag_style(&s.value());
+                result.default_flag_style = match parse_flag_style(&s.value()) {
+                    Some(style) => Some(style),
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            s,
+                            "invalid default_flag_style, expected one of: both, value|no, with|without",
+                        ));
+                    }
+                };
             }
         }
         Some("default_conflict") => {
@@ -115,7 +148,15 @@ fn parse_struct_meta(
                 lit: Lit::Str(s), ..
             }) = value
             {
-                result.default_conflict = parse_conflict_policy(&s.value());
+                result.default_conflict = match parse_conflict_policy(&s.value()) {
+                    Some(policy) => Some(policy),
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            s,
+                            "invalid default_conflict, expected one of: error, first, last, append",
+                        ));
+                    }
+                };
             }
         }
         Some("deny_unknown") => {
@@ -449,7 +490,15 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
                 lit: Lit::Str(s), ..
             }) = value
             {
-                raw.bool_mode = parse_bool_mode(&s.value());
+                raw.bool_mode = match parse_bool_mode(&s.value()) {
+                    Some(mode) => Some(mode),
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            s,
+                            "invalid bool mode, expected one of: presence+value, value-only, presence-only",
+                        ));
+                    }
+                };
             }
         }
         Some("flag_style") => {
@@ -458,7 +507,15 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
                 lit: Lit::Str(s), ..
             }) = value
             {
-                raw.flag_style = parse_flag_style(&s.value());
+                raw.flag_style = match parse_flag_style(&s.value()) {
+                    Some(style) => Some(style),
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            s,
+                            "invalid flag_style, expected one of: both, value|no, with|without",
+                        ));
+                    }
+                };
             }
         }
         Some("conflict") => {
@@ -467,7 +524,15 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
                 lit: Lit::Str(s), ..
             }) = value
             {
-                raw.conflict = parse_conflict_policy(&s.value());
+                raw.conflict = match parse_conflict_policy(&s.value()) {
+                    Some(policy) => Some(policy),
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            s,
+                            "invalid conflict policy, expected one of: error, first, last, append",
+                        ));
+                    }
+                };
             }
         }
         Some("render") => {
@@ -560,7 +625,15 @@ fn parse_schema_meta(
                 lit: Lit::Str(s), ..
             }) = value
             {
-                schema.kind = parse_schema_type(&s.value());
+                schema.kind = match parse_schema_type(&s.value()) {
+                    Some(kind) => Some(kind),
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            s,
+                            "invalid schema kind, expected one of: string, integer, int, float, number, boolean, bool, null",
+                        ));
+                    }
+                };
             }
         }
         Some("required") => {
