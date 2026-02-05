@@ -241,6 +241,15 @@ impl Weight {
     pub fn get(self) -> f64 {
         self.0
     }
+
+    pub fn parse(s: &str) -> Result<Self, WeightError> {
+        let raw = s.parse::<f64>().map_err(|_| WeightError::new(f64::NAN))?;
+        Self::new(raw)
+    }
+
+    pub fn as_f32(self) -> f32 {
+        self.0 as f32
+    }
 }
 
 impl TryFrom<f64> for Weight {
