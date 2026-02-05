@@ -120,6 +120,7 @@ version = "0.1.0"
 dependencies = [
  "kdl",
  "kdl-config-derive",
+ "num-traits",
  "proptest",
  "serde",
 ]

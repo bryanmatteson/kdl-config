@@ -1,11 +1,15 @@
 use std::fmt;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 
 use crate::schema::{KdlNodeSchema, KdlSchema, SchemaRef, SchemaRegistry, SchemaType, SchemaValue};
-use crate::{FromKdlValue, Value};
+use crate::{
+    FromKdlValue, KdlConfigError, KdlParse, KdlRender, Node, NodeRenderer, ParseConfig, Placement,
+    Value,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Duration(std::time::Duration);
 
@@ -301,6 +305,143 @@ fn duration_from_millis_f64(millis: f64) -> Option<std::time::Duration> {
         return None;
     }
     Some(std::time::Duration::from_millis(truncated as u64))
+}
+
+// ============================================================================
+// PositiveCount (NonZeroU32 wrapper)
+// ============================================================================
+
+/// A positive count guaranteed to be at least 1.
+///
+/// Uses `NonZeroU32` internally for niche optimization (Option<PositiveCount>
+/// has the same size as PositiveCount).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct PositiveCount(NonZeroU32);
+
+impl PositiveCount {
+    /// The minimum value (1).
+    pub const ONE: Self = Self(NonZeroU32::new(1).unwrap());
+
+    /// Create a new positive count, returning `None` if zero.
+    #[inline]
+    pub const fn new(value: u32) -> Option<Self> {
+        match NonZeroU32::new(value) {
+            Some(nz) => Some(Self(nz)),
+            None => None,
+        }
+    }
+
+    /// Create a positive count without validation.
+    ///
+    /// # Safety
+    /// The value must be non-zero.
+    #[inline]
+    pub const unsafe fn new_unchecked(value: u32) -> Self {
+        // SAFETY: Caller guarantees value is non-zero
+        Self(unsafe { NonZeroU32::new_unchecked(value) })
+    }
+
+    /// Get the inner u32 value.
+    #[inline]
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+
+    /// Convert to usize.
+    #[inline]
+    pub const fn as_usize(self) -> usize {
+        self.0.get() as usize
+    }
+
+    /// Saturating add.
+    #[inline]
+    pub fn saturating_add(self, rhs: u32) -> Self {
+        Self(self.0.saturating_add(rhs))
+    }
+
+    /// Checked multiply.
+    #[inline]
+    pub fn checked_mul(self, rhs: u32) -> Option<Self> {
+        self.0.checked_mul(NonZeroU32::new(rhs)?).map(Self)
+    }
+}
+
+impl Default for PositiveCount {
+    #[inline]
+    fn default() -> Self {
+        Self::ONE
+    }
+}
+
+impl fmt::Display for PositiveCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<u32> for PositiveCount {
+    type Error = &'static str;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or("count must be positive (non-zero)")
+    }
+}
+
+impl TryFrom<usize> for PositiveCount {
+    type Error = &'static str;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        if value == 0 {
+            Err("count must be positive (non-zero)")
+        } else if value > u32::MAX as usize {
+            Err("count too large for u32")
+        } else {
+            Ok(Self(NonZeroU32::new(value as u32).unwrap()))
+        }
+    }
+}
+
+impl KdlParse for PositiveCount {
+    fn from_node(node: &Node, _config: &ParseConfig) -> Result<Self, KdlConfigError> {
+        let val = node.args().first().ok_or_else(|| {
+            KdlConfigError::missing_required(
+                node.name.clone(),
+                "value",
+                "value",
+                Placement::AttrPositional,
+            )
+        })?;
+        <Self as FromKdlValue>::from_value(val)
+            .ok_or_else(|| KdlConfigError::custom(node.name.clone(), "count must be positive"))
+    }
+}
+
+impl KdlRender for PositiveCount {
+    fn render<W: std::fmt::Write>(
+        &self,
+        w: &mut W,
+        name: &str,
+        _indent: usize,
+    ) -> std::fmt::Result {
+        let mut renderer = NodeRenderer::new(name, crate::Modifier::Inherit);
+        renderer.positional(0, &Value::Int(self.get() as i128));
+        write!(w, "{}", renderer.render())
+    }
+}
+
+impl FromKdlValue for PositiveCount {
+    const TYPE_NAME: &'static str = "integer";
+    fn from_value(value: &Value) -> Option<Self> {
+        u32::from_value(value).and_then(Self::new)
+    }
+}
+
+impl From<PositiveCount> for Value {
+    fn from(v: PositiveCount) -> Self {
+        Value::Int(v.get() as i128)
+    }
 }
 
 #[cfg(test)]
