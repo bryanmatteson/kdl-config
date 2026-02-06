@@ -319,6 +319,50 @@ Rules:
 - Multiple children: repeated `key { ... }` into `Vec<T>`.
 - Registry: repeated `<container> <key> { ... }` into `HashMap<String, T>` or `Vec<(String, T)>` (only when `#[kdl(registry)]` is set).
 
+## Templates and Use
+
+Templates use KDL’s native **type annotation** syntax:
+
+```
+(source)template "code" {
+  chunking max-size=1500
+  enrichment enabled
+}
+```
+
+This means: a `template` node typed as `source` with a template name `"code"`.
+
+**Template Rules**
+- Templates must use a type annotation: `(type)template "name"`.
+- Templates accept a **single string argument** (the template name).
+- Templates do **not** accept attributes or modifiers.
+- Templates may appear:
+  - At the document top level.
+  - As children of the single root node (when the document has exactly one non-template top-level node).
+- Template definitions are removed before parsing and stored in a registry.
+
+**Use Rules**
+- A `use` node references a template by name: `use "code"`.
+- `use` accepts a **single string argument**.
+- `use` does **not** accept attributes, children, or modifiers.
+- `use` must be a child of a parent node (never top-level).
+
+**Expansion / Validation**
+- Each `use` node is replaced **in place** with the template’s children.
+- The template’s **type annotation** must match the parent context:
+  - If the parent node has a type annotation, compare to that.
+  - Otherwise compare to the parent node name.
+- Errors are raised for unknown templates, duplicate template names, invalid forms, or type mismatches.
+- Template recursion is rejected.
+
+Example type mismatch:
+```
+(source)template "code" { ... }
+vectors "default" {
+  use "code" // ERROR: template type is "source", parent is "vectors"
+}
+```
+
 ## Signals / Modifiers
 
 Node names may be prefixed with a modifier signal:
@@ -441,6 +485,14 @@ Flag style expansion:
 
 Use `#[kdl(render = "attr" | "value" | "child" | "children" | "registry")]` to override per field.
 
+### Template-Aware Updates
+
+Round-trip parsing preserves `template` and `use` nodes. When rendering updates:
+- The default update path may emit **explicit overrides** (expanded children) and keep templates unchanged.
+- A **template-aware** update mode can be used to push changes back into template definitions when it is safe:
+  - If **all uses** of a template result in identical updated children, the template definition is updated.
+  - Otherwise the template remains unchanged and per-use overrides are emitted after the `use` node.
+
 ## Examples
 
 **Scalar with exhaustive placement**
@@ -507,6 +559,8 @@ Notes:
 - `schema(deny_unknown)` and `schema(allow_unknown)` accept optional boolean values.
 - Union types can generate `choice` schemas for alternative value types.
 - Schema outputs may use `type=[...]` to express multiple scalar types (e.g., duration values).
+- Schema outputs may include a `type_annotation` block to describe required or allowed type annotations.
+- The `template` node schema uses a required `type_annotation` and resolves its child schema using the referenced definition(s).
 
 ## Notes
 

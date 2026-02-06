@@ -43,6 +43,34 @@ impl SchemaRegistry {
     }
 }
 
+/// Build a schema node for `(type)template "name" { ... }`.
+pub fn template_node_schema(definitions: &SchemaRegistry) -> KdlNodeSchema {
+    let mut names: Vec<String> = definitions.definitions.keys().cloned().collect();
+    names.sort();
+    let def_refs: Vec<SchemaRef> = names.into_iter().map(SchemaRef::Ref).collect();
+    let allowed = SchemaRef::Choice(def_refs.clone());
+
+    let mut schema = KdlNodeSchema::default();
+    schema.name = Some("template".to_string());
+    schema.description = Some("Typed template definition".to_string());
+    schema.values.push(SchemaValue {
+        ty: SchemaType::String,
+        required: true,
+        description: Some("Template name".to_string()),
+        enum_values: None,
+    });
+    schema.type_annotation = Some(Box::new(TypeAnnotationSchema {
+        required: true,
+        allowed: allowed.clone(),
+    }));
+    if !def_refs.is_empty() {
+        schema.children = Some(Box::new(ChildrenSchema {
+            nodes: vec![allowed],
+        }));
+    }
+    schema
+}
+
 /// A reference to a schema, either inline or by name.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SchemaRef {
@@ -146,6 +174,7 @@ pub struct KdlNodeSchema {
     pub values: Vec<SchemaValue>,
     pub children: Option<Box<ChildrenSchema>>,
     pub variants: Option<Vec<SchemaRef>>,
+    pub type_annotation: Option<Box<TypeAnnotationSchema>>,
 
     // For when this schema is just a wrapper around another type (e.g. typedef)
     pub ref_type: Option<String>,
@@ -178,6 +207,16 @@ impl KdlNodeSchema {
                 existing.nodes.extend(children.nodes);
             } else {
                 self.children = Some(children);
+            }
+        }
+
+        if let Some(type_annotation) = other.type_annotation {
+            if let Some(existing) = &self.type_annotation {
+                if existing.as_ref() != type_annotation.as_ref() {
+                    return Err("conflicting type annotations".to_string());
+                }
+            } else {
+                self.type_annotation = Some(type_annotation);
             }
         }
 
@@ -314,6 +353,12 @@ impl KdlRender for KdlNodeSchema {
             writeln!(w)?;
         }
 
+        // Type annotations
+        if let Some(type_annotation) = &self.type_annotation {
+            type_annotation.render(w, indent + 1)?;
+            writeln!(w)?;
+        }
+
         // Children
         if let Some(children) = &self.children {
             children.render(w, "children", indent + 1)?;
@@ -323,6 +368,43 @@ impl KdlRender for KdlNodeSchema {
         crate::write_indent(w, indent)?;
         write!(w, "}}")?; // no newline here, caller handles
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeAnnotationSchema {
+    pub required: bool,
+    pub allowed: SchemaRef,
+}
+
+impl TypeAnnotationSchema {
+    fn render<W: std::fmt::Write>(&self, w: &mut W, indent: usize) -> std::fmt::Result {
+        crate::write_indent(w, indent)?;
+        write!(w, "type_annotation")?;
+        if self.required {
+            write!(w, " required=#true")?;
+        }
+
+        match &self.allowed {
+            SchemaRef::Ref(r) => {
+                write!(w, " ref={:?}", r)?;
+                Ok(())
+            }
+            SchemaRef::Inline(node) => {
+                writeln!(w, " {{")?;
+                node.render(w, "node", indent + 1)?;
+                writeln!(w)?;
+                crate::write_indent(w, indent)?;
+                write!(w, "}}")
+            }
+            SchemaRef::Choice(choices) => {
+                writeln!(w, " {{")?;
+                render_choice_nodes(choices, w, indent + 1)?;
+                writeln!(w)?;
+                crate::write_indent(w, indent)?;
+                write!(w, "}}")
+            }
+        }
     }
 }
 
