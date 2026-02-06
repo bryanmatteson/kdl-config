@@ -2,10 +2,11 @@ use crate::context::LineIndex;
 use crate::error::{ErrorKind, KdlConfigError, Placement};
 use crate::render::is_valid_identifier;
 use crate::types::{Modifier, Node, Value};
+use crate::templates::expand_templates;
 use kdl::{KdlDocument, KdlNode, KdlValue};
 
 pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
-    let document: KdlDocument = contents
+    let mut document: KdlDocument = contents
         .parse()
         .map_err(|e: kdl::KdlError| KdlConfigError {
             struct_name: "KDL Document".into(),
@@ -21,6 +22,8 @@ pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
     let mut root = Node::new();
     let index = LineIndex::new(contents);
 
+    expand_templates(&mut document, Some(&index))?;
+
     for (idx, node) in document.nodes().iter().enumerate() {
         let child = parse_kdl_node(node, &index, None, idx)?;
         root.add_child(child);
@@ -30,7 +33,7 @@ pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
 }
 
 pub fn parse_node(contents: &str) -> Result<Node, KdlConfigError> {
-    let document: KdlDocument = contents
+    let mut document: KdlDocument = contents
         .parse()
         .map_err(|e: kdl::KdlError| KdlConfigError {
             struct_name: "KDL Node".into(),
@@ -43,6 +46,7 @@ pub fn parse_node(contents: &str) -> Result<Node, KdlConfigError> {
             location: None,
         })?;
 
+    expand_templates(&mut document, Some(&LineIndex::new(contents)))?;
     let nodes = document.nodes();
     match nodes.len() {
         0 => Err(KdlConfigError::custom(

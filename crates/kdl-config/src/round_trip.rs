@@ -53,10 +53,11 @@ pub fn parse_str_roundtrip_with_config<T: KdlDecode + KdlUpdate>(
     contents: &str,
     config: &ParseConfig,
 ) -> Result<RoundTripAst<T>, KdlConfigError> {
-    let doc: KdlDocument = contents
+    let mut doc: KdlDocument = contents
         .parse()
         .map_err(|e: kdl::KdlError| KdlConfigError::custom("KDL Document", e.to_string()))?;
     let source = Source::new(contents.to_string());
+    crate::templates::expand_templates(&mut doc, Some(&source))?;
     let ctx = DecodeContext::new(config, Some(&source));
     let nodes = doc.nodes();
     match nodes.len() {

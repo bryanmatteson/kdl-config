@@ -20,6 +20,7 @@ In child form, `attr1` and `attr2` are child node names. A child “value node�
 - `#[kdl(node = "name")]`: expected node name for parsing, and default name for rendering.
 - `#[kdl(choice)]`: for `#[derive(Kdl)]` on enums, use choice mode (parse by node name).
 - `#[kdl(value)]`: for `#[derive(Kdl)]` on enums or newtype structs, use value mode (scalar conversion).
+- `#[kdl(selector = <selector>)]` or `#[kdl(select(...))]`: override enum discriminator selection (default is `arg(0)`).
 - `#[kdl(rename_all = "kebab-case" | "snake_case" | "lowercase" | "UPPERCASE" | "none")]`: rename strategy for field keys and enum variants.
 - `#[kdl(default_placement = "exhaustive" | "attr" | "value" | "child")]`: default placement policy.
 - `#[kdl(default_bool = "presence+value" | "value-only" | "presence-only")]`: default boolean behavior.
@@ -101,9 +102,10 @@ Rules:
 - The **container name** defaults to the field key (after rename). You can override it with `container = "..."`.
 - By default, each `config-node <key> { ... }` entry uses its **first positional arg** as the map key: `first`, `second`, `third`.
   - `key_arg = N` uses positional arg `N` instead.
-  - `key_attr = "id"` uses the `id=` attribute as the key (and the attribute is not passed to the inner type).
+  - `key_attr = "id"` uses the `id=` attribute as the key.
     - The attribute must have exactly one value.
-  - `key_fn = "path"` calls a helper `fn(&Node) -> Result<String, KdlConfigError>` to compute the key.
+    - By default, the key attribute is **consumed** (removed before parsing the inner type). Use `preserve` to keep it.
+  - `key_fn = "path"` calls a helper `fn(&KdlNode) -> Result<String, KdlConfigError>` to compute the key.
     - The helper does not mutate or strip data from the node; if the key lives in attrs/args, the inner type must accept it or use `key_attr` / `key_arg`.
 - The node’s **body and attributes** are parsed into `ConfigNode` as usual (it can itself have attrs, values, or children).
 - The key must be a string value; non-string keys are an error.
@@ -167,7 +169,8 @@ Rules:
   - `key_arg = N` uses positional arg `N` instead.
   - `key_attr = "id"` uses the `id=` attribute as the key.
     - The attribute must have exactly one value.
-  - `key_fn = "path"` calls a helper `fn(&Node) -> Result<K, KdlConfigError>` to compute the key.
+    - By default, the key attribute is **consumed** (removed before parsing the inner type). Use `preserve` to keep it.
+  - `key_fn = "path"` calls a helper `fn(&KdlNode) -> Result<K, KdlConfigError>` to compute the key.
 - Keys are converted to `K` using `FromKdlValue`; invalid conversions are errors.
 - Without `map_node`, the key comes from the child name (string), so non-string key types will not parse.
 - Missing children yields an empty map.
@@ -185,19 +188,20 @@ Rendering:
 ## Selectors (`select(...)`)
 
 Selectors are an advanced way to extract a key or discriminator from a node. They are supported on
-`registry`, `children_map`, and choice enums.
+`registry`, `children_map`, and tagged enums (`#[derive(Kdl)]`). For `child`/`children` fields, selectors
+are only used when `inject` is enabled.
 
 Selector forms:
 - `arg(N)`: use positional argument `N`
 - `attr("name")`: use the value of attribute `name`
 - `name`: use the node name
-- `func("path::to::fn")`: call a helper `fn(&Node) -> Result<K, KdlConfigError>`
+- `func("path::to::fn")`: call a helper `fn(&KdlNode) -> Result<K, KdlConfigError>`
 - `any(...)`: try selectors in order and use the first match
 
 Options:
-- `consume`: remove the selected token before parsing the child
-- `preserve`: keep the selected token (default)
-- `inject` / `inject="field"`: inject the selected value into a field (where supported)
+- `consume`: remove the selected token before parsing (default)
+- `preserve`: keep the selected token
+- `inject` / `inject="field"`: inject the selected value into a field (only for `child`/`children`/`registry`/`children_map`)
 
 Examples:
 
@@ -223,7 +227,7 @@ Examples:
 
 ## Enums
 
-Enums are encoded as **tagged nodes** where the first positional argument is the variant discriminator.
+Enums are encoded as **tagged nodes** with a discriminator selected by `selector`/`select(...)` (default is `arg(0)`).
 
 Example:
 ```
@@ -248,15 +252,15 @@ enum Test {
 
 Rules:
 - The **outer node name** matches `#[kdl(node = "...")]` when provided.
-- The **first positional arg** is the variant discriminator.
+- The **variant discriminator** is selected by `selector`/`select(...)` (default is `arg(0)`).
   - Default discriminator is the variant name (string, after `rename_all`).
   - Use `#[kdl(tag = <literal>)]` to set a non-string discriminator (int/float/bool) or override the string tag.
+- By default, the discriminator is **consumed** (removed) before parsing the variant payload; use `preserve` to keep it.
 - The remaining args/attrs/children are parsed as the variant payload.
 - Unit variants accept **no additional args/attrs/children**.
 - Tuple variants consume positional args in order after the discriminator.
   - Attributes/children are not allowed for tuple variants.
-- Newtype variants are parsed with the inner type’s `KdlParse` using the variant name as the node name.
-  - If the inner type declares `#[kdl(node = "...")]`, it must match the variant name or parsing will error.
+- Newtype variants are decoded with `KdlDecode` from the same node, with name checking disabled for the inner type.
 - Struct variants (named fields) are parsed like structs using the enum’s defaults and overrides.
 
 Rendering:
@@ -273,7 +277,7 @@ Rules:
 - Variants must be unit or single-field newtypes.
 - Variant names use `rename_all` and `#[kdl(name = "...")]`.
 - Unit variants accept **no args/attrs/children**.
-- Newtype variants parse the inner type using the variant name as the node name.
+- Newtype variants parse the inner type using the variant name as the node name (inner type name must match unless it allows any name).
 - Rendering emits a node with the variant name; newtype variants render the inner body.
 
 ### Value Enums / Newtypes (`KdlValue` / `#[kdl(value)]`)
@@ -289,7 +293,7 @@ Rules:
 **Defaults**
 - Default placement policy: `exhaustive`.
 - Default bool behavior: `presence+value`.
-- Default flag aliases: both `value/no-value` and `with-value/without-value`.
+- Default flag aliases: both `key/no-key` and `with-key/without-key`.
 - Default conflict policy: `error`.
 - Default rendering: attr keyed for scalars, value node for `Vec<T>` of scalars, child node for nested structs/enums, and `children` for `Vec<T>` of nested types.
 - Unknown keys: allowed unless `deny_unknown` is set.
@@ -338,9 +342,9 @@ Modifiers are only recognized on bare identifiers. Quoted node names that start 
 
 ## Type Compatibility
 
-- Attribute keyed/positional/value nodes require the field type to implement value conversion (e.g., `String`, `PathBuf`, numbers, `bool`, `Vec<T>`, `Option<T>`, or a `KdlValue` enum).
+- Attribute keyed/positional/value nodes require the field type to implement value conversion (e.g., `String`, `PathBuf`, numbers, `bool`, `Vec<T>`, `Option<T>`, or a custom type implementing `FromKdlValue` / `KdlValue`).
 - Positional list placement requires `Vec<T>` or `Option<Vec<T>>` with value-compatible `T`.
-- Child/children require the field type to implement nested parsing (e.g., `KdlParse` for structs/enums).
+- Child/children require the field type to implement nested parsing (e.g., `KdlDecode` for structs/enums).
 - `children` requires `Vec<T>` or `Option<Vec<T>>`.
 - `registry` requires `HashMap<String, T>`, `Vec<(String, T)>`, or `Option<Vec<(String, T)>>`.
 - `children_map` requires `HashMap<K, V>`, `Vec<(K, V)>`, or `Option<Vec<(K, V)>>`.
@@ -388,7 +392,7 @@ Booleans allow explicit values and presence by default:
 - Explicit: `key=#true` or `key=#false`.
 - Presence true: `key` or `with-key`.
 - Presence false: `no-key` or `without-key`.
-- In child placement, presence true is a child node with no args and no children (e.g., `key` or `key {}`).
+- In child placement, presence true is a child node with no args, no attrs, and no children (e.g., `key` or `key {}`).
 
 If `bool = "value-only"`, flag tokens are disabled and only explicit values are accepted.
 `flag_style` and `default_flag_style` apply only when presence is enabled.
@@ -502,6 +506,7 @@ Notes:
 - `schema(skip)` excludes only from schema; parsing and rendering still apply to the field.
 - `schema(deny_unknown)` and `schema(allow_unknown)` accept optional boolean values.
 - Union types can generate `choice` schemas for alternative value types.
+- Schema outputs may use `type=[...]` to express multiple scalar types (e.g., duration values).
 
 ## Notes
 
