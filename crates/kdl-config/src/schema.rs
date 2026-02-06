@@ -398,6 +398,7 @@ pub enum SchemaType {
     Boolean,
     Null,
     Variadic(Box<SchemaType>),
+    AnyOf(Vec<SchemaType>),
     // ... formats etc
 }
 
@@ -408,11 +409,32 @@ impl SchemaType {
                 inner.render_inline(w)?;
                 write!(w, " repeat=\"*\"")
             }
+            Self::AnyOf(types) => {
+                let rendered = types
+                    .iter()
+                    .filter_map(|ty| ty.type_name())
+                    .map(|name| format!("{:?}", name))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(w, " type=[{}]", rendered)
+            }
             Self::String => write!(w, " type=\"string\""),
             Self::Integer => write!(w, " type=\"integer\""),
             Self::Float => write!(w, " type=\"number\""),
             Self::Boolean => write!(w, " type=\"boolean\""),
             Self::Null => write!(w, " type=\"null\""),
+        }
+    }
+
+    fn type_name(&self) -> Option<&'static str> {
+        match self {
+            Self::String => Some("string"),
+            Self::Integer => Some("integer"),
+            Self::Float => Some("number"),
+            Self::Boolean => Some("boolean"),
+            Self::Null => Some("null"),
+            Self::Variadic(inner) => inner.type_name(),
+            Self::AnyOf(_) => None,
         }
     }
 }

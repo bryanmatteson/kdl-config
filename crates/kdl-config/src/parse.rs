@@ -1,40 +1,8 @@
+use crate::context::LineIndex;
 use crate::error::{ErrorKind, KdlConfigError, Placement};
 use crate::render::is_valid_identifier;
-use crate::types::{Modifier, Node, NodeLocation, Value};
+use crate::types::{Modifier, Node, Value};
 use kdl::{KdlDocument, KdlNode, KdlValue};
-
-pub(crate) struct LineIndex {
-    line_starts: Vec<usize>,
-    len: usize,
-}
-
-impl LineIndex {
-    fn new(contents: &str) -> Self {
-        let mut line_starts = vec![0];
-        for (idx, byte) in contents.bytes().enumerate() {
-            if byte == b'\n' {
-                line_starts.push(idx + 1);
-            }
-        }
-        Self {
-            line_starts,
-            len: contents.len(),
-        }
-    }
-
-    fn location(&self, offset: usize) -> NodeLocation {
-        let offset = offset.min(self.len);
-        let line_idx = match self.line_starts.binary_search(&offset) {
-            Ok(idx) => idx,
-            Err(idx) => idx.saturating_sub(1),
-        };
-        let line_start = self.line_starts.get(line_idx).copied().unwrap_or(0);
-        NodeLocation {
-            line: line_idx + 1,
-            column: offset.saturating_sub(line_start) + 1,
-        }
-    }
-}
 
 pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
     let document: KdlDocument = contents
@@ -141,14 +109,10 @@ pub(crate) fn parse_kdl_node(
             result.set_attr(key, value);
         } else {
             let value = kdl_value_to_value(entry.value())?;
-            let mut repr = entry.value().as_string().map(|repr| repr.to_string());
-            if repr.is_none() {
-                if let Value::String(s) = &value {
-                    if is_valid_identifier(s) {
-                        repr = Some(s.clone());
-                    }
-                }
-            }
+            let repr = match &value {
+                Value::String(s) if is_valid_identifier(s) => Some(s.clone()),
+                _ => None,
+            };
             result.add_arg_with_repr(value, repr);
         }
     }

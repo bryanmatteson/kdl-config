@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use kdl_config::{KdlConfigError, KdlParse, Modifier, parse_config};
+use kdl_config::{KdlConfigError, Modifier, parse_config, parse_str};
 use kdl_config_derive::KdlNode;
 
 const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -14,10 +14,8 @@ fn read_fixture(name: &str) -> String {
     std::fs::read_to_string(fixture_path(name)).expect("failed to read fixture")
 }
 
-fn parse_named<T: KdlParse>(kdl: &str, name: &str) -> Result<T, KdlConfigError> {
-    let root = parse_config(kdl)?;
-    let node = root.child(name).expect("missing node");
-    T::from_node(node, &Default::default())
+fn parse_named<T: kdl_config::KdlDecode>(kdl: &str, _name: &str) -> Result<T, KdlConfigError> {
+    parse_str(kdl)
 }
 
 fn default_retry_limit() -> i64 {

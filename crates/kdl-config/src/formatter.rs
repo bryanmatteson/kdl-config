@@ -94,18 +94,108 @@ impl KdlFormatter {
         let mut depth = 1;
         let mut pos = open_pos + 1;
         let mut in_string = false;
+        let mut raw_hashes: Option<usize> = None;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
 
         while pos < bytes.len() && depth > 0 {
-            match bytes[pos] {
-                b'"' if !in_string => in_string = true,
-                b'"' if in_string => in_string = false,
-                b'{' if !in_string => depth += 1,
-                b'}' if !in_string => depth -= 1,
-                _ => {}
-            }
-            if depth > 0 {
+            if in_line_comment {
+                if bytes[pos] == b'\n' {
+                    in_line_comment = false;
+                }
                 pos += 1;
+                continue;
             }
+
+            if in_block_comment {
+                if bytes[pos] == b'*' && bytes.get(pos + 1) == Some(&b'/') {
+                    in_block_comment = false;
+                    pos += 2;
+                    continue;
+                }
+                pos += 1;
+                continue;
+            }
+
+            if let Some(hashes) = raw_hashes {
+                if bytes[pos] == b'"' {
+                    let mut matched = true;
+                    for offset in 0..hashes {
+                        if bytes.get(pos + 1 + offset) != Some(&b'#') {
+                            matched = false;
+                            break;
+                        }
+                    }
+                    if matched {
+                        raw_hashes = None;
+                        pos += 1 + hashes;
+                        continue;
+                    }
+                }
+                pos += 1;
+                continue;
+            }
+
+            if in_string {
+                if bytes[pos] == b'\\' {
+                    pos += 2;
+                    continue;
+                }
+                if bytes[pos] == b'"' {
+                    in_string = false;
+                    pos += 1;
+                    continue;
+                }
+                pos += 1;
+                continue;
+            }
+
+            if bytes[pos] == b'/' && bytes.get(pos + 1) == Some(&b'/') {
+                in_line_comment = true;
+                pos += 2;
+                continue;
+            }
+            if bytes[pos] == b'/' && bytes.get(pos + 1) == Some(&b'*') {
+                in_block_comment = true;
+                pos += 2;
+                continue;
+            }
+
+            if bytes[pos] == b'r' {
+                let mut idx = pos + 1;
+                let mut hashes = 0usize;
+                while bytes.get(idx) == Some(&b'#') {
+                    hashes += 1;
+                    idx += 1;
+                }
+                if bytes.get(idx) == Some(&b'"') {
+                    raw_hashes = Some(hashes);
+                    pos = idx + 1;
+                    continue;
+                }
+            }
+
+            if bytes[pos] == b'"' {
+                in_string = true;
+                pos += 1;
+                continue;
+            }
+
+            if bytes[pos] == b'{' {
+                depth += 1;
+                pos += 1;
+                continue;
+            }
+            if bytes[pos] == b'}' {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(pos);
+                }
+                pos += 1;
+                continue;
+            }
+
+            pos += 1;
         }
 
         if depth == 0 {
@@ -132,6 +222,27 @@ mod tests {
         let input = "root {}\n";
         let output = KdlFormatter::replace_block(input, "config", Some("name \"demo\""));
         assert!(output.contains("config {\n    name \"demo\"\n}"));
+    }
+
+    #[test]
+    fn brace_matching_skips_escaped_quotes() {
+        let input = "config {\n    name \"he said \\\"hi\\\"\"\n}\n";
+        let output = KdlFormatter::replace_block(input, "config", Some("name \"replaced\""));
+        assert!(output.contains("config {\n    name \"replaced\"\n}"));
+    }
+
+    #[test]
+    fn brace_matching_skips_raw_strings() {
+        let input = "config {\n    name r#\"{not a block}\"#\n}\n";
+        let output = KdlFormatter::replace_block(input, "config", Some("name \"raw\""));
+        assert!(output.contains("config {\n    name \"raw\"\n}"));
+    }
+
+    #[test]
+    fn brace_matching_skips_comments() {
+        let input = "config {\n    // { comment brace }\n    name \"demo\"\n    /* { block } */\n}\n";
+        let output = KdlFormatter::replace_block(input, "config", Some("name \"replaced\""));
+        assert!(output.contains("config {\n    name \"replaced\"\n}"));
     }
 
     #[test]

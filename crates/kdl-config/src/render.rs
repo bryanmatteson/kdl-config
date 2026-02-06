@@ -62,7 +62,7 @@ pub fn render_key_with_repr(key: &str, repr: Option<&str>) -> String {
     }
 }
 
-pub fn render_value(value: &Value) -> String {
+fn render_value_atom(value: &Value) -> String {
     match value {
         Value::Null => "#null".to_string(),
         Value::Bool(true) => "#true".to_string(),
@@ -78,11 +78,22 @@ pub fn render_value(value: &Value) -> String {
         }
         Value::String(s) => escape_string(s),
         Value::Path(p) => escape_string(&p.to_string_lossy()),
-        Value::Array(arr) => arr.iter().map(render_value).collect::<Vec<_>>().join(" "),
+        Value::Array(arr) => arr.iter().map(render_value_atom).collect::<Vec<_>>().join(" "),
     }
 }
 
-pub fn value_to_kdl(value: &Value) -> KdlValue {
+pub fn render_value(value: &Value) -> String {
+    render_value_atom(value)
+}
+
+fn render_value_tokens(value: &Value) -> Vec<String> {
+    match value {
+        Value::Array(values) => values.iter().flat_map(render_value_tokens).collect(),
+        _ => vec![render_value_atom(value)],
+    }
+}
+
+fn value_to_kdl_atom(value: &Value) -> KdlValue {
     match value {
         Value::Null => KdlValue::Null,
         Value::Bool(b) => KdlValue::Bool(*b),
@@ -90,7 +101,22 @@ pub fn value_to_kdl(value: &Value) -> KdlValue {
         Value::Float(f) => KdlValue::Float(*f),
         Value::String(s) => KdlValue::String(s.clone()),
         Value::Path(p) => KdlValue::String(p.to_string_lossy().to_string()),
-        Value::Array(_) => KdlValue::Null,
+        Value::Array(_) => KdlValue::String(render_value_atom(value)),
+    }
+}
+
+pub fn value_to_kdl(value: &Value) -> KdlValue {
+    match value {
+        Value::Array(values) if values.len() == 1 => value_to_kdl_atom(&values[0]),
+        Value::Array(_) => value_to_kdl_atom(value),
+        _ => value_to_kdl_atom(value),
+    }
+}
+
+pub fn value_to_kdl_values(value: &Value) -> Vec<KdlValue> {
+    match value {
+        Value::Array(values) => values.iter().flat_map(value_to_kdl_values).collect(),
+        _ => vec![value_to_kdl_atom(value)],
     }
 }
 
@@ -138,7 +164,11 @@ impl NodeRenderer {
     }
 
     pub fn positional(&mut self, index: usize, value: &Value) -> &mut Self {
-        self.positional.push((index, render_value(value)));
+        let mut offset = 0usize;
+        for rendered in render_value_tokens(value) {
+            self.positional.push((index + offset, rendered));
+            offset += 1;
+        }
         self
     }
 
@@ -164,8 +194,9 @@ impl NodeRenderer {
     pub fn keyed(&mut self, key: impl Into<String>, value: &Value) -> &mut Self {
         let key = key.into();
         let rendered_key = render_key(&key);
-        let rendered_value = render_value(value);
-        self.keyed.push((rendered_key, rendered_value));
+        for rendered_value in render_value_tokens(value) {
+            self.keyed.push((rendered_key.clone(), rendered_value));
+        }
         self
     }
 
@@ -277,7 +308,9 @@ impl crate::KdlRender for Node {
         write!(w, "{}{}", modifier, render_name)?;
 
         for arg in self.args() {
-            write!(w, " {}", render_value(arg))?;
+            for rendered in render_value_tokens(arg) {
+                write!(w, " {}", rendered)?;
+            }
         }
 
         let mut keyed: Vec<_> = self.attrs().iter().collect();
@@ -285,7 +318,9 @@ impl crate::KdlRender for Node {
         for (key, values) in keyed {
             let rendered_key = render_key_with_repr(key, self.attr_repr(key));
             for value in values {
-                write!(w, " {}={}", rendered_key, render_value(value))?;
+                for rendered in render_value_tokens(value) {
+                    write!(w, " {}={}", rendered_key, rendered)?;
+                }
             }
         }
 
@@ -339,20 +374,26 @@ pub fn render_node(node: &Node) -> String {
     let mut renderer = NodeRenderer::new(node.name.clone(), node.modifier);
     renderer.with_name_repr(node.name_repr().map(|repr| repr.to_string()));
 
+    let mut pos = 0usize;
     for (idx, value) in node.args().iter().enumerate() {
         let repr = node.arg_repr(idx);
         if let Some(repr) = repr {
-            renderer.positional_raw(idx, repr.to_string());
+            renderer.positional_raw(pos, repr.to_string());
+            pos += 1;
         } else {
-            renderer.positional(idx, value);
+            for rendered in render_value_tokens(value) {
+                renderer.positional_raw(pos, rendered);
+                pos += 1;
+            }
         }
     }
 
     for (key, values) in node.attrs() {
         let key_repr = node.attr_repr(key);
         for value in values {
-            let rendered = render_value(value);
-            renderer.keyed_raw_with_repr(key, key_repr, rendered);
+            for rendered in render_value_tokens(value) {
+                renderer.keyed_raw_with_repr(key, key_repr, rendered);
+            }
         }
     }
 

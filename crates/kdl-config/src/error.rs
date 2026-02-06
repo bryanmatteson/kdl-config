@@ -2,11 +2,44 @@ use std::fmt;
 
 use crate::context::Source;
 use crate::node_path::NodePath;
+pub use crate::types::NodeLocation;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NodeLocation {
-    pub line: usize,
-    pub column: usize,
+/// Find the closest match from `candidates` using Levenshtein distance.
+/// Returns `None` if no candidate is close enough (max distance 2, and
+/// distance must be strictly less than `input.len()` to avoid nonsense
+/// suggestions for very short inputs).
+pub fn suggest_similar<'a>(input: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    let mut best: Option<(&str, usize)> = None;
+    for &candidate in candidates {
+        let d = levenshtein(input, candidate);
+        if d == 0 {
+            continue;
+        }
+        if d > 2 || d >= input.len() {
+            continue;
+        }
+        if best.is_none() || d < best.unwrap().1 {
+            best = Some((candidate, d));
+        }
+    }
+    best.map(|(s, _)| s)
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (m, n) = (a.len(), b.len());
+    let mut prev = (0..=n).collect::<Vec<_>>();
+    let mut curr = vec![0; n + 1];
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[n]
 }
 
 #[derive(Debug, Clone)]
@@ -83,9 +116,11 @@ pub enum ErrorKind {
     },
     UnknownAttribute {
         key: String,
+        suggestion: Option<String>,
     },
     UnknownChild {
         name: String,
+        suggestion: Option<String>,
     },
     InvalidRegistryKey {
         reason: String,
@@ -147,8 +182,20 @@ impl fmt::Display for ErrorKind {
                     valid_choices.join(", ")
                 )
             }
-            ErrorKind::UnknownAttribute { key } => write!(f, "unknown attribute '{key}'"),
-            ErrorKind::UnknownChild { name } => write!(f, "unknown child '{name}'"),
+            ErrorKind::UnknownAttribute { key, suggestion } => {
+                write!(f, "unknown attribute '{key}'")?;
+                if let Some(s) = suggestion {
+                    write!(f, " — did you mean '{s}'?")?;
+                }
+                Ok(())
+            }
+            ErrorKind::UnknownChild { name, suggestion } => {
+                write!(f, "unknown child '{name}'")?;
+                if let Some(s) = suggestion {
+                    write!(f, " — did you mean '{s}'?")?;
+                }
+                Ok(())
+            }
             ErrorKind::InvalidRegistryKey { reason } => write!(f, "invalid registry key: {reason}"),
             ErrorKind::UnknownArgument { index } => {
                 write!(f, "unknown argument at position {index}")
@@ -212,8 +259,7 @@ impl KdlConfigError {
         }
         if self.location.is_none() {
             if let (Some(source), Some(offset)) = (source, offset) {
-                let (line, column) = source.location(offset);
-                self.location = Some(NodeLocation { line, column });
+                self.location = Some(source.location(offset));
             }
         }
         self
@@ -364,29 +410,45 @@ impl KdlConfigError {
         }
     }
 
-    pub fn unknown_attribute(struct_name: impl Into<String>, key: impl Into<String>) -> Self {
+    pub fn unknown_attribute(
+        struct_name: impl Into<String>,
+        key: impl Into<String>,
+        valid: &[&str],
+    ) -> Self {
         let key_string = key.into();
+        let suggestion = suggest_similar(&key_string, valid).map(String::from);
         Self {
             struct_name: struct_name.into(),
             field_name: None,
             kdl_key: Some(key_string.clone()),
             placement: Placement::AttrKeyed,
             required: false,
-            kind: ErrorKind::UnknownAttribute { key: key_string },
+            kind: ErrorKind::UnknownAttribute {
+                key: key_string,
+                suggestion,
+            },
             node_path: None,
             location: None,
         }
     }
 
-    pub fn unknown_child(struct_name: impl Into<String>, name: impl Into<String>) -> Self {
+    pub fn unknown_child(
+        struct_name: impl Into<String>,
+        name: impl Into<String>,
+        valid: &[&str],
+    ) -> Self {
         let name_string = name.into();
+        let suggestion = suggest_similar(&name_string, valid).map(String::from);
         Self {
             struct_name: struct_name.into(),
             field_name: None,
             kdl_key: Some(name_string.clone()),
             placement: Placement::Child,
             required: false,
-            kind: ErrorKind::UnknownChild { name: name_string },
+            kind: ErrorKind::UnknownChild {
+                name: name_string,
+                suggestion,
+            },
             node_path: None,
             location: None,
         }

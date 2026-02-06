@@ -10,7 +10,7 @@
 //! - In preserve-modifier modes, modifiers are retained on nodes that are kept,
 //!   but merged nodes are normalized to `Modifier::Inherit` to avoid mixed provenance.
 
-use crate::{KdlConfigError, KdlParse, Node, ParseConfig};
+use crate::{KdlConfigError, KdlDecode, Node, ParseConfig, parse_str_with_config, render_node};
 
 /// Controls how layers are merged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,12 +97,12 @@ fn apply_layer_child(
 }
 
 /// Parse a layered configuration into a typed struct, using default parse config.
-pub fn parse_layered<T: KdlParse>(layers: &[Node]) -> Result<T, KdlConfigError> {
+pub fn parse_layered<T: KdlDecode>(layers: &[Node]) -> Result<T, KdlConfigError> {
     parse_layered_with_config(layers, &ParseConfig::default())
 }
 
 /// Parse a layered configuration into a typed struct with custom parse config.
-pub fn parse_layered_with_config<T: KdlParse>(
+pub fn parse_layered_with_config<T: KdlDecode>(
     layers: &[Node],
     config: &ParseConfig,
 ) -> Result<T, KdlConfigError> {
@@ -113,7 +113,10 @@ pub fn parse_layered_with_config<T: KdlParse>(
             "KDL Document",
             "expected a single top-level node, found none",
         )),
-        1 => T::from_node(&children[0], config),
+        1 => {
+            let rendered = render_node(&children[0]);
+            parse_str_with_config(&rendered, config)
+        }
         count => Err(KdlConfigError::custom(
             "KDL Document",
             format!("expected a single top-level node, found {count}"),
@@ -123,7 +126,7 @@ pub fn parse_layered_with_config<T: KdlParse>(
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_layers_with, LayerMerge};
+    use super::{LayerMerge, merge_layers_with};
     use crate::{Node, Value};
 
     #[test]

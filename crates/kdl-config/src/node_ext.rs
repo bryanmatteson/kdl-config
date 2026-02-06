@@ -226,25 +226,17 @@ pub fn update_or_insert_positional(node: &mut KdlNode, pos: usize, value: KdlVal
         return;
     }
 
-    let mut insert_at = None;
     let mut last_positional = None;
     for (idx, entry) in node.entries().iter().enumerate() {
         if entry.name().is_none() {
             last_positional = Some(idx);
         }
     }
-    if let Some(last_idx) = last_positional {
-        insert_at = Some(last_idx + 1);
-    } else {
-        insert_at = Some(0);
-    }
-
-    let entry = KdlEntry::new(value);
-    if let Some(idx) = insert_at {
-        node.entries_mut().insert(idx, entry);
-    } else {
-        node.entries_mut().push(entry);
-    }
+    let insert_at = match last_positional {
+        Some(last_idx) => last_idx + 1,
+        None => 0,
+    };
+    node.entries_mut().insert(insert_at, KdlEntry::new(value));
 }
 
 pub fn remove_positional_entry(node: &mut KdlNode, pos: usize) {

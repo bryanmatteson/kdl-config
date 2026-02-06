@@ -11,7 +11,7 @@ mod value_gen;
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
-use attrs::{parse_struct_attrs, FieldInfo};
+use attrs::{parse_struct_attrs, field_kind, FieldInfo, FieldKind};
 use parse_gen::{generate_field_parser, generate_parse_impl, generate_struct_overrides};
 use render_gen::{generate_render_impl, render_body_with_accessor, FieldAccessor};
 
@@ -184,6 +184,19 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                         )
                     };
 
+                    let valid_attr_keys: Vec<&str> = field_infos
+                        .iter()
+                        .filter(|f| !f.is_skipped)
+                        .filter(|f| matches!(field_kind(f), FieldKind::ValueScalar | FieldKind::ValueVec))
+                        .map(|f| f.kdl_key.as_str())
+                        .collect();
+                    let valid_child_names: Vec<&str> = field_infos
+                        .iter()
+                        .filter(|f| !f.is_skipped)
+                        .filter(|f| matches!(field_kind(f), FieldKind::Node | FieldKind::NodeVec | FieldKind::Flatten | FieldKind::Collection))
+                        .map(|f| f.kdl_key.as_str())
+                        .collect();
+
                     let parse_impl = quote::quote! {
                         impl ::kdl_config::KdlDecode for #struct_name {
                             fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
@@ -198,7 +211,7 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                                     #(#skip_marks)*
 
                                     if struct_config.deny_unknown {
-                                        claims.check_unknowns(node, #struct_name_str)?;
+                                        claims.check_unknowns(node, #struct_name_str, &[#(#valid_attr_keys),*], &[#(#valid_child_names),*])?;
                                     }
 
                                     Ok(Self(#(#tuple_values),*))
@@ -251,7 +264,7 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                                     let struct_config = ::kdl_config::resolve_struct(ctx.config, struct_overrides);
                                     let claims = ::kdl_config::helpers::Claims::new();
                                     if struct_config.deny_unknown {
-                                        claims.check_unknowns(node, #struct_name_str)?;
+                                        claims.check_unknowns(node, #struct_name_str, &[], &[])?;
                                     }
                                     Ok(Self)
                                 })();

@@ -161,8 +161,8 @@ fn parse_struct_meta(
             }
         }
         Some("selector") => {
-            let value: Expr = meta.value()?.parse()?;
-            let selector = parse_selector_expr(&value)?;
+            let value: syn::Meta = meta.value()?.parse()?;
+            let selector = parse_selector_meta(&value)?;
             if result.selector.is_some() || result.selector_spec.is_some() {
                 return Err(syn::Error::new(
                     meta.path.span(),
@@ -460,8 +460,8 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
 
         // Selectors
         Some("selector") => {
-            let value: Expr = meta.value()?.parse()?;
-            let selector = parse_selector_expr(&value)?;
+            let value: syn::Meta = meta.value()?.parse()?;
+            let selector = parse_selector_meta(&value)?;
             if raw.selector.is_some() {
                 return Err(syn::Error::new_spanned(
                     value,
@@ -755,18 +755,184 @@ fn parse_schema_meta(
 }
 
 fn parse_select_spec(meta: &syn::meta::ParseNestedMeta) -> syn::Result<SelectSpec> {
-    use syn::parse::Parse;
-    use syn::{Expr, ExprAssign, ExprPath, Lit, Token};
+    use syn::parse::discouraged::Speculative;
 
-    let args = meta
-        .input
-        .parse_terminated(Expr::parse, Token![,])?
-        .into_iter()
-        .collect::<Vec<_>>();
+    // DEBUG TEMP
+    // return Err(syn::Error::new(
+    //     meta.path.span(),
+    //     format!("select tokens: {}", meta.input.to_string()),
+    // ));
+
+    let fork = meta.input.fork();
+    if let Ok(spec) = parse_select_spec_meta(&fork) {
+        meta.input.advance_to(&fork);
+        return Ok(spec);
+    }
+
+    let fork = meta.input.fork();
+    if let Ok(spec) = parse_select_spec_expr(&fork) {
+        meta.input.advance_to(&fork);
+        return Ok(spec);
+    }
+
+    let fork = meta.input.fork();
+    let err = parse_select_spec_meta(&fork).unwrap_err();
+    Err(err)
+}
+
+fn parse_select_spec_meta(input: syn::parse::ParseStream) -> syn::Result<SelectSpec> {
+    use syn::parse::Parse;
+    use syn::{parenthesized, parse::ParseStream, Meta, Token};
+
+    if input.peek(syn::Token![=]) {
+        let _eq: syn::Token![=] = input.parse()?;
+        let value: syn::Meta = input.parse()?;
+        let selector = parse_selector_meta(&value)?;
+        return Ok(SelectSpec {
+            selector,
+            opts: SelectOpts::default(),
+        });
+    }
+
+    fn parse_meta_list(input: ParseStream) -> syn::Result<Vec<Meta>> {
+        Ok(input
+            .parse_terminated(Meta::parse, Token![,])?
+            .into_iter()
+            .collect::<Vec<_>>())
+    }
+
+    let args = if input.peek(syn::token::Paren) {
+        let content;
+        parenthesized!(content in input);
+        parse_meta_list(&content)?
+    } else {
+        parse_meta_list(input)?
+    };
+
+    parse_select_spec_from_meta(args, input.span())
+}
+
+fn parse_select_spec_expr(input: syn::parse::ParseStream) -> syn::Result<SelectSpec> {
+    use syn::parse::Parse;
+    use syn::{parenthesized, parse::ParseStream, Expr, Token};
+
+    if input.peek(syn::Token![=]) {
+        let _eq: syn::Token![=] = input.parse()?;
+        let value: Expr = input.parse()?;
+        let selector = parse_selector_expr(&value)?;
+        return Ok(SelectSpec {
+            selector,
+            opts: SelectOpts::default(),
+        });
+    }
+
+    fn parse_expr_list(input: ParseStream) -> syn::Result<Vec<Expr>> {
+        Ok(input
+            .parse_terminated(Expr::parse, Token![,])?
+            .into_iter()
+            .collect::<Vec<_>>())
+    }
+
+    let args = if input.peek(syn::token::Paren) {
+        let content;
+        parenthesized!(content in input);
+        parse_expr_list(&content)?
+    } else {
+        parse_expr_list(input)?
+    };
+
+    parse_select_spec_from_exprs(args, input.span())
+}
+
+fn parse_select_spec_from_meta(
+    args: Vec<syn::Meta>,
+    span: proc_macro2::Span,
+) -> syn::Result<SelectSpec> {
+    use syn::Meta;
 
     if args.is_empty() {
         return Err(syn::Error::new(
-            meta.path.span(),
+            span,
+            "select(...) requires a selector",
+        ));
+    }
+
+    let mut selector: Option<SelectorAst> = None;
+    let mut opts = SelectOpts::default();
+
+    for meta in args {
+        match meta {
+            Meta::Path(path) if path.is_ident("consume") => {
+                if opts.consume.is_some() {
+                    return Err(syn::Error::new(
+                        path.span(),
+                        "consume/preserve already specified",
+                    ));
+                }
+                opts.consume = Some(true);
+            }
+            Meta::Path(path) if path.is_ident("preserve") => {
+                if opts.consume.is_some() {
+                    return Err(syn::Error::new(
+                        path.span(),
+                        "consume/preserve already specified",
+                    ));
+                }
+                opts.consume = Some(false);
+            }
+            Meta::Path(path) if path.is_ident("inject") => {
+                if opts.inject.is_some() {
+                    return Err(syn::Error::new(path.span(), "inject already specified"));
+                }
+                opts.inject = Some(InjectOpt::Implicit);
+            }
+            Meta::NameValue(nv) if nv.path.is_ident("inject") => {
+                if opts.inject.is_some() {
+                    return Err(syn::Error::new(nv.path.span(), "inject already specified"));
+                }
+                let field = match nv.value {
+                    syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) => s.value(),
+                    other => {
+                        return Err(syn::Error::new_spanned(
+                            other,
+                            "inject must be a string literal",
+                        ));
+                    }
+                };
+                opts.inject = Some(InjectOpt::Field(field));
+            }
+            other => {
+                let selector_ast = parse_selector_meta(&other)?;
+                if selector.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "multiple selectors in select(...)",
+                    ));
+                }
+                selector = Some(selector_ast);
+            }
+        }
+    }
+
+    let selector = selector.ok_or_else(|| {
+        syn::Error::new(span, "select(...) requires a selector")
+    })?;
+
+    Ok(SelectSpec { selector, opts })
+}
+
+fn parse_select_spec_from_exprs(
+    args: Vec<syn::Expr>,
+    span: proc_macro2::Span,
+) -> syn::Result<SelectSpec> {
+    use syn::{Expr, ExprAssign, ExprPath, Lit};
+
+    if args.is_empty() {
+        return Err(syn::Error::new(
+            span,
             "select(...) requires a selector",
         ));
     }
@@ -835,7 +1001,7 @@ fn parse_select_spec(meta: &syn::meta::ParseNestedMeta) -> syn::Result<SelectSpe
                         attrs: Vec::new(),
                         left,
                         right,
-                        eq_token: <Token![=]>::default(),
+                        eq_token: <syn::Token![=]>::default(),
                     });
                     let selector_ast = parse_selector_expr(&selector_expr)?;
                     if selector.is_some() {
@@ -861,10 +1027,198 @@ fn parse_select_spec(meta: &syn::meta::ParseNestedMeta) -> syn::Result<SelectSpe
     }
 
     let selector = selector.ok_or_else(|| {
-        syn::Error::new(meta.path.span(), "select(...) requires a selector")
+        syn::Error::new(span, "select(...) requires a selector")
     })?;
 
     Ok(SelectSpec { selector, opts })
+}
+
+fn parse_selector_meta(meta: &syn::Meta) -> syn::Result<SelectorAst> {
+    use syn::punctuated::Punctuated;
+    use syn::{Lit, Meta, MetaList, MetaNameValue, Token};
+
+    fn parse_selector_name_value(nv: &MetaNameValue) -> syn::Result<SelectorAst> {
+        let ident = nv.path.get_ident().map(|i| i.to_string());
+        match ident.as_deref() {
+            Some("arg") => match &nv.value {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: Lit::Int(lit),
+                    ..
+                }) => Ok(SelectorAst::Arg(lit.base10_parse()?)),
+                other => Err(syn::Error::new_spanned(
+                    other,
+                    "arg selector requires an integer literal",
+                )),
+            },
+            Some("attr") => match &nv.value {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: Lit::Str(lit),
+                    ..
+                }) => Ok(SelectorAst::Attr(lit.value())),
+                other => Err(syn::Error::new_spanned(
+                    other,
+                    "attr selector requires a string literal",
+                )),
+            },
+            Some("func") => match &nv.value {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: Lit::Str(lit),
+                    ..
+                }) => Ok(SelectorAst::Func(lit.value())),
+                other => Err(syn::Error::new_spanned(
+                    other,
+                    "func selector requires a string literal",
+                )),
+            },
+            Some("name") => Err(syn::Error::new_spanned(
+                &nv.path,
+                "name() selector does not take arguments",
+            )),
+            _ => Err(syn::Error::new_spanned(
+                &nv.path,
+                "unknown selector assignment",
+            )),
+        }
+    }
+
+    fn parse_selector_list(list: &MetaList) -> syn::Result<SelectorAst> {
+        let ident = list.path.get_ident().map(|i| i.to_string());
+        match ident.as_deref() {
+            Some("arg") => {
+                if let Ok(lit) = list.parse_args::<syn::LitInt>() {
+                    return Ok(SelectorAst::Arg(lit.base10_parse()?));
+                }
+                let nested: Punctuated<Meta, Token![,]> =
+                    list.parse_args_with(Punctuated::parse_terminated)?;
+                if nested.len() != 1 {
+                    return Err(syn::Error::new_spanned(
+                        list,
+                        "arg(...) expects a single integer",
+                    ));
+                }
+                match &nested[0] {
+                    Meta::NameValue(nv)
+                        if nv.path.is_ident("index") || nv.path.is_ident("arg") =>
+                    {
+                        match &nv.value {
+                            syn::Expr::Lit(syn::ExprLit {
+                                lit: Lit::Int(lit),
+                                ..
+                            }) => Ok(SelectorAst::Arg(lit.base10_parse()?)),
+                            other => Err(syn::Error::new_spanned(
+                                other,
+                                "arg(...) expects an integer literal",
+                            )),
+                        }
+                    }
+                    other => Err(syn::Error::new_spanned(
+                        other,
+                        "arg(...) expects a single integer",
+                    )),
+                }
+            }
+            Some("attr") => {
+                if let Ok(lit) = list.parse_args::<syn::LitStr>() {
+                    return Ok(SelectorAst::Attr(lit.value()));
+                }
+                let nested: Punctuated<Meta, Token![,]> =
+                    list.parse_args_with(Punctuated::parse_terminated)?;
+                if nested.len() != 1 {
+                    return Err(syn::Error::new_spanned(
+                        list,
+                        "attr(...) expects a single string",
+                    ));
+                }
+                match &nested[0] {
+                    Meta::NameValue(nv) if nv.path.is_ident("name") || nv.path.is_ident("key") => {
+                        match &nv.value {
+                            syn::Expr::Lit(syn::ExprLit {
+                                lit: Lit::Str(lit),
+                                ..
+                            }) => Ok(SelectorAst::Attr(lit.value())),
+                            other => Err(syn::Error::new_spanned(
+                                other,
+                                "attr(...) expects a string literal",
+                            )),
+                        }
+                    }
+                    other => Err(syn::Error::new_spanned(
+                        other,
+                        "attr(...) expects a single string",
+                    )),
+                }
+            }
+            Some("func") => {
+                if let Ok(lit) = list.parse_args::<syn::LitStr>() {
+                    return Ok(SelectorAst::Func(lit.value()));
+                }
+                let nested: Punctuated<Meta, Token![,]> =
+                    list.parse_args_with(Punctuated::parse_terminated)?;
+                if nested.len() != 1 {
+                    return Err(syn::Error::new_spanned(
+                        list,
+                        "func(...) expects a single string",
+                    ));
+                }
+                match &nested[0] {
+                    Meta::NameValue(nv) if nv.path.is_ident("path") || nv.path.is_ident("name") => {
+                        match &nv.value {
+                            syn::Expr::Lit(syn::ExprLit {
+                                lit: Lit::Str(lit),
+                                ..
+                            }) => Ok(SelectorAst::Func(lit.value())),
+                            other => Err(syn::Error::new_spanned(
+                                other,
+                                "func(...) expects a string literal",
+                            )),
+                        }
+                    }
+                    other => Err(syn::Error::new_spanned(
+                        other,
+                        "func(...) expects a single string",
+                    )),
+                }
+            }
+            Some("name") => {
+                if !list.tokens.is_empty() {
+                    return Err(syn::Error::new_spanned(
+                        list,
+                        "name() does not take arguments",
+                    ));
+                }
+                Ok(SelectorAst::Name)
+            }
+            Some("any") => {
+                let nested: Punctuated<Meta, Token![,]> =
+                    list.parse_args_with(Punctuated::parse_terminated)?;
+                if nested.is_empty() {
+                    return Err(syn::Error::new_spanned(
+                        list,
+                        "any(...) requires at least one selector",
+                    ));
+                }
+                let mut selectors = Vec::new();
+                for meta in nested {
+                    match parse_selector_meta(&meta)? {
+                        SelectorAst::Any(nested) => selectors.extend(nested),
+                        other => selectors.push(other),
+                    }
+                }
+                Ok(SelectorAst::Any(selectors))
+            }
+            _ => Err(syn::Error::new_spanned(list, "unknown selector function")),
+        }
+    }
+
+    match meta {
+        Meta::Path(path) if path.is_ident("name") => Ok(SelectorAst::Name),
+        Meta::NameValue(nv) => parse_selector_name_value(nv),
+        Meta::List(list) => parse_selector_list(list),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "invalid selector expression",
+        )),
+    }
 }
 
 fn parse_selector_expr(expr: &syn::Expr) -> syn::Result<SelectorAst> {

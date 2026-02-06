@@ -153,6 +153,47 @@ Notes:
 - `key_arg`/`key_attr`/`key_fn` are only valid when `map_node` is set.
 - `HashMap` renders deterministically (sorted by key); `Vec<(K, V)>` preserves insertion order.
 
+## Selectors
+
+Advanced key/discriminator selection uses `select(...)` with a selector and optional options.
+Selectors are supported on `registry`, `children_map`, and choice enums.
+
+Selector forms:
+- `arg(N)` uses positional arg `N`
+- `attr("name")` uses an attribute value
+- `name` uses the child node name
+- `func("path::to::fn")` calls a helper function
+- `any(...)` tries multiple selectors in order
+
+Options:
+- `consume` removes the selected token before parsing the child
+- `preserve` keeps the selected token (default)
+- `inject`/`inject="field"` injects the selected value into a field (where supported)
+
+Example (children map key from attribute, consuming it before parsing the child):
+
+```rust
+#[derive(KdlNode)]
+#[kdl(node = "config")]
+struct Config {
+    #[kdl(children_map, map_node = "category", select(attr("name"), consume))]
+    categories: HashMap<String, CategoryOverrides>,
+}
+```
+
+Example (enum discriminator from attr or arg):
+
+```rust
+#[derive(Kdl)]
+#[kdl(node = "choice", select = any(attr("type"), arg(0)))]
+enum Choice {
+    #[kdl(tag = "alpha")]
+    Alpha,
+    #[kdl(tag = "beta")]
+    Beta,
+}
+```
+
 ## Schema Generation
 
 Derive `KdlSchema` (or use `#[derive(Kdl)]` with `#[kdl(schema)]`) to register schema definitions.

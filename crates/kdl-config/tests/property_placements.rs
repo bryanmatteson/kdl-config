@@ -1,11 +1,12 @@
 use kdl_config_derive::KdlNode;
-use kdl_config::{parse_config, KdlParse, ParseConfig};
+use kdl_config::parse_str;
 use proptest::prelude::*;
 
-fn parse_named<T: KdlParse>(kdl: &str, name: &str) -> Result<T, kdl_config::KdlConfigError> {
-    let root = parse_config(kdl)?;
-    let node = root.child(name).expect("missing node");
-    T::from_node(node, &ParseConfig::default())
+fn parse_named<T: kdl_config::KdlDecode>(
+    kdl: &str,
+    _name: &str,
+) -> Result<T, kdl_config::KdlConfigError> {
+    parse_str(kdl)
 }
 
 #[derive(Debug, PartialEq, KdlNode)]

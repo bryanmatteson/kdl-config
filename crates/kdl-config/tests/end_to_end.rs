@@ -1,22 +1,21 @@
 use std::collections::HashMap;
 
-use kdl_config::{BoolMode, DefaultPlacement, KdlParse, ParseConfig, parse_config, parse_str};
+use kdl_config::{
+    BoolMode, DefaultPlacement, KdlConfigError, KdlDecode, ParseConfig, parse_config, parse_str,
+    parse_str_with_config,
+};
 use kdl_config::{Kdl, KdlNode, KdlValue};
 
-fn parse_named<T: KdlParse>(kdl: &str, name: &str) -> Result<T, kdl_config::KdlConfigError> {
-    let root = parse_config(kdl)?;
-    let node = root.child(name).expect("missing node");
-    T::from_node(node, &ParseConfig::default())
+fn parse_named<T: KdlDecode>(kdl: &str, _name: &str) -> Result<T, KdlConfigError> {
+    parse_str(kdl)
 }
 
-fn parse_named_with_config<T: KdlParse>(
+fn parse_named_with_config<T: KdlDecode>(
     kdl: &str,
-    name: &str,
+    _name: &str,
     config: &ParseConfig,
-) -> Result<T, kdl_config::KdlConfigError> {
-    let root = parse_config(kdl)?;
-    let node = root.child(name).expect("missing node");
-    T::from_node(node, config)
+) -> Result<T, KdlConfigError> {
+    parse_str_with_config(kdl, config)
 }
 
 #[derive(Debug, PartialEq, KdlNode)]
@@ -245,15 +244,12 @@ struct ConflictLast {
 #[test]
 fn conflict_policies_apply_in_deterministic_order() {
     let kdl = "config value=1 { value 2 }";
-    let root = parse_config(kdl).unwrap();
-    let node = root.child("config").unwrap();
+    assert!(parse_str::<ConflictError>(kdl).is_err());
 
-    assert!(ConflictError::from_node(node, &ParseConfig::default()).is_err());
-
-    let first = ConflictFirst::from_node(node, &ParseConfig::default()).unwrap();
+    let first = parse_str::<ConflictFirst>(kdl).unwrap();
     assert_eq!(first.value, 1);
 
-    let last = ConflictLast::from_node(node, &ParseConfig::default()).unwrap();
+    let last = parse_str::<ConflictLast>(kdl).unwrap();
     assert_eq!(last.value, 2);
 }
 
@@ -351,14 +347,18 @@ struct ChildrenMapByNameConfig {
 #[derive(Debug, PartialEq, KdlNode)]
 #[kdl(node = "config")]
 struct ChildrenMapKeyAttrConfig {
-    #[kdl(children_map, map_node = "category", key_attr = "name")]
+    #[kdl(children_map, map_node = "category", select(attr("name")))]
     categories: HashMap<String, CategoryOverrides>,
 }
 
 #[derive(Debug, PartialEq, KdlNode)]
 #[kdl(node = "config")]
 struct ChildrenMapKeyFnConfig {
-    #[kdl(children_map, map_node = "category", key_fn = "registry_key_from_attr")]
+    #[kdl(
+        children_map,
+        map_node = "category",
+        select(func("registry_key_from_attr"))
+    )]
     categories: HashMap<String, CategoryOverrides>,
 }
 
@@ -367,6 +367,20 @@ struct ChildrenMapKeyFnConfig {
 struct ChildrenMapVecConfig {
     #[kdl(children_map, map_node = "category", conflict = "append")]
     categories: Vec<(String, CategoryOverrides)>,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "category", deny_unknown)]
+struct CategoryOverridesStrict {
+    #[kdl(child)]
+    indexing: IndexingConfig,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ChildrenMapKeyAttrConsumeConfig {
+    #[kdl(children_map, map_node = "category", select(attr("name"), consume))]
+    categories: HashMap<String, CategoryOverridesStrict>,
 }
 
 #[test]
@@ -402,6 +416,20 @@ fn parses_children_map_keyed_by_child_name() {
     assert_eq!(
         parsed.categories.get("code").unwrap().indexing.chunk_size,
         2000
+    );
+}
+
+#[test]
+fn select_consume_allows_deny_unknown_children() {
+    let parsed = parse_named::<ChildrenMapKeyAttrConsumeConfig>(
+        "config {\n  category name=\"docs\" {\n    indexing chunk_size=3000\n  }\n}",
+        "config",
+    )
+    .unwrap();
+
+    assert_eq!(
+        parsed.categories.get("docs").unwrap().indexing.chunk_size,
+        3000
     );
 }
 
@@ -553,6 +581,46 @@ fn deny_unknown_rejects_extra_keys() {
 #[test]
 fn deny_unknown_rejects_extra_args() {
     assert!(parse_named::<DenyUnknownConfig>("config name=\"ok\" extra", "config").is_err());
+}
+
+#[test]
+fn deny_unknown_suggests_similar_attr() {
+    // Provide the required `name` correctly, add a typo'd extra attr
+    let err =
+        parse_named::<DenyUnknownConfig>("config name=\"ok\" naem=\"oops\"", "config").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("did you mean 'name'"),
+        "expected suggestion in: {msg}"
+    );
+}
+
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node = "config", deny_unknown)]
+struct DenyUnknownWithChild {
+    #[kdl(child)]
+    server: DenyUnknownChildNode,
+}
+
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node = "server")]
+struct DenyUnknownChildNode {
+    #[kdl(attr)]
+    host: String,
+}
+
+#[test]
+fn deny_unknown_suggests_similar_child() {
+    let err = parse_named::<DenyUnknownWithChild>(
+        "config {\n  server host=\"localhost\"\n  servr host=\"localhost\"\n}",
+        "config",
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("did you mean 'server'"),
+        "expected suggestion in: {msg}"
+    );
 }
 
 #[derive(Debug, PartialEq, Kdl)]
@@ -926,7 +994,7 @@ fn registry_duplicate_error_is_reported() {
 #[derive(Debug, PartialEq, KdlNode)]
 #[kdl(node = "config")]
 struct RegistryKeyAttrConfig {
-    #[kdl(registry, container = "item", key_attr = "id")]
+    #[kdl(registry, container = "item", select(attr("id"), consume))]
     items: HashMap<String, RegistryItem>,
 }
 
@@ -948,7 +1016,7 @@ fn registry_key_attr_is_removed_before_parsing() {
 #[derive(Debug, PartialEq, KdlNode)]
 #[kdl(node = "config")]
 struct RegistryKeyArgConfig {
-    #[kdl(registry, container = "item", key_arg = 1)]
+    #[kdl(registry, container = "item", select(arg(1), consume))]
     items: HashMap<String, RegistryItemPositional>,
 }
 
@@ -988,7 +1056,7 @@ struct RegistryItemKeyed {
 #[derive(Debug, PartialEq, KdlNode)]
 #[kdl(node = "config")]
 struct RegistryKeyFnConfig {
-    #[kdl(registry, container = "item", key_fn = "registry_key_from_attr")]
+    #[kdl(registry, container = "item", select(func("registry_key_from_attr")))]
     items: HashMap<String, RegistryItemKeyed>,
 }
 
@@ -1095,7 +1163,10 @@ test with-struct { key \"\" }\n";
     let root = parse_config(kdl).unwrap();
     let parsed = root
         .children_named("test")
-        .map(|node| MixedEnum::from_node(node, &ParseConfig::default()).unwrap())
+        .map(|node| {
+            let rendered = kdl_config::render_node(node);
+            parse_str::<MixedEnum>(&rendered).unwrap()
+        })
         .collect::<Vec<_>>();
 
     assert_eq!(
@@ -1150,7 +1221,7 @@ fn renders_enum_tuple_variants_and_non_string_tags() {
 }
 
 #[derive(Debug, PartialEq, Kdl)]
-#[kdl(node = "choice", selector = attr("type"), preserve)]
+#[kdl(node = "choice", select = attr("type"), preserve)]
 enum SelectAttrEnum {
     #[kdl(tag = "alpha")]
     Alpha {
@@ -1165,8 +1236,7 @@ enum SelectAttrEnum {
 
 #[test]
 fn parses_enum_with_select_attr_preserve() {
-    let parsed =
-        parse_named::<SelectAttrEnum>("choice type=\"alpha\" value=7", "choice").unwrap();
+    let parsed = parse_named::<SelectAttrEnum>("choice type=\"alpha\" value=7", "choice").unwrap();
     assert_eq!(
         parsed,
         SelectAttrEnum::Alpha {
@@ -1177,7 +1247,7 @@ fn parses_enum_with_select_attr_preserve() {
 }
 
 #[derive(Debug, PartialEq, Kdl)]
-#[kdl(node = "choice", selector = any(attr("type"), arg(0)))]
+#[kdl(node = "choice", select = any(attr("type"), arg(0)))]
 enum AnySelectorEnum {
     #[kdl(tag = "alpha")]
     Alpha,

@@ -3,20 +3,9 @@ use quote::quote;
 use syn::Ident;
 
 use crate::attrs::{
-    has_child_placement, has_value_placement, is_value_type, BoolMode, CollectionMode,
-    DefaultPlacement, FieldInfo, FlagStyle, RenderPlacement, StructAttrs,
+    BoolMode, CollectionMode, DefaultPlacement, FieldInfo, FieldKind, FlagStyle, RenderPlacement,
+    StructAttrs, field_kind,
 };
-
-#[derive(Debug, Clone, Copy)]
-enum FieldKind {
-    ValueScalar,
-    ValueVec,
-    Node,
-    NodeVec,
-    Flatten,
-    Collection,
-    Modifier,
-}
 
 pub(crate) struct FieldAccessor {
     pub(crate) value: TokenStream,
@@ -315,50 +304,13 @@ pub(crate) fn render_node_body_with_accessor(
     }
 }
 
-fn field_kind(field: &FieldInfo) -> FieldKind {
-    if field.is_modifier {
-        return FieldKind::Modifier;
-    }
-    if field.flatten {
-        return FieldKind::Flatten;
-    }
-    if field.collection.is_some() {
-        return FieldKind::Collection;
-    }
-
-    let has_value = has_value_placement(&field.placement);
-    let has_child = has_child_placement(&field.placement);
-
-    if field.is_vec || field.is_option_vec {
-        if has_value {
-            return FieldKind::ValueVec;
-        }
-        if has_child {
-            return FieldKind::NodeVec;
-        }
-        let inner = if field.is_option_vec {
-            field
-                .inner_type()
-                .and_then(crate::attrs::extract_inner_type)
-        } else {
-            field.inner_type()
-        };
-        let is_value = inner.map(is_value_type).unwrap_or(false) || field.is_scalar;
-        if is_value {
-            FieldKind::ValueVec
-        } else {
-            FieldKind::NodeVec
-        }
-    } else if has_value {
-        FieldKind::ValueScalar
-    } else if has_child {
-        FieldKind::Node
-    } else if is_value_type(&field.ty) || field.is_scalar {
-        FieldKind::ValueScalar
-    } else {
-        FieldKind::Node
-    }
-}
+/// Determine the render placement for a field.
+///
+/// NOTE: This intentionally differs from `update_gen::render_placement_for` in
+/// collection handling. Render dispatches on `CollectionMode` (Registry vs
+/// ChildrenMap → Children) to produce the correct output shape, while update
+/// always returns `Registry` because it patches collections via registry
+/// semantics regardless of the underlying mode.
 fn render_placement_for(
     struct_attrs: &StructAttrs,
     field: &FieldInfo,
@@ -1454,9 +1406,9 @@ fn render_child_fields_node(
                 }
             }
         } else {
-            let reference = &access.reference;
+            let value = &access.value;
             quote! {
-                let node = (#reference).render_node(#key);
+                let node = (#value).render_node(#key);
                 child_nodes.push((#key.to_string(), idx, node));
                 idx += 1;
             }

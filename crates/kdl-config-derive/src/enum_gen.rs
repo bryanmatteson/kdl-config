@@ -6,8 +6,8 @@ use syn::{
 };
 
 use crate::attrs::{
-    FieldInfo, SelectSpec, SelectorAst, StructAttrs, extract_inner_type, is_option_type,
-    parse_struct_attrs, serde_rename_from_attrs,
+    FieldInfo, FieldKind, SelectSpec, SelectorAst, StructAttrs, extract_inner_type, field_kind,
+    is_option_type, parse_struct_attrs, serde_rename_from_attrs,
 };
 use crate::parse_gen::{generate_field_parser, generate_skip_marks, generate_struct_overrides};
 use crate::render_gen::{FieldAccessor, render_body_with_accessor};
@@ -228,13 +228,16 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
     };
 
     let struct_overrides = generate_struct_overrides(&struct_attrs);
-    let discr_select = if let Some(spec) = struct_attrs.selector_spec.clone() {
+    let mut discr_select = if let Some(spec) = struct_attrs.selector_spec.clone() {
         spec
     } else {
         let selector = struct_attrs.selector.clone().unwrap_or(SelectorAst::Arg(0));
         let opts = struct_attrs.selector_opts.clone();
         SelectSpec { selector, opts }
     };
+    if discr_select.opts.consume.is_none() {
+        discr_select.opts.consume = struct_attrs.selector_opts.consume;
+    }
     let discr_extract = generate_discriminator_extract(&discr_select, &enum_name_str);
 
     let valid_variants_tokens: Vec<TokenStream> = variants
@@ -457,6 +460,19 @@ fn generate_parse_arm(
                 .collect();
             let field_names: Vec<&Ident> = fields.iter().map(|f| &f.ident).collect();
 
+            let valid_attr_keys: Vec<&str> = fields
+                .iter()
+                .filter(|f| !f.is_skipped)
+                .filter(|f| matches!(field_kind(f), FieldKind::ValueScalar | FieldKind::ValueVec))
+                .map(|f| f.kdl_key.as_str())
+                .collect();
+            let valid_child_names: Vec<&str> = fields
+                .iter()
+                .filter(|f| !f.is_skipped)
+                .filter(|f| matches!(field_kind(f), FieldKind::Node | FieldKind::NodeVec | FieldKind::Flatten | FieldKind::Collection))
+                .map(|f| f.kdl_key.as_str())
+                .collect();
+
             let skipped_fields: Vec<TokenStream> = skipped
                 .iter()
                 .map(|ident| quote! { #ident: ::std::default::Default::default(), })
@@ -471,7 +487,7 @@ fn generate_parse_arm(
                 #(#skip_marks)*
 
                 if struct_config.deny_unknown {
-                    claims.check_unknowns(&variant_node, #struct_name_str)?;
+                    claims.check_unknowns(&variant_node, #struct_name_str, &[#(#valid_attr_keys),*], &[#(#valid_child_names),*])?;
                 }
 
                 Ok(Self::#variant_ident { #(#field_names,)* #(#skipped_fields)* })

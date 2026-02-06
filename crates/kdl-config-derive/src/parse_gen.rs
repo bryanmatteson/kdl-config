@@ -4,21 +4,10 @@ use syn::Ident;
 
 use crate::attrs::{
     BoolMode, ChildrenMapKind, CollectionMode, ConflictPolicy, DefaultLiteral, DefaultPlacement,
-    DefaultSpec, FieldInfo, FlagStyle, InjectOpt, SelectorAst, StructAttrs,
-    extract_children_map_types, extract_hashmap_types, extract_inner_type, has_child_placement,
-    has_value_placement, is_bool_type, is_numeric_type, is_string_type, is_value_type,
+    DefaultSpec, FieldInfo, FieldKind, FlagStyle, InjectOpt, SelectorAst, StructAttrs,
+    extract_children_map_types, extract_hashmap_types, extract_inner_type, field_kind,
+    is_bool_type, is_numeric_type, is_string_type,
 };
-
-#[derive(Debug, Clone, Copy)]
-enum FieldKind {
-    ValueScalar,
-    ValueVec,
-    Node,
-    NodeVec,
-    Flatten,
-    Collection,
-    Modifier,
-}
 
 pub fn generate_parse_impl(
     struct_name: &Ident,
@@ -74,6 +63,19 @@ pub fn generate_parse_impl(
 
     let field_names: Vec<&Ident> = fields.iter().map(|f| &f.ident).collect();
 
+    let valid_attr_keys: Vec<&str> = fields
+        .iter()
+        .filter(|f| !f.is_skipped)
+        .filter(|f| matches!(field_kind(f), FieldKind::ValueScalar | FieldKind::ValueVec))
+        .map(|f| f.kdl_key.as_str())
+        .collect();
+    let valid_child_names: Vec<&str> = fields
+        .iter()
+        .filter(|f| !f.is_skipped)
+        .filter(|f| matches!(field_kind(f), FieldKind::Node | FieldKind::NodeVec | FieldKind::Flatten | FieldKind::Collection))
+        .map(|f| f.kdl_key.as_str())
+        .collect();
+
     quote! {
         impl ::kdl_config::KdlDecode for #struct_name {
             fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
@@ -88,7 +90,7 @@ pub fn generate_parse_impl(
                     #(#skip_marks)*
 
                     if struct_config.deny_unknown {
-                        claims.check_unknowns(node, #struct_name_str)?;
+                        claims.check_unknowns(node, #struct_name_str, &[#(#valid_attr_keys),*], &[#(#valid_child_names),*])?;
                     }
 
                     Ok(Self {
@@ -257,49 +259,6 @@ fn generate_field_overrides(field: &FieldInfo) -> TokenStream {
             flag_style: #flag_style,
             conflict: #conflict,
         }
-    }
-}
-
-fn field_kind(field: &FieldInfo) -> FieldKind {
-    if field.is_modifier {
-        return FieldKind::Modifier;
-    }
-    if field.flatten {
-        return FieldKind::Flatten;
-    }
-    if field.collection.is_some() {
-        return FieldKind::Collection;
-    }
-
-    let has_value = has_value_placement(&field.placement);
-    let has_child = has_child_placement(&field.placement);
-
-    if field.is_vec || field.is_option_vec {
-        if has_value {
-            return FieldKind::ValueVec;
-        }
-        if has_child {
-            return FieldKind::NodeVec;
-        }
-        let inner = if field.is_option_vec {
-            field.inner_type().and_then(extract_inner_type)
-        } else {
-            field.inner_type()
-        };
-        let is_value = inner.map(is_value_type).unwrap_or(false) || field.is_scalar;
-        if is_value {
-            FieldKind::ValueVec
-        } else {
-            FieldKind::NodeVec
-        }
-    } else if has_value {
-        FieldKind::ValueScalar
-    } else if has_child {
-        FieldKind::Node
-    } else if is_value_type(&field.ty) || field.is_scalar {
-        FieldKind::ValueScalar
-    } else {
-        FieldKind::Node
     }
 }
 
@@ -548,7 +507,7 @@ fn generate_value_scalar_parser(
 
     let is_optional = field.is_optional;
     let is_bool = field.is_bool;
-    let source_ident = format_ident!("__kdl_scalar_source_{}", field_ident);
+    let source_ident = format_ident!("__KdlScalarSource_{}", snake_to_upper_camel(field_ident));
     let candidates_ident = format_ident!("__kdl_scalar_candidates_{}", field_ident);
 
     let allow_attr_keyed =
@@ -614,6 +573,34 @@ fn generate_value_scalar_parser(
         } else {
             matches!(field_config.default_placement, ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Attr)
         };
+
+        if has_placement && !#allow_attr_keyed {
+            if node.attr_values(#kdl_key).is_some() {
+                return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                    #struct_name,
+                    #field_name,
+                    "keyed attributes are not allowed for this field",
+                ));
+            }
+        }
+
+        if #is_bool && has_placement && !#allow_flags {
+            if let Some((_flag_val, _flag_indices)) = ::kdl_config::helpers::scan_flag_with_style(
+                node,
+                #kdl_key,
+                field_config.flag_style,
+                custom_pos.clone(),
+                custom_neg.clone(),
+                #struct_name,
+                #field_name,
+            )? {
+                return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                    #struct_name,
+                    #field_name,
+                    "flag placement is not allowed for this field",
+                ));
+            }
+        }
 
         if #is_bool && field_config.bool_mode == ::kdl_config::BoolMode::ValueOnly && flags_allowed {
             if let Some((_flag_val, _flag_indices)) = ::kdl_config::helpers::scan_flag_with_style(
@@ -2768,4 +2755,23 @@ fn generate_literal_default_expr(lit: &DefaultLiteral, ty: &syn::Type) -> TokenS
             }
         }
     }
+}
+
+fn snake_to_upper_camel(ident: &Ident) -> String {
+    let raw = ident.to_string();
+    let name = raw.strip_prefix("r#").unwrap_or(&raw);
+    name.split('_')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let mut chars = s.chars();
+            match chars.next() {
+                Some(c) => {
+                    let mut out = c.to_uppercase().to_string();
+                    out.push_str(chars.as_str());
+                    out
+                }
+                None => String::new(),
+            }
+        })
+        .collect()
 }

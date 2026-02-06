@@ -2,21 +2,10 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::attrs::{
-    has_child_placement, has_value_placement, is_value_type, BoolMode, CollectionMode,
-    DefaultPlacement, FieldInfo, FlagStyle, RenderPlacement, SelectorAst, StructAttrs,
+    BoolMode, CollectionMode, DefaultPlacement, FieldInfo, FieldKind, FlagStyle, RenderPlacement,
+    SelectorAst, StructAttrs, field_kind,
 };
 use crate::render_gen::FieldAccessor;
-
-#[derive(Debug, Clone, Copy)]
-enum FieldKind {
-    ValueScalar,
-    ValueVec,
-    Node,
-    NodeVec,
-    Flatten,
-    Collection,
-    Modifier,
-}
 
 pub fn generate_update_impl(
     struct_name: &syn::Ident,
@@ -144,49 +133,12 @@ fn render_condition(field: &FieldInfo, accessor: &FieldAccessor) -> TokenStream 
     }
 }
 
-fn field_kind(field: &FieldInfo) -> FieldKind {
-    if field.is_modifier {
-        return FieldKind::Modifier;
-    }
-    if field.flatten {
-        return FieldKind::Flatten;
-    }
-    if field.collection.is_some() {
-        return FieldKind::Collection;
-    }
-
-    let has_value = has_value_placement(&field.placement);
-    let has_child = has_child_placement(&field.placement);
-
-    if field.is_vec || field.is_option_vec {
-        if has_value {
-            return FieldKind::ValueVec;
-        }
-        if has_child {
-            return FieldKind::NodeVec;
-        }
-        let inner = if field.is_option_vec {
-            field.inner_type().and_then(crate::attrs::extract_inner_type)
-        } else {
-            field.inner_type()
-        };
-        let is_value = inner.map(is_value_type).unwrap_or(false) || field.is_scalar;
-        if is_value {
-            FieldKind::ValueVec
-        } else {
-            FieldKind::NodeVec
-        }
-    } else if has_value {
-        FieldKind::ValueScalar
-    } else if has_child {
-        FieldKind::Node
-    } else if is_value_type(&field.ty) || field.is_scalar {
-        FieldKind::ValueScalar
-    } else {
-        FieldKind::Node
-    }
-}
-
+/// Determine the render placement for a field during update codegen.
+///
+/// NOTE: This intentionally differs from `render_gen::render_placement_for` in
+/// collection handling. Update always returns `Registry` for collections because
+/// it patches via registry semantics regardless of the underlying mode, while
+/// render dispatches on `CollectionMode` to produce the correct output shape.
 fn render_placement_for(
     struct_attrs: &StructAttrs,
     field: &FieldInfo,
@@ -620,6 +572,7 @@ fn generate_update_child(field: &FieldInfo, access: &FieldAccessor, struct_name:
             }
         }
     } else {
+        let value = &access.value;
         let reference = &access.reference;
         quote! {
             let mut target_child: ::core::option::Option<&mut ::kdl_config::KdlNode> = None;
@@ -632,7 +585,7 @@ fn generate_update_child(field: &FieldInfo, access: &FieldAccessor, struct_name:
                 }
             }
             if let Some(child) = target_child {
-                #reference.update(child, ctx)?;
+                #value.update(child, ctx)?;
             } else {
                 let rendered = ::kdl_config::to_kdl(#reference, #kdl_key);
                 let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: kdl::KdlError| {
@@ -1004,7 +957,7 @@ fn generate_collection_key_set(selector: &SelectorAst, target: TokenStream) -> T
         }
         SelectorAst::Name => {
             quote! {
-                #target.set_name(key.to_string());
+                (#target).set_name(key.to_string());
             }
         }
         SelectorAst::Func(_) => {

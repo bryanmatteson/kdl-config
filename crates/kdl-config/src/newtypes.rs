@@ -187,9 +187,13 @@ impl KdlSchema for Duration {
     fn schema_ref() -> SchemaRef {
         SchemaRef::Inline(KdlNodeSchema {
             values: vec![SchemaValue {
-                ty: SchemaType::Integer,
+                ty: SchemaType::AnyOf(vec![
+                    SchemaType::Integer,
+                    SchemaType::Float,
+                    SchemaType::String,
+                ]),
                 required: true,
-                description: Some("milliseconds".to_string()),
+                description: Some("milliseconds (integer/float) or duration string (e.g. \"5m\")".to_string()),
                 enum_values: None,
             }],
             ..Default::default()
@@ -490,7 +494,7 @@ impl From<PositiveCount> for Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{Duration, Weight};
+    use super::{Duration, PositiveCount, Weight};
     use crate::FromKdlValue;
     use crate::KdlValue;
 
@@ -542,5 +546,15 @@ mod tests {
         assert!(Weight::new(1.0).is_ok());
         assert!(Weight::new(-0.1).is_err());
         assert!(Weight::new(1.1).is_err());
+    }
+
+    #[test]
+    fn positive_count_from_kdl_value() {
+        let val = KdlValue::Integer(1);
+        let parsed = PositiveCount::from_value(&val).unwrap();
+        assert_eq!(parsed.get(), 1);
+
+        let val = KdlValue::Integer(0);
+        assert!(PositiveCount::from_value(&val).is_none());
     }
 }

@@ -182,6 +182,37 @@ Rendering:
 - With `map_node`: each entry renders as `<map_node> <key> { ... }`.
 - `HashMap` renders sorted by key; `Vec<(K, V)>` preserves order.
 
+## Selectors (`select(...)`)
+
+Selectors are an advanced way to extract a key or discriminator from a node. They are supported on
+`registry`, `children_map`, and choice enums.
+
+Selector forms:
+- `arg(N)`: use positional argument `N`
+- `attr("name")`: use the value of attribute `name`
+- `name`: use the node name
+- `func("path::to::fn")`: call a helper `fn(&Node) -> Result<K, KdlConfigError>`
+- `any(...)`: try selectors in order and use the first match
+
+Options:
+- `consume`: remove the selected token before parsing the child
+- `preserve`: keep the selected token (default)
+- `inject` / `inject="field"`: inject the selected value into a field (where supported)
+
+Examples:
+
+```
+#[kdl(registry, container = "item", select(attr("id"), consume))]
+```
+
+```
+#[kdl(children_map, map_node = "category", select(attr("name")))]
+```
+
+```
+#[kdl(node = "choice", select = any(attr("type"), arg(0)))]
+```
+
 ## Tuple and Unit Structs
 
 - Unit structs parse nodes with no args, attrs, or children.

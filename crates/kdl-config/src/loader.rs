@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::layer::{merge_layers, parse_layered_with_config};
-use crate::{parse_config, KdlConfigError, KdlParse, Node, ParseConfig};
+use crate::{parse_config, KdlConfigError, KdlDecode, Node, ParseConfig};
 
 /// Errors that can occur while loading config layers.
 #[derive(Debug)]
@@ -81,12 +81,12 @@ impl KdlLoader {
     }
 
     /// Load all layers and parse into a typed config with default parse config.
-    pub fn load<T: KdlParse>(&self) -> Result<T, LoadError> {
+    pub fn load<T: KdlDecode>(&self) -> Result<T, LoadError> {
         self.load_with_config(&ParseConfig::default())
     }
 
     /// Load all layers and parse into a typed config with custom parse config.
-    pub fn load_with_config<T: KdlParse>(&self, config: &ParseConfig) -> Result<T, LoadError> {
+    pub fn load_with_config<T: KdlDecode>(&self, config: &ParseConfig) -> Result<T, LoadError> {
         let layers = self.load_layers()?;
         Ok(parse_layered_with_config(&layers, config)?)
     }

@@ -1,5 +1,6 @@
-use crate::node_path::NodePath;
 use crate::config::ParseConfig;
+use crate::node_path::NodePath;
+use crate::types::NodeLocation;
 
 #[derive(Debug, Clone)]
 pub struct LineIndex {
@@ -21,14 +22,17 @@ impl LineIndex {
         }
     }
 
-    pub fn location(&self, offset: usize) -> (usize, usize) {
+    pub fn location(&self, offset: usize) -> NodeLocation {
         let offset = offset.min(self.len);
         let line_idx = match self.line_starts.binary_search(&offset) {
             Ok(idx) => idx,
             Err(idx) => idx.saturating_sub(1),
         };
         let line_start = self.line_starts.get(line_idx).copied().unwrap_or(0);
-        (line_idx + 1, offset.saturating_sub(line_start) + 1)
+        NodeLocation {
+            line: line_idx + 1,
+            column: offset.saturating_sub(line_start) + 1,
+        }
     }
 }
 
@@ -44,7 +48,7 @@ impl Source {
         Self { text, index }
     }
 
-    pub fn location(&self, offset: usize) -> (usize, usize) {
+    pub fn location(&self, offset: usize) -> NodeLocation {
         self.index.location(offset)
     }
 }

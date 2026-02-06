@@ -620,3 +620,62 @@ pub fn has_value_placement(placement: &FieldPlacement) -> bool {
 pub fn has_child_placement(placement: &FieldPlacement) -> bool {
     placement.child || placement.children || placement.children_any
 }
+
+/// Classification of a field for codegen dispatch.
+#[derive(Debug, Clone, Copy)]
+pub enum FieldKind {
+    ValueScalar,
+    ValueVec,
+    Node,
+    NodeVec,
+    Flatten,
+    Collection,
+    Modifier,
+}
+
+/// Classify a field into its codegen kind.
+pub fn field_kind(field: &FieldInfo) -> FieldKind {
+    if field.is_modifier {
+        return FieldKind::Modifier;
+    }
+    if field.flatten {
+        return FieldKind::Flatten;
+    }
+    if field.collection.is_some() {
+        return FieldKind::Collection;
+    }
+
+    let has_value = has_value_placement(&field.placement);
+    let has_child = has_child_placement(&field.placement);
+
+    if field.is_vec || field.is_option_vec {
+        if has_value {
+            return FieldKind::ValueVec;
+        }
+        if has_child {
+            return FieldKind::NodeVec;
+        }
+        let inner = if field.is_option_vec {
+            field
+                .inner_type()
+                .and_then(super::type_utils::extract_inner_type)
+        } else {
+            field.inner_type()
+        };
+        let is_value =
+            inner.map(super::type_utils::is_value_type).unwrap_or(false) || field.is_scalar;
+        if is_value {
+            FieldKind::ValueVec
+        } else {
+            FieldKind::NodeVec
+        }
+    } else if has_value {
+        FieldKind::ValueScalar
+    } else if has_child {
+        FieldKind::Node
+    } else if super::type_utils::is_value_type(&field.ty) || field.is_scalar {
+        FieldKind::ValueScalar
+    } else {
+        FieldKind::Node
+    }
+}

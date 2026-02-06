@@ -21,7 +21,7 @@ mod types;
 
 // Re-export main types for public API
 pub use container::StructAttrs;
-pub use field_info::{has_child_placement, has_value_placement, FieldInfo};
+pub use field_info::{has_child_placement, has_value_placement, field_kind, FieldInfo, FieldKind};
 pub use parse::{
     parse_field_attrs, parse_struct_attrs, serde_rename_all_from_attrs, serde_rename_from_attrs,
 };

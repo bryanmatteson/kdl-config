@@ -36,13 +36,19 @@ impl Claims {
         self.children[index] = true;
     }
 
-    pub fn check_unknowns(&self, node: &KdlNode, struct_name: &str) -> Result<(), KdlConfigError> {
+    pub fn check_unknowns(
+        &self,
+        node: &KdlNode,
+        struct_name: &str,
+        valid_attrs: &[&str],
+        valid_children: &[&str],
+    ) -> Result<(), KdlConfigError> {
         let mut arg_index = 0usize;
         for entry in node.entries() {
             if let Some(name) = entry.name() {
                 let key = name.value();
                 if !self.attrs.contains(key) {
-                    return Err(KdlConfigError::unknown_attribute(struct_name, key));
+                    return Err(KdlConfigError::unknown_attribute(struct_name, key, valid_attrs));
                 }
             } else {
                 if self.args.get(arg_index).copied().unwrap_or(false) {
@@ -55,7 +61,7 @@ impl Claims {
 
         for (index, _child) in node.iter_children().enumerate() {
             if !self.children.get(index).copied().unwrap_or(false) {
-                return Err(KdlConfigError::unknown_child(struct_name, _child.name().value()));
+                return Err(KdlConfigError::unknown_child(struct_name, _child.name().value(), valid_children));
             }
         }
 
@@ -92,13 +98,19 @@ impl UsedKeys {
         self.flags.insert(token.to_string());
     }
 
-    pub fn check_unknowns(&self, node: &KdlNode, struct_name: &str) -> Result<(), KdlConfigError> {
+    pub fn check_unknowns(
+        &self,
+        node: &KdlNode,
+        struct_name: &str,
+        valid_attrs: &[&str],
+        valid_children: &[&str],
+    ) -> Result<(), KdlConfigError> {
         let mut arg_index = 0usize;
         for entry in node.entries() {
             if let Some(name) = entry.name() {
                 let key = name.value();
                 if !self.attrs.contains(key) {
-                    return Err(KdlConfigError::unknown_attribute(struct_name, key));
+                    return Err(KdlConfigError::unknown_attribute(struct_name, key, valid_attrs));
                 }
             } else {
                 if !self.args.contains(&arg_index) {
@@ -117,7 +129,7 @@ impl UsedKeys {
         for child in node.iter_children() {
             let name = child.name().value();
             if !self.children.contains(name) {
-                return Err(KdlConfigError::unknown_child(struct_name, name));
+                return Err(KdlConfigError::unknown_child(struct_name, name, valid_children));
             }
         }
 
