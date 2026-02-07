@@ -1,5 +1,5 @@
 use crate::context::LineIndex;
-use crate::error::{ErrorKind, KdlConfigError, Placement};
+use crate::error::KdlConfigError;
 use crate::fragments::expand_fragments;
 use crate::node_ext::KdlNodeExt;
 use crate::render::is_valid_identifier;
@@ -7,19 +7,9 @@ use crate::types::{Node, Value};
 use kdl::{KdlDocument, KdlNode, KdlValue};
 
 pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
-    let mut document: KdlDocument =
-        contents
-            .parse()
-            .map_err(|e: kdl::KdlError| KdlConfigError {
-                struct_name: "KDL Document".into(),
-                field_name: None,
-                kdl_key: None,
-                placement: Placement::Unknown,
-                required: true,
-                kind: ErrorKind::Parse(e.to_string()),
-                node_path: None,
-                location: None,
-            })?;
+    let mut document: KdlDocument = contents
+        .parse()
+        .map_err(|e: kdl::KdlError| KdlConfigError::from_kdl_parse_error("KDL Document", e))?;
 
     let mut root = Node::new();
     let index = LineIndex::new(contents);
@@ -35,19 +25,9 @@ pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
 }
 
 pub fn parse_node(contents: &str) -> Result<Node, KdlConfigError> {
-    let mut document: KdlDocument =
-        contents
-            .parse()
-            .map_err(|e: kdl::KdlError| KdlConfigError {
-                struct_name: "KDL Node".into(),
-                field_name: None,
-                kdl_key: None,
-                placement: Placement::Unknown,
-                required: true,
-                kind: ErrorKind::Parse(e.to_string()),
-                node_path: None,
-                location: None,
-            })?;
+    let mut document: KdlDocument = contents
+        .parse()
+        .map_err(|e: kdl::KdlError| KdlConfigError::from_kdl_parse_error("KDL Node", e))?;
 
     expand_fragments(&mut document, Some(&LineIndex::new(contents)))?;
     let nodes = document.nodes();

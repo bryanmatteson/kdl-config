@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::layer::{merge_layers, parse_layered_with_config};
-use crate::{parse_config, KdlConfigError, KdlDecode, Node, ParseConfig};
+use crate::{KdlConfigError, KdlDecode, Node, ParseConfig, parse_config};
 
 /// Errors that can occur while loading config layers.
 #[derive(Debug)]
@@ -94,7 +94,7 @@ impl KdlLoader {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_kdl_file, KdlLoader};
+    use super::{KdlLoader, load_kdl_file};
     use std::fs;
     use std::path::PathBuf;
 

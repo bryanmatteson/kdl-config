@@ -137,17 +137,15 @@ impl KdlNodeExt for KdlNode {
     }
 
     fn children_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a KdlNode> + 'a {
-        self.iter_children().filter(move |child| child.base_name() == name)
+        self.iter_children()
+            .filter(move |child| child.base_name() == name)
     }
 
     fn without_attr(&self, key: &str) -> KdlNode {
         let mut clone = self.clone();
-        clone.entries_mut().retain(|entry| {
-            entry
-                .name()
-                .map(|name| name.value() != key)
-                .unwrap_or(true)
-        });
+        clone
+            .entries_mut()
+            .retain(|entry| entry.name().map(|name| name.value() != key).unwrap_or(true));
         clone
     }
 

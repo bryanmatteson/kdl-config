@@ -542,7 +542,11 @@ fn generate_update_modifier(field: &FieldInfo, access: &FieldAccessor) -> TokenS
     }
 }
 
-fn generate_update_child(field: &FieldInfo, access: &FieldAccessor, struct_name: &str) -> TokenStream {
+fn generate_update_child(
+    field: &FieldInfo,
+    access: &FieldAccessor,
+    struct_name: &str,
+) -> TokenStream {
     let kdl_key = &field.kdl_key;
 
     if field.is_optional {
@@ -599,7 +603,11 @@ fn generate_update_child(field: &FieldInfo, access: &FieldAccessor, struct_name:
     }
 }
 
-fn generate_update_children(field: &FieldInfo, access: &FieldAccessor, struct_name: &str) -> TokenStream {
+fn generate_update_children(
+    field: &FieldInfo,
+    access: &FieldAccessor,
+    struct_name: &str,
+) -> TokenStream {
     let kdl_key = &field.kdl_key;
     let children_any = field.placement.children_any;
     let filter_expr = if children_any {
@@ -687,7 +695,11 @@ fn generate_update_children(field: &FieldInfo, access: &FieldAccessor, struct_na
     }
 }
 
-fn generate_update_collection(field: &FieldInfo, access: &FieldAccessor, struct_name: &str) -> TokenStream {
+fn generate_update_collection(
+    field: &FieldInfo,
+    access: &FieldAccessor,
+    struct_name: &str,
+) -> TokenStream {
     let field_name = field.ident.to_string();
     let collection = field.collection.as_ref().expect("collection spec");
     let (container, map_node, all_children) = match &collection.mode {
@@ -718,7 +730,13 @@ fn generate_update_collection(field: &FieldInfo, access: &FieldAccessor, struct_
         quote! { true }
     };
 
-    let key_extract = generate_collection_key_extract(selector, struct_name, &field_name, key_ty.as_ref(), is_registry);
+    let key_extract = generate_collection_key_extract(
+        selector,
+        struct_name,
+        &field_name,
+        key_ty.as_ref(),
+        is_registry,
+    );
     let key_set_child = generate_collection_key_set(selector, quote! { child });
     let key_set_new = generate_collection_key_set(selector, quote! { &mut new_node });
 
@@ -924,7 +942,15 @@ fn generate_collection_key_extract(
         SelectorAst::Any(selectors) => {
             let attempts: Vec<TokenStream> = selectors
                 .iter()
-                .map(|sel| generate_collection_key_extract(sel, struct_name, field_name, key_ty, is_registry))
+                .map(|sel| {
+                    generate_collection_key_extract(
+                        sel,
+                        struct_name,
+                        field_name,
+                        key_ty,
+                        is_registry,
+                    )
+                })
                 .collect();
             quote! {
                 {

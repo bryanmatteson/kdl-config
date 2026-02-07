@@ -1,5 +1,5 @@
-use kdl_config_derive::KdlNode;
 use kdl_config::parse_str;
+use kdl_config_derive::KdlNode;
 use proptest::prelude::*;
 
 fn parse_named<T: kdl_config::KdlDecode>(
@@ -135,7 +135,10 @@ fn build_bool_kdl(explicit: Option<bool>, flag: Option<bool>) -> String {
     }
     if let Some(explicit_val) = explicit {
         header.push(' ');
-        header.push_str(&format!("enabled=#{}", if explicit_val { "true" } else { "false" }));
+        header.push_str(&format!(
+            "enabled=#{}",
+            if explicit_val { "true" } else { "false" }
+        ));
     }
     header
 }

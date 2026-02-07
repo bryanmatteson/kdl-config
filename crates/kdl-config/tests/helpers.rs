@@ -1,4 +1,4 @@
-use kdl_config::{KdlDocument, KdlNode, helpers, ErrorKind, FlagStyle, Placement};
+use kdl_config::{ErrorKind, FlagStyle, KdlDocument, KdlNode, Placement, helpers};
 
 fn node_with_flags(flags: &[&str]) -> KdlNode {
     let args = flags.join(" ");

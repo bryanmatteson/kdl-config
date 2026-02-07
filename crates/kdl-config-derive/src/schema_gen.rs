@@ -4,11 +4,11 @@ use syn::spanned::Spanned;
 use syn::{Attribute, DataEnum, DeriveInput, Expr, ExprLit, ExprUnary, Fields, Lit, Type, UnOp};
 
 use crate::attrs::{
-    extract_children_map_types, extract_hashmap_types, extract_inner_type,
-    extract_registry_vec_value, has_child_placement, has_value_placement, is_option_type,
-    is_value_type, parse_field_attrs, parse_struct_attrs, serde_rename_from_attrs, BoolMode,
-    CollectionMode, ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle, SchemaTypeOverride,
-    SelectorAst, StructAttrs,
+    BoolMode, CollectionMode, ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle,
+    SchemaTypeOverride, SelectorAst, StructAttrs, extract_children_map_types,
+    extract_hashmap_types, extract_inner_type, extract_registry_vec_value, has_child_placement,
+    has_value_placement, is_option_type, is_value_type, parse_field_attrs, parse_struct_attrs,
+    serde_rename_from_attrs,
 };
 
 pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -636,10 +636,14 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                             .as_ref()
                             .map(|spec| &spec.selector)
                             .unwrap_or(&default_selector);
-                        (node.clone(), Some(key_ty), selector_key_schema_expr(selector))
+                        (
+                            node.clone(),
+                            Some(key_ty),
+                            selector_key_schema_expr(selector),
+                        )
                     }
-                Some(CollectionMode::ChildrenMapAll) => ("*".to_string(), None, None),
-                _ => ("*".to_string(), None, None),
+                    Some(CollectionMode::ChildrenMapAll) => ("*".to_string(), None, None),
+                    _ => ("*".to_string(), None, None),
                 };
             child_inserts_target.push(children_map_child_insert(
                 val_ty,
@@ -809,10 +813,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         }
 
         if has_path {
-            let path = field
-                .path
-                .as_ref()
-                .expect("path field must have path");
+            let path = field.path.as_ref().expect("path field must have path");
             let leaf_parts = SchemaParts {
                 register_calls: Vec::new(),
                 prop_inserts: local_prop_inserts,
@@ -878,9 +879,7 @@ fn render_schema_parts(parts: &SchemaParts) -> TokenStream {
 
 fn wrap_path_insert(path: &[String], required: bool, leaf_parts: SchemaParts) -> TokenStream {
     let leaf_body = render_schema_parts(&leaf_parts);
-    let last = path
-        .last()
-        .expect("path must contain at least one segment");
+    let last = path.last().expect("path must contain at least one segment");
     let parents: Vec<&String> = path.iter().take(path.len().saturating_sub(1)).collect();
     let required_assign = if required {
         quote! { node_schema.required = Some(true); }

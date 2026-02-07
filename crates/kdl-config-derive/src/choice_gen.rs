@@ -3,7 +3,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Attribute, Data, DeriveInput, Fields};
 
-use crate::attrs::{serde_rename_all_from_attrs, serde_rename_from_attrs, RenameStrategy};
+use crate::attrs::{RenameStrategy, serde_rename_all_from_attrs, serde_rename_from_attrs};
 
 #[derive(Debug, Default)]
 struct ChoiceEnumAttrs {
@@ -40,7 +40,7 @@ pub fn generate_kdl_choice_impl(
             return Err(syn::Error::new_spanned(
                 input,
                 "KdlChoice only supports enums",
-            ))
+            ));
         }
     };
 
@@ -63,7 +63,7 @@ pub fn generate_kdl_choice_impl(
                 return Err(syn::Error::new_spanned(
                     variant,
                     "KdlChoice variants must be newtype (single unnamed field) or unit",
-                ))
+                ));
             }
         };
 

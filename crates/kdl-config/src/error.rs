@@ -3,6 +3,7 @@ use std::fmt;
 use crate::context::Source;
 use crate::node_path::NodePath;
 pub use crate::types::NodeLocation;
+use kdl::KdlError;
 
 /// Find the closest match from `candidates` using Levenshtein distance.
 /// Returns `None` if no candidate is close enough (max distance 2, and
@@ -248,6 +249,21 @@ impl fmt::Display for KdlConfigError {
 impl std::error::Error for KdlConfigError {}
 
 impl KdlConfigError {
+    pub fn from_kdl_parse_error(struct_name: impl Into<String>, error: KdlError) -> Self {
+        let location = primary_kdl_error_location(&error);
+        let message = primary_kdl_error_message(&error, location);
+        Self {
+            struct_name: struct_name.into(),
+            field_name: None,
+            kdl_key: None,
+            placement: Placement::Unknown,
+            required: true,
+            kind: ErrorKind::Parse(message),
+            node_path: None,
+            location,
+        }
+    }
+
     pub fn with_context(
         mut self,
         source: Option<&Source>,
@@ -581,4 +597,72 @@ impl KdlConfigError {
             location: None,
         }
     }
+}
+
+fn primary_kdl_error_location(error: &KdlError) -> Option<NodeLocation> {
+    let diagnostic = error.diagnostics.first()?;
+    let offset: usize = diagnostic.span.offset().into();
+    Some(Source::new(error.input.as_ref().clone()).location(offset))
+}
+
+fn primary_kdl_error_message(error: &KdlError, location: Option<NodeLocation>) -> String {
+    let Some(diagnostic) = error.diagnostics.first() else {
+        return error.to_string();
+    };
+
+    let mut details = Vec::new();
+    if let Some(message) = diagnostic.message.as_deref() {
+        let message = message.trim();
+        if !message.is_empty() {
+            details.push(message.to_string());
+        }
+    }
+    if let Some(label) = diagnostic.label.as_deref() {
+        let label = label.trim();
+        if !label.is_empty() {
+            details.push(format!("detail: {label}"));
+        }
+    }
+    if let Some(help) = diagnostic.help.as_deref() {
+        let help = help.trim();
+        if !help.is_empty() {
+            details.push(format!("help: {help}"));
+        }
+    }
+
+    if let Some(location) = location {
+        if let Some(snippet) = line_snippet_at(&error.input, location.line, location.column) {
+            details.push(format!("near: `{snippet}`"));
+        }
+    }
+
+    if details.is_empty() {
+        error.to_string()
+    } else {
+        details.join("; ")
+    }
+}
+
+fn line_snippet_at(input: &str, line: usize, column: usize) -> Option<String> {
+    let line = input.lines().nth(line.saturating_sub(1))?;
+    let chars: Vec<char> = line.chars().collect();
+    if chars.is_empty() {
+        return None;
+    }
+
+    let max_width = 80;
+    let focus = column.saturating_sub(1).min(chars.len());
+    let mut start = focus.saturating_sub(max_width / 2);
+    let end = (start + max_width).min(chars.len());
+    start = end.saturating_sub(max_width);
+
+    let mut snippet: String = chars[start..end].iter().collect();
+    if start > 0 {
+        snippet.insert_str(0, "...");
+    }
+    if end < chars.len() {
+        snippet.push_str("...");
+    }
+
+    Some(snippet.trim().to_string())
 }

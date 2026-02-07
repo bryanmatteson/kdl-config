@@ -2,8 +2,8 @@
 //!
 //! Uses manual `parse_nested_meta` for consistent parsing of all KDL attributes.
 
-use syn::{Attribute, Field};
 use syn::spanned::Spanned;
+use syn::{Attribute, Field};
 
 use super::container::StructAttrs;
 use super::field::{FieldAttrs, RawFieldAttrs};
@@ -791,7 +791,7 @@ fn parse_select_spec(meta: &syn::meta::ParseNestedMeta) -> syn::Result<SelectSpe
 
 fn parse_select_spec_meta(input: syn::parse::ParseStream) -> syn::Result<SelectSpec> {
     use syn::parse::Parse;
-    use syn::{parenthesized, parse::ParseStream, Meta, Token};
+    use syn::{Meta, Token, parenthesized, parse::ParseStream};
 
     if input.peek(syn::Token![=]) {
         let _eq: syn::Token![=] = input.parse()?;
@@ -823,7 +823,7 @@ fn parse_select_spec_meta(input: syn::parse::ParseStream) -> syn::Result<SelectS
 
 fn parse_select_spec_expr(input: syn::parse::ParseStream) -> syn::Result<SelectSpec> {
     use syn::parse::Parse;
-    use syn::{parenthesized, parse::ParseStream, Expr, Token};
+    use syn::{Expr, Token, parenthesized, parse::ParseStream};
 
     if input.peek(syn::Token![=]) {
         let _eq: syn::Token![=] = input.parse()?;
@@ -860,10 +860,7 @@ fn parse_select_spec_from_meta(
     use syn::Meta;
 
     if args.is_empty() {
-        return Err(syn::Error::new(
-            span,
-            "select(...) requires a selector",
-        ));
+        return Err(syn::Error::new(span, "select(...) requires a selector"));
     }
 
     let mut selector: Option<SelectorAst> = None;
@@ -926,9 +923,8 @@ fn parse_select_spec_from_meta(
         }
     }
 
-    let selector = selector.ok_or_else(|| {
-        syn::Error::new(span, "select(...) requires a selector")
-    })?;
+    let selector =
+        selector.ok_or_else(|| syn::Error::new(span, "select(...) requires a selector"))?;
 
     Ok(SelectSpec { selector, opts })
 }
@@ -940,10 +936,7 @@ fn parse_select_spec_from_exprs(
     use syn::{Expr, ExprAssign, ExprPath, Lit};
 
     if args.is_empty() {
-        return Err(syn::Error::new(
-            span,
-            "select(...) requires a selector",
-        ));
+        return Err(syn::Error::new(span, "select(...) requires a selector"));
     }
 
     let mut selector: Option<SelectorAst> = None;
@@ -979,23 +972,16 @@ fn parse_select_spec_from_exprs(
                 let (left_ident, left_span) = match left.as_ref() {
                     Expr::Path(p) => (p.path.get_ident().map(|i| i.to_string()), p.path.span()),
                     other => {
-                        return Err(syn::Error::new_spanned(
-                            other,
-                            "invalid select option",
-                        ));
+                        return Err(syn::Error::new_spanned(other, "invalid select option"));
                     }
                 };
                 if matches!(left_ident.as_deref(), Some("inject")) {
                     if opts.inject.is_some() {
-                        return Err(syn::Error::new(
-                            left_span,
-                            "inject already specified",
-                        ));
+                        return Err(syn::Error::new(left_span, "inject already specified"));
                     }
                     let field = match *right {
                         Expr::Lit(syn::ExprLit {
-                            lit: Lit::Str(s),
-                            ..
+                            lit: Lit::Str(s), ..
                         }) => s.value(),
                         other => {
                             return Err(syn::Error::new_spanned(
@@ -1035,9 +1021,8 @@ fn parse_select_spec_from_exprs(
         }
     }
 
-    let selector = selector.ok_or_else(|| {
-        syn::Error::new(span, "select(...) requires a selector")
-    })?;
+    let selector =
+        selector.ok_or_else(|| syn::Error::new(span, "select(...) requires a selector"))?;
 
     Ok(SelectSpec { selector, opts })
 }
@@ -1051,8 +1036,7 @@ fn parse_selector_meta(meta: &syn::Meta) -> syn::Result<SelectorAst> {
         match ident.as_deref() {
             Some("arg") => match &nv.value {
                 syn::Expr::Lit(syn::ExprLit {
-                    lit: Lit::Int(lit),
-                    ..
+                    lit: Lit::Int(lit), ..
                 }) => Ok(SelectorAst::Arg(lit.base10_parse()?)),
                 other => Err(syn::Error::new_spanned(
                     other,
@@ -1061,8 +1045,7 @@ fn parse_selector_meta(meta: &syn::Meta) -> syn::Result<SelectorAst> {
             },
             Some("attr") => match &nv.value {
                 syn::Expr::Lit(syn::ExprLit {
-                    lit: Lit::Str(lit),
-                    ..
+                    lit: Lit::Str(lit), ..
                 }) => Ok(SelectorAst::Attr(lit.value())),
                 other => Err(syn::Error::new_spanned(
                     other,
@@ -1071,8 +1054,7 @@ fn parse_selector_meta(meta: &syn::Meta) -> syn::Result<SelectorAst> {
             },
             Some("func") => match &nv.value {
                 syn::Expr::Lit(syn::ExprLit {
-                    lit: Lit::Str(lit),
-                    ..
+                    lit: Lit::Str(lit), ..
                 }) => Ok(SelectorAst::Func(lit.value())),
                 other => Err(syn::Error::new_spanned(
                     other,
@@ -1106,13 +1088,10 @@ fn parse_selector_meta(meta: &syn::Meta) -> syn::Result<SelectorAst> {
                     ));
                 }
                 match &nested[0] {
-                    Meta::NameValue(nv)
-                        if nv.path.is_ident("index") || nv.path.is_ident("arg") =>
-                    {
+                    Meta::NameValue(nv) if nv.path.is_ident("index") || nv.path.is_ident("arg") => {
                         match &nv.value {
                             syn::Expr::Lit(syn::ExprLit {
-                                lit: Lit::Int(lit),
-                                ..
+                                lit: Lit::Int(lit), ..
                             }) => Ok(SelectorAst::Arg(lit.base10_parse()?)),
                             other => Err(syn::Error::new_spanned(
                                 other,
@@ -1142,8 +1121,7 @@ fn parse_selector_meta(meta: &syn::Meta) -> syn::Result<SelectorAst> {
                     Meta::NameValue(nv) if nv.path.is_ident("name") || nv.path.is_ident("key") => {
                         match &nv.value {
                             syn::Expr::Lit(syn::ExprLit {
-                                lit: Lit::Str(lit),
-                                ..
+                                lit: Lit::Str(lit), ..
                             }) => Ok(SelectorAst::Attr(lit.value())),
                             other => Err(syn::Error::new_spanned(
                                 other,
@@ -1173,8 +1151,7 @@ fn parse_selector_meta(meta: &syn::Meta) -> syn::Result<SelectorAst> {
                     Meta::NameValue(nv) if nv.path.is_ident("path") || nv.path.is_ident("name") => {
                         match &nv.value {
                             syn::Expr::Lit(syn::ExprLit {
-                                lit: Lit::Str(lit),
-                                ..
+                                lit: Lit::Str(lit), ..
                             }) => Ok(SelectorAst::Func(lit.value())),
                             other => Err(syn::Error::new_spanned(
                                 other,
@@ -1247,27 +1224,27 @@ fn parse_selector_expr(expr: &syn::Expr) -> syn::Result<SelectorAst> {
             let ident = path.get_ident().map(|i| i.to_string());
             match ident.as_deref() {
                 Some("arg") => match right.as_ref() {
-                    Expr::Lit(ExprLit { lit: Lit::Int(lit), .. }) => {
-                        Ok(SelectorAst::Arg(lit.base10_parse()?))
-                    }
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Int(lit), ..
+                    }) => Ok(SelectorAst::Arg(lit.base10_parse()?)),
                     other => Err(syn::Error::new_spanned(
                         other,
                         "arg selector requires an integer literal",
                     )),
                 },
                 Some("attr") => match right.as_ref() {
-                    Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) => {
-                        Ok(SelectorAst::Attr(lit.value()))
-                    }
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Str(lit), ..
+                    }) => Ok(SelectorAst::Attr(lit.value())),
                     other => Err(syn::Error::new_spanned(
                         other,
                         "attr selector requires a string literal",
                     )),
                 },
                 Some("func") => match right.as_ref() {
-                    Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) => {
-                        Ok(SelectorAst::Func(lit.value()))
-                    }
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Str(lit), ..
+                    }) => Ok(SelectorAst::Func(lit.value())),
                     other => Err(syn::Error::new_spanned(
                         other,
                         "func selector requires a string literal",
@@ -1277,10 +1254,7 @@ fn parse_selector_expr(expr: &syn::Expr) -> syn::Result<SelectorAst> {
                     left,
                     "name() selector does not take arguments",
                 )),
-                _ => Err(syn::Error::new_spanned(
-                    left,
-                    "unknown selector assignment",
-                )),
+                _ => Err(syn::Error::new_spanned(left, "unknown selector assignment")),
             }
         }
         Expr::Call(ExprCall { func, args, .. }) => {
@@ -1304,7 +1278,9 @@ fn parse_selector_expr(expr: &syn::Expr) -> syn::Result<SelectorAst> {
                     }
                     let arg = args.first().unwrap();
                     let idx = match arg {
-                        Expr::Lit(ExprLit { lit: Lit::Int(i), .. }) => i.base10_parse::<u32>()?,
+                        Expr::Lit(ExprLit {
+                            lit: Lit::Int(i), ..
+                        }) => i.base10_parse::<u32>()?,
                         other => {
                             return Err(syn::Error::new_spanned(
                                 other,
@@ -1323,7 +1299,9 @@ fn parse_selector_expr(expr: &syn::Expr) -> syn::Result<SelectorAst> {
                     }
                     let arg = args.first().unwrap();
                     let name = match arg {
-                        Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) => s.value(),
+                        Expr::Lit(ExprLit {
+                            lit: Lit::Str(s), ..
+                        }) => s.value(),
                         other => {
                             return Err(syn::Error::new_spanned(
                                 other,
@@ -1351,7 +1329,9 @@ fn parse_selector_expr(expr: &syn::Expr) -> syn::Result<SelectorAst> {
                     }
                     let arg = args.first().unwrap();
                     let name = match arg {
-                        Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) => s.value(),
+                        Expr::Lit(ExprLit {
+                            lit: Lit::Str(s), ..
+                        }) => s.value(),
                         other => {
                             return Err(syn::Error::new_spanned(
                                 other,
@@ -1377,10 +1357,7 @@ fn parse_selector_expr(expr: &syn::Expr) -> syn::Result<SelectorAst> {
                     }
                     Ok(SelectorAst::Any(selectors))
                 }
-                _ => Err(syn::Error::new_spanned(
-                    path,
-                    "unknown selector function",
-                )),
+                _ => Err(syn::Error::new_spanned(path, "unknown selector function")),
             }
         }
         Expr::Path(ExprPath { path, .. }) if path.is_ident("name") => Ok(SelectorAst::Name),

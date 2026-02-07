@@ -1,6 +1,8 @@
 //! Container-level (struct/enum) attribute definitions.
 
-use super::types::{BoolMode, ConflictPolicy, DefaultPlacement, FlagStyle, RenameStrategy, SelectorAst};
+use super::types::{
+    BoolMode, ConflictPolicy, DefaultPlacement, FlagStyle, RenameStrategy, SelectorAst,
+};
 
 /// Schema overrides for struct-level attributes.
 ///

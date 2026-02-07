@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use kdl::KdlValue;
 
 use crate::{
-    convert_value_checked, DecodeContext, FromKdlValue, KdlConfigError, KdlDecode, KdlNode,
-    KdlNodeExt, Placement,
+    DecodeContext, FromKdlValue, KdlConfigError, KdlDecode, KdlNode, KdlNodeExt, Placement,
+    convert_value_checked,
 };
 
 fn decode_value_node<T: FromKdlValue>(

@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
+use crate::KdlDecode;
 use crate::config::{ConflictPolicy, FlagStyle};
 use crate::error::{ErrorKind, KdlConfigError, Placement};
 use crate::node_ext::KdlNodeExt;
 use crate::node_path::NodePath;
-use crate::KdlDecode;
 use kdl::{KdlNode, KdlValue};
 
 #[derive(Debug, Clone)]
@@ -97,7 +97,11 @@ impl Claims {
             if let Some(name) = entry.name() {
                 let key = name.value();
                 if !self.attrs.contains(key) {
-                    return Err(KdlConfigError::unknown_attribute(struct_name, key, valid_attrs));
+                    return Err(KdlConfigError::unknown_attribute(
+                        struct_name,
+                        key,
+                        valid_attrs,
+                    ));
                 }
             } else {
                 if self.args.get(arg_index).copied().unwrap_or(false) {
@@ -110,7 +114,11 @@ impl Claims {
 
         for (index, _child) in node.iter_children().enumerate() {
             if !self.children.get(index).copied().unwrap_or(false) {
-                return Err(KdlConfigError::unknown_child(struct_name, _child.name().value(), valid_children));
+                return Err(KdlConfigError::unknown_child(
+                    struct_name,
+                    _child.name().value(),
+                    valid_children,
+                ));
             }
         }
 
@@ -159,7 +167,11 @@ impl UsedKeys {
             if let Some(name) = entry.name() {
                 let key = name.value();
                 if !self.attrs.contains(key) {
-                    return Err(KdlConfigError::unknown_attribute(struct_name, key, valid_attrs));
+                    return Err(KdlConfigError::unknown_attribute(
+                        struct_name,
+                        key,
+                        valid_attrs,
+                    ));
                 }
             } else {
                 if !self.args.contains(&arg_index) {
@@ -178,7 +190,11 @@ impl UsedKeys {
         for child in node.iter_children() {
             let name = child.name().value();
             if !self.children.contains(name) {
-                return Err(KdlConfigError::unknown_child(struct_name, name, valid_children));
+                return Err(KdlConfigError::unknown_child(
+                    struct_name,
+                    name,
+                    valid_children,
+                ));
             }
         }
 
@@ -498,7 +514,10 @@ pub fn find_flag_with_style_marked(
     }
 }
 
-pub fn parse_flatten<T: KdlDecode>(node: &KdlNode, ctx: &crate::DecodeContext) -> Result<T, KdlConfigError> {
+pub fn parse_flatten<T: KdlDecode>(
+    node: &KdlNode,
+    ctx: &crate::DecodeContext,
+) -> Result<T, KdlConfigError> {
     match T::decode(node, ctx) {
         Ok(val) => Ok(val),
         Err(err) => match &err.kind {

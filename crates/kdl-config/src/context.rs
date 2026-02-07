@@ -1,7 +1,7 @@
+use crate::KdlNode;
 use crate::config::ParseConfig;
 use crate::node_ext::KdlNodeExt;
 use crate::node_path::NodePath;
-use crate::KdlNode;
 use crate::types::NodeLocation;
 
 #[derive(Debug, Clone)]

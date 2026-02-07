@@ -78,7 +78,11 @@ fn render_value_atom(value: &Value) -> String {
         }
         Value::String(s) => escape_string(s),
         Value::Path(p) => escape_string(&p.to_string_lossy()),
-        Value::Array(arr) => arr.iter().map(render_value_atom).collect::<Vec<_>>().join(" "),
+        Value::Array(arr) => arr
+            .iter()
+            .map(render_value_atom)
+            .collect::<Vec<_>>()
+            .join(" "),
     }
 }
 

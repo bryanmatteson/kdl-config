@@ -210,10 +210,7 @@ impl FieldPath {
         }
         let segments: Vec<String> = path.split('.').map(|s| s.to_string()).collect();
         if segments.iter().any(|s| s.is_empty()) {
-            return Err(syn::Error::new(
-                span,
-                "path segments must be non-empty",
-            ));
+            return Err(syn::Error::new(span, "path segments must be non-empty"));
         }
         Ok(Self {
             absolute,

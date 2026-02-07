@@ -3,7 +3,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Data, DataEnum, DeriveInput, Fields};
 
-use crate::attrs::{serde_rename_all_from_attrs, serde_rename_from_attrs, RenameStrategy};
+use crate::attrs::{RenameStrategy, serde_rename_all_from_attrs, serde_rename_from_attrs};
 
 #[derive(Debug, Default)]
 struct EnumAttrs {

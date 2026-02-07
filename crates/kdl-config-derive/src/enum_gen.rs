@@ -258,7 +258,13 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
     let update_arms: Vec<TokenStream> = variants
         .iter()
         .map(|variant| {
-            generate_update_arm(enum_name, &enum_name_str, variant, &struct_attrs, &discr_select)
+            generate_update_arm(
+                enum_name,
+                &enum_name_str,
+                variant,
+                &struct_attrs,
+                &discr_select,
+            )
         })
         .collect();
 
@@ -471,7 +477,15 @@ fn generate_parse_arm(
             let valid_child_names: Vec<&str> = fields
                 .iter()
                 .filter(|f| !f.is_skipped)
-                .filter(|f| matches!(field_kind(f), FieldKind::Node | FieldKind::NodeVec | FieldKind::Flatten | FieldKind::Collection))
+                .filter(|f| {
+                    matches!(
+                        field_kind(f),
+                        FieldKind::Node
+                            | FieldKind::NodeVec
+                            | FieldKind::Flatten
+                            | FieldKind::Collection
+                    )
+                })
                 .map(|f| f.kdl_key.as_str())
                 .collect();
 
@@ -648,7 +662,12 @@ fn generate_update_arm(
                 .iter()
                 .filter(|field| !field.is_skipped)
                 .map(|field| {
-                    update_gen::generate_field_update(field, enum_name, struct_attrs, FieldAccessor::binding)
+                    update_gen::generate_field_update(
+                        field,
+                        enum_name,
+                        struct_attrs,
+                        FieldAccessor::binding,
+                    )
                 })
                 .collect();
             quote! {

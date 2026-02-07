@@ -1,6 +1,4 @@
-use crate::{
-    DecodeContext, KdlDecode, KdlNodeExt, KdlUpdate, ParseConfig, Source, UpdateContext,
-};
+use crate::{DecodeContext, KdlDecode, KdlNodeExt, KdlUpdate, ParseConfig, Source, UpdateContext};
 use crate::{KdlConfigError, KdlDocument};
 
 #[derive(Debug, Clone)]
@@ -90,7 +88,7 @@ pub fn parse_str_roundtrip_with_config<T: KdlDecode + KdlUpdate>(
 ) -> Result<RoundTripAst<T>, KdlConfigError> {
     let doc: KdlDocument = contents
         .parse()
-        .map_err(|e: kdl::KdlError| KdlConfigError::custom("KDL Document", e.to_string()))?;
+        .map_err(|e: kdl::KdlError| KdlConfigError::from_kdl_parse_error("KDL Document", e))?;
     let source = Source::new(contents.to_string());
     let mut expanded = doc.clone();
     crate::fragments::expand_fragments(&mut expanded, Some(&source))?;
@@ -137,6 +135,9 @@ fn find_root_index(doc: &KdlDocument) -> Result<usize, KdlConfigError> {
         root_index = Some(idx);
     }
     root_index.ok_or_else(|| {
-        KdlConfigError::custom("KDL Document", "expected a single top-level node, found none")
+        KdlConfigError::custom(
+            "KDL Document",
+            "expected a single top-level node, found none",
+        )
     })
 }

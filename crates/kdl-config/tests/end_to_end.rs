@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
+use kdl_config::newtypes::ScalarString;
 use kdl_config::{
     BoolMode, DefaultPlacement, KdlConfigError, KdlDecode, ParseConfig, parse_config, parse_str,
     parse_str_with_config,
 };
-use kdl_config::newtypes::ScalarString;
 use kdl_config::{Kdl, KdlNode, KdlValue};
 
 fn parse_named<T: KdlDecode>(kdl: &str, _name: &str) -> Result<T, KdlConfigError> {

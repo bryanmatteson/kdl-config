@@ -9,11 +9,11 @@ mod update_gen;
 mod value_gen;
 
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
-use attrs::{parse_struct_attrs, field_kind, FieldInfo, FieldKind};
+use attrs::{FieldInfo, FieldKind, field_kind, parse_struct_attrs};
 use parse_gen::{generate_field_parser, generate_parse_impl, generate_struct_overrides};
-use render_gen::{generate_render_impl, render_body_with_accessor, FieldAccessor};
+use render_gen::{FieldAccessor, generate_render_impl, render_body_with_accessor};
 
 #[proc_macro_derive(KdlNode, attributes(kdl))]
 pub fn derive_kdl_node(input: TokenStream) -> TokenStream {
@@ -187,13 +187,23 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     let valid_attr_keys: Vec<&str> = field_infos
                         .iter()
                         .filter(|f| !f.is_skipped)
-                        .filter(|f| matches!(field_kind(f), FieldKind::ValueScalar | FieldKind::ValueVec))
+                        .filter(|f| {
+                            matches!(field_kind(f), FieldKind::ValueScalar | FieldKind::ValueVec)
+                        })
                         .map(|f| f.kdl_key.as_str())
                         .collect();
                     let valid_child_names: Vec<&str> = field_infos
                         .iter()
                         .filter(|f| !f.is_skipped)
-                        .filter(|f| matches!(field_kind(f), FieldKind::Node | FieldKind::NodeVec | FieldKind::Flatten | FieldKind::Collection))
+                        .filter(|f| {
+                            matches!(
+                                field_kind(f),
+                                FieldKind::Node
+                                    | FieldKind::NodeVec
+                                    | FieldKind::Flatten
+                                    | FieldKind::Collection
+                            )
+                        })
                         .map(|f| f.kdl_key.as_str())
                         .collect();
 

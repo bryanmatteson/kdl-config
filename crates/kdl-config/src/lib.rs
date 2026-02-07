@@ -104,7 +104,7 @@ pub fn parse_str_with_config<T: KdlDecode>(
 ) -> Result<T, KdlConfigError> {
     let mut doc: KdlDocument = contents
         .parse()
-        .map_err(|e: kdl::KdlError| KdlConfigError::custom("KDL Document", e.to_string()))?;
+        .map_err(|e: kdl::KdlError| KdlConfigError::from_kdl_parse_error("KDL Document", e))?;
     let source = Source::new(contents.to_string());
     crate::fragments::expand_fragments(&mut doc, Some(&source))?;
     let ctx = DecodeContext::new(config, Some(&source));

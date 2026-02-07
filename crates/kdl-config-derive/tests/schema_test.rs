@@ -206,10 +206,7 @@ fn schema_path_inserts_nested_nodes() {
         .expect("expected http node");
 
     assert!(http_node.props.contains_key("port"));
-    assert_eq!(
-        http_node.props.get("port").unwrap().ty,
-        SchemaType::Integer
-    );
+    assert_eq!(http_node.props.get("port").unwrap().ty, SchemaType::Integer);
 }
 
 #[test]

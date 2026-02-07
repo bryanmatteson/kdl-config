@@ -198,11 +198,7 @@ impl KdlFormatter {
             pos += 1;
         }
 
-        if depth == 0 {
-            Some(pos)
-        } else {
-            None
-        }
+        if depth == 0 { Some(pos) } else { None }
     }
 }
 
@@ -240,7 +236,8 @@ mod tests {
 
     #[test]
     fn brace_matching_skips_comments() {
-        let input = "config {\n    // { comment brace }\n    name \"demo\"\n    /* { block } */\n}\n";
+        let input =
+            "config {\n    // { comment brace }\n    name \"demo\"\n    /* { block } */\n}\n";
         let output = KdlFormatter::replace_block(input, "config", Some("name \"replaced\""));
         assert!(output.contains("config {\n    name \"replaced\"\n}"));
     }

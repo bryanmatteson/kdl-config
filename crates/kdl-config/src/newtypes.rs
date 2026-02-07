@@ -125,12 +125,7 @@ impl<T: FromKdlValue> KdlDecode for Scalar<T> {
             })
             .or_else(|| node.iter_children().next().and_then(|child| child.arg(0)))
             .ok_or_else(|| {
-                KdlConfigError::missing_required(
-                    struct_name,
-                    "value",
-                    "value",
-                    Placement::Value,
-                )
+                KdlConfigError::missing_required(struct_name, "value", "value", Placement::Value)
             })?;
 
         let parsed =
@@ -348,7 +343,9 @@ impl KdlSchema for Duration {
                     SchemaType::String,
                 ]),
                 required: true,
-                description: Some("milliseconds (integer/float) or duration string (e.g. \"5m\")".to_string()),
+                description: Some(
+                    "milliseconds (integer/float) or duration string (e.g. \"5m\")".to_string(),
+                ),
                 enum_values: None,
             }],
             ..Default::default()
@@ -480,13 +477,7 @@ impl KdlDecode for Weight {
             .arg(0)
             .or_else(|| node.iter_children().next().and_then(|child| child.arg(0)))
             .unwrap_or(&null_value);
-        convert_value_checked::<Weight>(
-            value,
-            "Weight",
-            "weight",
-            "weight",
-            Placement::Value,
-        )
+        convert_value_checked::<Weight>(value, "Weight", "weight", "weight", Placement::Value)
     }
 }
 
