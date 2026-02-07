@@ -200,6 +200,95 @@ config {
 }
 
 #[test]
+fn expands_nested_use_from_fragment_body() {
+    let doc = r#"
+(source)fragment "b" {
+  include "src/**"
+}
+
+(source)fragment "a" {
+  use "b"
+}
+
+source "app" local "." {
+  use "a"
+}
+"#;
+
+    let root = parse_config(doc).expect("parse");
+    let source = root.child("source").expect("source node");
+    assert!(source.children_named("include").next().is_some());
+    assert!(source.children_named("use").next().is_none());
+}
+
+#[test]
+fn nested_fragment_recursion_reports_recursion_chain() {
+    let doc = r#"
+(source)fragment "a" {
+  use "b"
+}
+
+(source)fragment "b" {
+  use "a"
+}
+
+source "app" local "." {
+  use "a"
+}
+"#;
+
+    let err = parse_config(doc).expect_err("should fail");
+    let message = format!("{err}");
+    assert!(message.contains("fragment recursion detected"));
+    assert!(message.contains("a -> b -> a"));
+    assert!(!message.contains("unknown fragment"));
+}
+
+#[test]
+fn fragment_and_local_object_override_are_deep_merged() {
+    let doc = r#"
+(source)fragment "defaults" {
+  extraction {
+    mode "semantic"
+    limit 20
+  }
+}
+
+source "app" local "." {
+  use "defaults"
+  extraction {
+    limit 5
+    query "latest"
+  }
+}
+"#;
+
+    let root = parse_config(doc).expect("parse");
+    let source = root.child("source").expect("source node");
+    let extraction = source
+        .children_named("extraction")
+        .last()
+        .expect("merged extraction");
+
+    let mode = extraction
+        .child("mode")
+        .and_then(|node| node.arg(0))
+        .cloned();
+    let limit = extraction
+        .child("limit")
+        .and_then(|node| node.arg(0))
+        .cloned();
+    let query = extraction
+        .child("query")
+        .and_then(|node| node.arg(0))
+        .cloned();
+
+    assert_eq!(mode, Some(Value::String("semantic".to_string())));
+    assert_eq!(limit, Some(Value::Int(5)));
+    assert_eq!(query, Some(Value::String("latest".to_string())));
+}
+
+#[test]
 fn expands_fragment_merge_patches() {
     let doc = r#"
 fragment "defaults" {

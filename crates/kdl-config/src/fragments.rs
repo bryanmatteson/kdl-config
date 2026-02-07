@@ -764,6 +764,188 @@ fn expand_node(
     Ok(())
 }
 
+fn adjust_frame_end_for_len_change(frame_end: &mut usize, len_before: usize, len_after: usize) {
+    if len_after >= len_before {
+        *frame_end += len_after - len_before;
+    } else {
+        *frame_end = frame_end.saturating_sub(len_before - len_after);
+    }
+}
+
+fn is_object_merge_candidate(node: &KdlNode) -> bool {
+    if node.base_name() == "use" {
+        return false;
+    }
+    if !node.args().is_empty() {
+        return false;
+    }
+    node.children()
+        .map(|doc| !doc.nodes().is_empty())
+        .unwrap_or(false)
+}
+
+fn deep_merge_last_wins_object_siblings(
+    nodes: &mut [KdlNode],
+    location: Option<&dyn LocationProvider>,
+) -> Result<(), KdlConfigError> {
+    let mut latest_by_name: HashMap<String, usize> = HashMap::new();
+    for idx in 0..nodes.len() {
+        if !is_object_merge_candidate(&nodes[idx]) {
+            continue;
+        }
+        let name = nodes[idx].base_name().to_string();
+        if let Some(prev_idx) = latest_by_name.get(&name).copied() {
+            let previous = nodes[prev_idx].clone();
+            merge_nodes(&mut nodes[idx], &previous, location, true)?;
+        }
+        latest_by_name.insert(name, idx);
+    }
+    Ok(())
+}
+
+fn expand_child_node_at_index(
+    parent: &mut KdlNode,
+    parent_info: &ParentInfo,
+    nodes: &mut Vec<KdlNode>,
+    idx: usize,
+    fragments: &HashMap<String, FragmentDef>,
+    inferred_types: &mut InferredTypeMap,
+    location: Option<&dyn LocationProvider>,
+    expansion: &mut FragmentExpansion,
+    stack: &mut Vec<String>,
+) -> Result<usize, KdlConfigError> {
+    if idx >= nodes.len() {
+        return Ok(idx);
+    }
+
+    if nodes[idx].base_name() != "use" {
+        expand_node(
+            &mut nodes[idx],
+            fragments,
+            inferred_types,
+            location,
+            expansion,
+            stack,
+        )?;
+        return Ok(idx + 1);
+    }
+
+    if nodes[idx].modifier() != Modifier::Inherit {
+        return Err(fragment_error(
+            "modifiers are not allowed on use nodes",
+            Some(&nodes[idx]),
+            location,
+        ));
+    }
+
+    let parsed_use = parse_use(&nodes[idx], location)?;
+    let fragment_name = parsed_use.name.clone();
+    let fragment = fragments.get(&fragment_name).ok_or_else(|| {
+        let candidates: Vec<&str> = fragments.keys().map(|key| key.as_str()).collect();
+        let mut message = format!("unknown fragment {:?}", fragment_name);
+        if let Some(suggestion) = suggest_similar(&fragment_name, &candidates) {
+            message.push_str(&format!(" (did you mean {:?}?)", suggestion));
+        }
+        fragment_error(message, Some(&nodes[idx]), location)
+    })?;
+
+    let expected_type = parent_info.expected_type();
+    if let Some(schema_type) = fragment.schema_type.as_deref() {
+        if schema_type != expected_type {
+            let mut message = format!(
+                "fragment {:?} is typed as {:?} but used under {:?}",
+                fragment.name, schema_type, expected_type
+            );
+            if let Some(loc) = format_location(fragment.defined_at) {
+                message.push_str(&format!(" (defined at {loc})"));
+            }
+            return Err(fragment_error(message, Some(&nodes[idx]), location));
+        }
+    } else if let Some(inferred) = inferred_types.get(&fragment.name) {
+        if inferred.schema_type != expected_type {
+            let mut message = format!(
+                "fragment {:?} is implicitly typed as {:?} but used under {:?}",
+                fragment.name, inferred.schema_type, expected_type
+            );
+            if let Some(loc) = format_location(inferred.first_use) {
+                message.push_str(&format!(" (first used at {loc})"));
+            }
+            return Err(fragment_error(message, Some(&nodes[idx]), location));
+        }
+    } else {
+        inferred_types.insert(
+            fragment.name.clone(),
+            InferredFragmentType {
+                schema_type: expected_type.to_string(),
+                first_use: node_location(&nodes[idx], location),
+            },
+        );
+    }
+
+    if stack.contains(&fragment_name) {
+        let mut chain = stack.clone();
+        chain.push(fragment_name.clone());
+        return Err(fragment_error(
+            format!("fragment recursion detected: {}", chain.join(" -> ")),
+            Some(&nodes[idx]),
+            location,
+        ));
+    }
+
+    expansion.had_uses = true;
+    nodes.remove(idx);
+    let mut insert_at = idx.min(nodes.len());
+
+    stack.push(fragment_name);
+    let patch_len = apply_fragment_patch(
+        parent,
+        nodes,
+        &mut insert_at,
+        fragment,
+        location,
+        fragments,
+        inferred_types,
+        expansion,
+        stack,
+    )?;
+
+    let ParsedUse {
+        attr_nodes,
+        child_overrides,
+        ..
+    } = parsed_use;
+    let fragment_len = fragment.inserts.len();
+    let mut inserted = fragment.inserts.clone();
+    inserted.extend(attr_nodes);
+    inserted.extend(child_overrides);
+    let override_len = inserted.len().saturating_sub(fragment_len);
+
+    let insert_at = insert_at.min(nodes.len());
+    let patch_start = insert_at.saturating_sub(patch_len);
+    nodes.splice(insert_at..insert_at, inserted);
+
+    let mut frame_idx = patch_start;
+    let mut frame_end = patch_start + patch_len + fragment_len + override_len;
+    while frame_idx < frame_end {
+        let len_before = nodes.len();
+        frame_idx = expand_child_node_at_index(
+            parent,
+            parent_info,
+            nodes,
+            frame_idx,
+            fragments,
+            inferred_types,
+            location,
+            expansion,
+            stack,
+        )?;
+        adjust_frame_end_for_len_change(&mut frame_end, len_before, nodes.len());
+    }
+
+    stack.pop();
+    Ok(frame_idx)
+}
+
 fn expand_child_nodes(
     parent: &mut KdlNode,
     parent_info: &ParentInfo,
@@ -775,121 +957,25 @@ fn expand_child_nodes(
     stack: &mut Vec<String>,
 ) -> Result<(), KdlConfigError> {
     let mut idx = 0usize;
+    let mut had_direct_use = false;
     while idx < nodes.len() {
         if nodes[idx].base_name() == "use" {
-            if nodes[idx].modifier() != Modifier::Inherit {
-                return Err(fragment_error(
-                    "modifiers are not allowed on use nodes",
-                    Some(&nodes[idx]),
-                    location,
-                ));
-            }
-
-            let parsed_use = parse_use(&nodes[idx], location)?;
-            let fragment_name = parsed_use.name.clone();
-            let fragment = fragments.get(&fragment_name).ok_or_else(|| {
-                let candidates: Vec<&str> = fragments.keys().map(|key| key.as_str()).collect();
-                let mut message = format!("unknown fragment {:?}", fragment_name);
-                if let Some(suggestion) = suggest_similar(&fragment_name, &candidates) {
-                    message.push_str(&format!(" (did you mean {:?}?)", suggestion));
-                }
-                fragment_error(message, Some(&nodes[idx]), location)
-            })?;
-
-            let expected_type = parent_info.expected_type();
-            if let Some(schema_type) = fragment.schema_type.as_deref() {
-                if schema_type != expected_type {
-                    let mut message = format!(
-                        "fragment {:?} is typed as {:?} but used under {:?}",
-                        fragment.name, schema_type, expected_type
-                    );
-                    if let Some(loc) = format_location(fragment.defined_at) {
-                        message.push_str(&format!(" (defined at {loc})"));
-                    }
-                    return Err(fragment_error(message, Some(&nodes[idx]), location));
-                }
-            } else if let Some(inferred) = inferred_types.get(&fragment.name) {
-                if inferred.schema_type != expected_type {
-                    let mut message = format!(
-                        "fragment {:?} is implicitly typed as {:?} but used under {:?}",
-                        fragment.name, inferred.schema_type, expected_type
-                    );
-                    if let Some(loc) = format_location(inferred.first_use) {
-                        message.push_str(&format!(" (first used at {loc})"));
-                    }
-                    return Err(fragment_error(message, Some(&nodes[idx]), location));
-                }
-            } else {
-                inferred_types.insert(
-                    fragment.name.clone(),
-                    InferredFragmentType {
-                        schema_type: expected_type.to_string(),
-                        first_use: node_location(&nodes[idx], location),
-                    },
-                );
-            }
-
-            if stack.contains(&fragment_name) {
-                let mut chain = stack.clone();
-                chain.push(fragment_name.clone());
-                return Err(fragment_error(
-                    format!("fragment recursion detected: {}", chain.join(" -> ")),
-                    Some(&nodes[idx]),
-                    location,
-                ));
-            }
-
-            expansion.had_uses = true;
-            let use_node = nodes.remove(idx);
-            let mut insert_at = idx.min(nodes.len());
-
-            stack.push(fragment_name);
-            let _patch_len = apply_fragment_patch(
-                parent,
-                nodes,
-                &mut insert_at,
-                fragment,
-                location,
-                fragments,
-                inferred_types,
-                expansion,
-                stack,
-            )?;
-
-            let mut fragment_children = fragment.inserts.clone();
-            let mut attr_override_children = parsed_use.attr_nodes;
-            let mut child_override_children = parsed_use.child_overrides;
-
-            for child in fragment_children.iter_mut() {
-                expand_node(child, fragments, inferred_types, location, expansion, stack)?;
-            }
-            for child in attr_override_children.iter_mut() {
-                expand_node(child, fragments, inferred_types, location, expansion, stack)?;
-            }
-            for child in child_override_children.iter_mut() {
-                expand_node(child, fragments, inferred_types, location, expansion, stack)?;
-            }
-            stack.pop();
-
-            let mut inserted = fragment_children;
-            inserted.extend(attr_override_children);
-            inserted.extend(child_override_children);
-            let inserted_len = inserted.len();
-            nodes.splice(insert_at..insert_at, inserted);
-            idx = insert_at + inserted_len;
-            let _ = use_node;
-            continue;
+            had_direct_use = true;
         }
-
-        expand_node(
-            &mut nodes[idx],
+        idx = expand_child_node_at_index(
+            parent,
+            parent_info,
+            nodes,
+            idx,
             fragments,
             inferred_types,
             location,
             expansion,
             stack,
         )?;
-        idx += 1;
+    }
+    if had_direct_use {
+        deep_merge_last_wins_object_siblings(nodes, location)?;
     }
 
     Ok(())
@@ -960,6 +1046,175 @@ fn expand_node_with_map(
     Ok(())
 }
 
+fn expand_child_node_with_map_at_index(
+    parent: &mut KdlNode,
+    parent_info: &ParentInfo,
+    parent_path: Option<&NamePath>,
+    nodes: &mut Vec<KdlNode>,
+    idx: usize,
+    fragments: &HashMap<String, FragmentDef>,
+    inferred_types: &mut InferredTypeMap,
+    location: Option<&dyn LocationProvider>,
+    expansion: &mut FragmentExpansion,
+    stack: &mut Vec<String>,
+    map: &mut FragmentMap,
+) -> Result<usize, KdlConfigError> {
+    if idx >= nodes.len() {
+        return Ok(idx);
+    }
+
+    if nodes[idx].base_name() != "use" {
+        let child_path = child_path(parent_path, nodes, idx);
+        expand_node_with_map(
+            &mut nodes[idx],
+            Some(&child_path),
+            fragments,
+            inferred_types,
+            location,
+            expansion,
+            stack,
+            map,
+        )?;
+        return Ok(idx + 1);
+    }
+
+    if nodes[idx].modifier() != Modifier::Inherit {
+        return Err(fragment_error(
+            "modifiers are not allowed on use nodes",
+            Some(&nodes[idx]),
+            location,
+        ));
+    }
+
+    let parsed_use = parse_use(&nodes[idx], location)?;
+    let fragment_name = parsed_use.name.clone();
+    let fragment = fragments.get(&fragment_name).ok_or_else(|| {
+        let candidates: Vec<&str> = fragments.keys().map(|key| key.as_str()).collect();
+        let mut message = format!("unknown fragment {:?}", fragment_name);
+        if let Some(suggestion) = suggest_similar(&fragment_name, &candidates) {
+            message.push_str(&format!(" (did you mean {:?}?)", suggestion));
+        }
+        fragment_error(message, Some(&nodes[idx]), location)
+    })?;
+
+    let expected_type = parent_info.expected_type();
+    if let Some(schema_type) = fragment.schema_type.as_deref() {
+        if schema_type != expected_type {
+            let mut message = format!(
+                "fragment {:?} is typed as {:?} but used under {:?}",
+                fragment.name, schema_type, expected_type
+            );
+            if let Some(loc) = format_location(fragment.defined_at) {
+                message.push_str(&format!(" (defined at {loc})"));
+            }
+            return Err(fragment_error(message, Some(&nodes[idx]), location));
+        }
+    } else if let Some(inferred) = inferred_types.get(&fragment.name) {
+        if inferred.schema_type != expected_type {
+            let mut message = format!(
+                "fragment {:?} is implicitly typed as {:?} but used under {:?}",
+                fragment.name, inferred.schema_type, expected_type
+            );
+            if let Some(loc) = format_location(inferred.first_use) {
+                message.push_str(&format!(" (first used at {loc})"));
+            }
+            return Err(fragment_error(message, Some(&nodes[idx]), location));
+        }
+    } else {
+        inferred_types.insert(
+            fragment.name.clone(),
+            InferredFragmentType {
+                schema_type: expected_type.to_string(),
+                first_use: node_location(&nodes[idx], location),
+            },
+        );
+    }
+
+    if stack.contains(&fragment_name) {
+        let mut chain = stack.clone();
+        chain.push(fragment_name.clone());
+        return Err(fragment_error(
+            format!("fragment recursion detected: {}", chain.join(" -> ")),
+            Some(&nodes[idx]),
+            location,
+        ));
+    }
+
+    expansion.had_uses = true;
+    let use_node = nodes.remove(idx);
+    let mut insert_at = idx.min(nodes.len());
+
+    stack.push(fragment_name.clone());
+    let patch_len = apply_fragment_patch_with_map(
+        parent,
+        nodes,
+        &mut insert_at,
+        fragment,
+        location,
+        parent_path,
+        fragments,
+        inferred_types,
+        expansion,
+        stack,
+        map,
+    )?;
+
+    let ParsedUse {
+        attr_overrides,
+        attr_nodes,
+        child_overrides,
+        ..
+    } = parsed_use;
+    let fragment_len = fragment.inserts.len();
+    let attr_override_len = attr_nodes.len();
+    let mut inserted = fragment.inserts.clone();
+    inserted.extend(attr_nodes);
+    inserted.extend(child_overrides);
+    let override_len = inserted.len().saturating_sub(fragment_len);
+
+    let insert_at = insert_at.min(nodes.len());
+    let patch_start = insert_at.saturating_sub(patch_len);
+    nodes.splice(insert_at..insert_at, inserted);
+
+    let mut frame_idx = patch_start;
+    let mut frame_end = patch_start + patch_len + fragment_len + override_len;
+    while frame_idx < frame_end {
+        let len_before = nodes.len();
+        frame_idx = expand_child_node_with_map_at_index(
+            parent,
+            parent_info,
+            parent_path,
+            nodes,
+            frame_idx,
+            fragments,
+            inferred_types,
+            location,
+            expansion,
+            stack,
+            map,
+        )?;
+        adjust_frame_end_for_len_change(&mut frame_end, len_before, nodes.len());
+    }
+
+    stack.pop();
+
+    if let Some(parent_path) = parent_path {
+        map.uses.push(FragmentUse {
+            fragment_name,
+            attr_overrides,
+            parent_path: parent_path.clone(),
+            insert_start: idx,
+            patch_len,
+            fragment_len,
+            override_len,
+            attr_override_len,
+            use_node,
+        });
+    }
+
+    Ok(frame_idx)
+}
+
 fn expand_child_nodes_with_map(
     parent: &mut KdlNode,
     parent_info: &ParentInfo,
@@ -973,160 +1228,17 @@ fn expand_child_nodes_with_map(
     map: &mut FragmentMap,
 ) -> Result<(), KdlConfigError> {
     let mut idx = 0usize;
+    let mut had_direct_use = false;
     while idx < nodes.len() {
         if nodes[idx].base_name() == "use" {
-            if nodes[idx].modifier() != Modifier::Inherit {
-                return Err(fragment_error(
-                    "modifiers are not allowed on use nodes",
-                    Some(&nodes[idx]),
-                    location,
-                ));
-            }
-            let parsed_use = parse_use(&nodes[idx], location)?;
-            let fragment_name = parsed_use.name.clone();
-            let fragment = fragments.get(&fragment_name).ok_or_else(|| {
-                let candidates: Vec<&str> = fragments.keys().map(|key| key.as_str()).collect();
-                let mut message = format!("unknown fragment {:?}", fragment_name);
-                if let Some(suggestion) = suggest_similar(&fragment_name, &candidates) {
-                    message.push_str(&format!(" (did you mean {:?}?)", suggestion));
-                }
-                fragment_error(message, Some(&nodes[idx]), location)
-            })?;
-
-            let expected_type = parent_info.expected_type();
-            if let Some(schema_type) = fragment.schema_type.as_deref() {
-                if schema_type != expected_type {
-                    let mut message = format!(
-                        "fragment {:?} is typed as {:?} but used under {:?}",
-                        fragment.name, schema_type, expected_type
-                    );
-                    if let Some(loc) = format_location(fragment.defined_at) {
-                        message.push_str(&format!(" (defined at {loc})"));
-                    }
-                    return Err(fragment_error(message, Some(&nodes[idx]), location));
-                }
-            } else if let Some(inferred) = inferred_types.get(&fragment.name) {
-                if inferred.schema_type != expected_type {
-                    let mut message = format!(
-                        "fragment {:?} is implicitly typed as {:?} but used under {:?}",
-                        fragment.name, inferred.schema_type, expected_type
-                    );
-                    if let Some(loc) = format_location(inferred.first_use) {
-                        message.push_str(&format!(" (first used at {loc})"));
-                    }
-                    return Err(fragment_error(message, Some(&nodes[idx]), location));
-                }
-            } else {
-                inferred_types.insert(
-                    fragment.name.clone(),
-                    InferredFragmentType {
-                        schema_type: expected_type.to_string(),
-                        first_use: node_location(&nodes[idx], location),
-                    },
-                );
-            }
-
-            if stack.contains(&fragment_name) {
-                let mut chain = stack.clone();
-                chain.push(fragment_name.clone());
-                return Err(fragment_error(
-                    format!("fragment recursion detected: {}", chain.join(" -> ")),
-                    Some(&nodes[idx]),
-                    location,
-                ));
-            }
-
-            expansion.had_uses = true;
-            let use_node = nodes.remove(idx);
-            let mut insert_at = idx.min(nodes.len());
-
-            stack.push(fragment_name.clone());
-            let patch_len = apply_fragment_patch_with_map(
-                parent,
-                nodes,
-                &mut insert_at,
-                fragment,
-                location,
-                parent_path,
-                fragments,
-                inferred_types,
-                expansion,
-                stack,
-                map,
-            )?;
-
-            let mut fragment_children = fragment.inserts.clone();
-            let mut attr_override_children = parsed_use.attr_nodes;
-            let mut child_override_children = parsed_use.child_overrides;
-
-            for child in fragment_children.iter_mut() {
-                expand_node_with_map(
-                    child,
-                    parent_path,
-                    fragments,
-                    inferred_types,
-                    location,
-                    expansion,
-                    stack,
-                    map,
-                )?;
-            }
-            for child in attr_override_children.iter_mut() {
-                expand_node_with_map(
-                    child,
-                    parent_path,
-                    fragments,
-                    inferred_types,
-                    location,
-                    expansion,
-                    stack,
-                    map,
-                )?;
-            }
-            for child in child_override_children.iter_mut() {
-                expand_node_with_map(
-                    child,
-                    parent_path,
-                    fragments,
-                    inferred_types,
-                    location,
-                    expansion,
-                    stack,
-                    map,
-                )?;
-            }
-            stack.pop();
-
-            let fragment_len = fragment_children.len();
-            let attr_override_len = attr_override_children.len();
-            let mut override_children = attr_override_children;
-            override_children.extend(child_override_children);
-            let override_len = override_children.len();
-            let mut inserted = fragment_children;
-            inserted.extend(override_children);
-            let insert_at = insert_at.min(nodes.len());
-            nodes.splice(insert_at..insert_at, inserted);
-            if let Some(parent_path) = parent_path {
-                map.uses.push(FragmentUse {
-                    fragment_name,
-                    attr_overrides: parsed_use.attr_overrides,
-                    parent_path: parent_path.clone(),
-                    insert_start: idx,
-                    patch_len,
-                    fragment_len,
-                    override_len,
-                    attr_override_len,
-                    use_node,
-                });
-            }
-            idx = insert_at + fragment_len + override_len;
-            continue;
+            had_direct_use = true;
         }
-
-        let child_path = child_path(parent_path, nodes, idx);
-        expand_node_with_map(
-            &mut nodes[idx],
-            Some(&child_path),
+        idx = expand_child_node_with_map_at_index(
+            parent,
+            parent_info,
+            parent_path,
+            nodes,
+            idx,
             fragments,
             inferred_types,
             location,
@@ -1134,7 +1246,9 @@ fn expand_child_nodes_with_map(
             stack,
             map,
         )?;
-        idx += 1;
+    }
+    if had_direct_use {
+        deep_merge_last_wins_object_siblings(nodes, location)?;
     }
 
     Ok(())
