@@ -43,24 +43,24 @@ impl SchemaRegistry {
     }
 }
 
-/// Build a schema node for `(type)template "name" { ... }`.
-pub fn template_node_schema(definitions: &SchemaRegistry) -> KdlNodeSchema {
+/// Build a schema node for `(type)fragment "name" { ... }`.
+pub fn fragment_node_schema(definitions: &SchemaRegistry) -> KdlNodeSchema {
     let mut names: Vec<String> = definitions.definitions.keys().cloned().collect();
     names.sort();
     let def_refs: Vec<SchemaRef> = names.into_iter().map(SchemaRef::Ref).collect();
     let allowed = SchemaRef::Choice(def_refs.clone());
 
     let mut schema = KdlNodeSchema::default();
-    schema.name = Some("template".to_string());
-    schema.description = Some("Typed template definition".to_string());
+    schema.name = Some("fragment".to_string());
+    schema.description = Some("Typed fragment definition".to_string());
     schema.values.push(SchemaValue {
         ty: SchemaType::String,
         required: true,
-        description: Some("Template name".to_string()),
+        description: Some("Fragment name".to_string()),
         enum_values: None,
     });
     schema.type_annotation = Some(Box::new(TypeAnnotationSchema {
-        required: true,
+        required: false,
         allowed: allowed.clone(),
     }));
     if !def_refs.is_empty() {
@@ -70,6 +70,7 @@ pub fn template_node_schema(definitions: &SchemaRegistry) -> KdlNodeSchema {
     }
     schema
 }
+
 
 /// A reference to a schema, either inline or by name.
 #[derive(Debug, Clone, PartialEq)]

@@ -365,6 +365,8 @@ fn generate_parse_arm(
                     config: &enum_config,
                     source: ctx.source,
                     path: ctx.path.clone(),
+                    root: ctx.root,
+                    root_path: ctx.root_path.clone(),
                     allow_any_name: true,
                 };
                 let value = <#inner_ty as ::kdl_config::KdlDecode>::decode(&variant_node, &enum_ctx)?;

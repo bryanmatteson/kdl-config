@@ -532,6 +532,7 @@ fn generate_update_modifier(field: &FieldInfo, access: &FieldAccessor) -> TokenS
                 ::kdl_config::Modifier::Append => format!("+{}", base),
                 ::kdl_config::Modifier::Remove => format!("-{}", base),
                 ::kdl_config::Modifier::Replace => format!("!{}", base),
+                ::kdl_config::Modifier::Flatten => format!("~{}", base),
             };
             node.set_name(name);
         } else {

@@ -3,8 +3,57 @@ use std::collections::HashSet;
 use crate::config::{ConflictPolicy, FlagStyle};
 use crate::error::{ErrorKind, KdlConfigError, Placement};
 use crate::node_ext::KdlNodeExt;
+use crate::node_path::NodePath;
 use crate::KdlDecode;
 use kdl::{KdlNode, KdlValue};
+
+#[derive(Debug, Clone)]
+pub struct PathCandidate<'a> {
+    pub node: &'a KdlNode,
+    pub path: Option<NodePath>,
+}
+
+pub fn resolve_path_candidates<'a>(
+    start: &'a KdlNode,
+    start_path: Option<&NodePath>,
+    segments: &[&str],
+) -> Vec<PathCandidate<'a>> {
+    if segments.is_empty() {
+        return vec![PathCandidate {
+            node: start,
+            path: start_path.cloned(),
+        }];
+    }
+
+    let mut current = vec![PathCandidate {
+        node: start,
+        path: start_path.cloned(),
+    }];
+
+    for segment in segments {
+        let mut next: Vec<PathCandidate<'a>> = Vec::new();
+        for candidate in current {
+            for (idx, child) in candidate.node.iter_children().enumerate() {
+                if child.name_str() == *segment {
+                    let next_path = candidate
+                        .path
+                        .as_ref()
+                        .map(|path| path.child(child.name_str(), idx));
+                    next.push(PathCandidate {
+                        node: child,
+                        path: next_path,
+                    });
+                }
+            }
+        }
+        if next.is_empty() {
+            return Vec::new();
+        }
+        current = next;
+    }
+
+    current
+}
 
 #[derive(Debug, Default)]
 pub struct Claims {

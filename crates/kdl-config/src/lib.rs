@@ -17,7 +17,7 @@ pub mod render;
 pub mod round_trip;
 pub mod schema;
 pub mod selector;
-pub mod templates;
+pub mod fragments;
 pub mod types;
 mod primitive_decode;
 
@@ -49,7 +49,7 @@ pub use render::{
 pub use round_trip::{RoundTripAst, parse_str_roundtrip};
 pub use selector::{CollectMode, CollectionSpec, InjectOpt, SelectOpts, SelectSpec, SelectorAst};
 pub use types::{MergeModifierPolicy, Modifier, Node, NodeLocation as NodeLocationLegacy, Value};
-pub use templates::{TemplateExpansion, expand_templates};
+pub use fragments::{FragmentExpansion, expand_fragments};
 
 /// Trait for decoding a typed configuration from a KDL Node.
 pub trait KdlDecode: Sized {
@@ -104,7 +104,7 @@ pub fn parse_str_with_config<T: KdlDecode>(
         .parse()
         .map_err(|e: kdl::KdlError| KdlConfigError::custom("KDL Document", e.to_string()))?;
     let source = Source::new(contents.to_string());
-    crate::templates::expand_templates(&mut doc, Some(&source))?;
+    crate::fragments::expand_fragments(&mut doc, Some(&source))?;
     let ctx = DecodeContext::new(config, Some(&source));
     let nodes = doc.nodes();
     match nodes.len() {
@@ -112,7 +112,7 @@ pub fn parse_str_with_config<T: KdlDecode>(
             "KDL Document",
             "expected a single top-level node, found none",
         )),
-        1 => T::decode(&nodes[0], &ctx.with_root(nodes[0].name().value(), 0)),
+        1 => T::decode(&nodes[0], &ctx.with_root_node(&nodes[0], 0)),
         count => Err(KdlConfigError::custom(
             "KDL Document",
             format!("expected a single top-level node, found {count}"),

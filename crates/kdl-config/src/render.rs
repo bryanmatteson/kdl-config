@@ -134,6 +134,7 @@ fn render_modifier(modifier: Modifier) -> &'static str {
         Modifier::Append => "+",
         Modifier::Remove => "-",
         Modifier::Replace => "!",
+        Modifier::Flatten => "~",
     }
 }
 

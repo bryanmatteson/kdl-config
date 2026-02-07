@@ -83,6 +83,9 @@ fn apply_layer_child(
             }
             root.add_child(child);
         }
+        crate::Modifier::Flatten => {
+            root.merge_child_by_name_with(child, policy);
+        }
         crate::Modifier::Inherit => {
             if by_name {
                 root.merge_child_by_name_with(child, policy);

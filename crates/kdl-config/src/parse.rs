@@ -2,7 +2,7 @@ use crate::context::LineIndex;
 use crate::error::{ErrorKind, KdlConfigError, Placement};
 use crate::render::is_valid_identifier;
 use crate::types::{Modifier, Node, Value};
-use crate::templates::expand_templates;
+use crate::fragments::expand_fragments;
 use kdl::{KdlDocument, KdlNode, KdlValue};
 
 pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
@@ -22,7 +22,7 @@ pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
     let mut root = Node::new();
     let index = LineIndex::new(contents);
 
-    expand_templates(&mut document, Some(&index))?;
+    expand_fragments(&mut document, Some(&index))?;
 
     for (idx, node) in document.nodes().iter().enumerate() {
         let child = parse_kdl_node(node, &index, None, idx)?;
@@ -46,7 +46,7 @@ pub fn parse_node(contents: &str) -> Result<Node, KdlConfigError> {
             location: None,
         })?;
 
-    expand_templates(&mut document, Some(&LineIndex::new(contents)))?;
+    expand_fragments(&mut document, Some(&LineIndex::new(contents)))?;
     let nodes = document.nodes();
     match nodes.len() {
         0 => Err(KdlConfigError::custom(
@@ -138,6 +138,8 @@ fn parse_node_name(raw: &str) -> (String, Modifier) {
         (stripped.to_string(), Modifier::Remove)
     } else if let Some(stripped) = raw.strip_prefix('!') {
         (stripped.to_string(), Modifier::Replace)
+    } else if let Some(stripped) = raw.strip_prefix('~') {
+        (stripped.to_string(), Modifier::Flatten)
     } else {
         (raw.to_string(), Modifier::Inherit)
     }

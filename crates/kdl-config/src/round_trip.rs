@@ -44,7 +44,7 @@ impl<T: KdlUpdate> RoundTripAst<T> {
         Ok(self.doc.to_string())
     }
 
-    pub fn to_kdl_template_aware(&mut self) -> Result<String, KdlConfigError> {
+    pub fn to_kdl_fragment_aware(&mut self) -> Result<String, KdlConfigError> {
         if !self.dirty {
             return Ok(self.original.clone());
         }
@@ -52,7 +52,8 @@ impl<T: KdlUpdate> RoundTripAst<T> {
         let source = Source::new(self.original.clone());
         let mut expanded = self.doc.clone();
         let (_expansion, map) =
-            crate::templates::expand_templates_with_map(&mut expanded, Some(&source))?;
+            crate::fragments::expand_fragments_with_map(&mut expanded, Some(&source))?;
+        let baseline = expanded.clone();
 
         let ctx = UpdateContext::new(&self.config);
         let nodes = expanded.nodes_mut();
@@ -71,7 +72,7 @@ impl<T: KdlUpdate> RoundTripAst<T> {
         self.value.update(&mut nodes[0], &ctx)?;
 
         let mut result = expanded.clone();
-        crate::templates::apply_template_aware_updates(&mut result, &expanded, &map)?;
+        crate::fragments::apply_fragment_aware_updates(&mut result, &baseline, &expanded, &map)?;
         self.doc = result.clone();
         Ok(result.to_string())
     }
@@ -92,7 +93,7 @@ pub fn parse_str_roundtrip_with_config<T: KdlDecode + KdlUpdate>(
         .map_err(|e: kdl::KdlError| KdlConfigError::custom("KDL Document", e.to_string()))?;
     let source = Source::new(contents.to_string());
     let mut expanded = doc.clone();
-    crate::templates::expand_templates(&mut expanded, Some(&source))?;
+    crate::fragments::expand_fragments(&mut expanded, Some(&source))?;
     let ctx = DecodeContext::new(config, Some(&source));
     let nodes = expanded.nodes();
     if nodes.is_empty() {
@@ -110,7 +111,7 @@ pub fn parse_str_roundtrip_with_config<T: KdlDecode + KdlUpdate>(
 
     let root_index = find_root_index(&doc)?;
     let node = &nodes[0];
-    let value = T::decode(node, &ctx.with_root(node.name().value(), 0))?;
+    let value = T::decode(node, &ctx.with_root_node(node, 0))?;
     Ok(RoundTripAst {
         value,
         doc,
@@ -124,7 +125,7 @@ pub fn parse_str_roundtrip_with_config<T: KdlDecode + KdlUpdate>(
 fn find_root_index(doc: &KdlDocument) -> Result<usize, KdlConfigError> {
     let mut root_index = None;
     for (idx, node) in doc.nodes().iter().enumerate() {
-        if node.base_name() == "template" {
+        if node.base_name() == "fragment" {
             continue;
         }
         if root_index.is_some() {

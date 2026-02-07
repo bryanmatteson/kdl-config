@@ -71,6 +71,7 @@ pub struct FieldAttrs {
     pub placement: FieldPlacement,
     pub required: Option<bool>,
     pub name: Option<String>,
+    pub path: Option<FieldPath>,
     pub container: Option<String>,
     pub children_map: bool,
     pub flatten: bool,
@@ -137,6 +138,7 @@ pub struct RawFieldAttrs {
     // === Configuration ===
     pub name: Option<String>,
     pub rename: Option<String>, // alias for name
+    pub path: Option<FieldPath>,
     pub container: Option<String>,
     pub children_map: bool,
     pub map_node: Option<String>,
@@ -179,6 +181,46 @@ pub struct RawFieldAttrs {
 
     // === Schema ===
     pub schema: FieldSchemaOverride,
+}
+
+/// Parsed field path for re-rooting decoding.
+#[derive(Debug, Clone)]
+pub struct FieldPath {
+    pub absolute: bool,
+    pub segments: Vec<String>,
+    pub raw: String,
+}
+
+impl FieldPath {
+    pub fn parse(raw: &str, span: Span) -> syn::Result<Self> {
+        let mut absolute = false;
+        let mut path = raw;
+        if let Some(rest) = raw.strip_prefix('/') {
+            absolute = true;
+            path = rest;
+        }
+        if path.is_empty() {
+            return Err(syn::Error::new(span, "path cannot be empty"));
+        }
+        if path.contains('/') {
+            return Err(syn::Error::new(
+                span,
+                "path may only use '/' as a leading root marker",
+            ));
+        }
+        let segments: Vec<String> = path.split('.').map(|s| s.to_string()).collect();
+        if segments.iter().any(|s| s.is_empty()) {
+            return Err(syn::Error::new(
+                span,
+                "path segments must be non-empty",
+            ));
+        }
+        Ok(Self {
+            absolute,
+            segments,
+            raw: raw.to_string(),
+        })
+    }
 }
 
 impl RawFieldAttrs {
@@ -224,6 +266,7 @@ impl RawFieldAttrs {
 
         // Resolve name
         let name = self.name.or(self.rename);
+        let path = self.path;
 
         // Resolve flatten
         let flatten = self.flatten.unwrap_or(false);
@@ -358,6 +401,7 @@ impl RawFieldAttrs {
             placement,
             required,
             name,
+            path,
             container: self.container,
             children_map: self.children_map,
             flatten,

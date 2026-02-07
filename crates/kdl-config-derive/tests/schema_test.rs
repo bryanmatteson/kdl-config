@@ -66,6 +66,14 @@ struct ScalarSchemaConfig {
 
 #[derive(KdlSchema)]
 #[allow(dead_code)]
+#[kdl(node = "config")]
+struct PathSchemaConfig {
+    #[kdl(path = "app.http", attr)]
+    port: i64,
+}
+
+#[derive(KdlSchema)]
+#[allow(dead_code)]
 #[kdl(
     node = "config",
     schema(name = "config_schema", description = "Config schema", deny_unknown)
@@ -159,6 +167,49 @@ fn test_schema_generation() {
     assert!(registry.definitions.contains_key("Setting"));
     let setting_schema = registry.definitions.get("Setting").unwrap();
     assert!(setting_schema.props.contains_key("enabled"));
+}
+
+#[test]
+fn schema_path_inserts_nested_nodes() {
+    let mut registry = kdl_config::schema::SchemaRegistry::default();
+    PathSchemaConfig::register_definitions(&mut registry);
+
+    let config_schema = registry
+        .definitions
+        .get("PathSchemaConfig")
+        .expect("PathSchemaConfig schema not found");
+    let children = config_schema
+        .children
+        .as_ref()
+        .expect("PathSchemaConfig should have children");
+
+    let app_node = children
+        .nodes
+        .iter()
+        .find_map(|child| match child {
+            SchemaRef::Inline(node) if node.name.as_deref() == Some("app") => Some(node),
+            _ => None,
+        })
+        .expect("expected app node");
+
+    let app_children = app_node
+        .children
+        .as_ref()
+        .expect("app node should have children");
+    let http_node = app_children
+        .nodes
+        .iter()
+        .find_map(|child| match child {
+            SchemaRef::Inline(node) if node.name.as_deref() == Some("http") => Some(node),
+            _ => None,
+        })
+        .expect("expected http node");
+
+    assert!(http_node.props.contains_key("port"));
+    assert_eq!(
+        http_node.props.get("port").unwrap().ty,
+        SchemaType::Integer
+    );
 }
 
 #[test]

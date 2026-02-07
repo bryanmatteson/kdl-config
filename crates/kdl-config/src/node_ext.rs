@@ -43,7 +43,7 @@ impl KdlNodeExt for KdlNode {
             return raw;
         }
         match raw.as_bytes().first().copied() {
-            Some(b'+') | Some(b'-') | Some(b'!') => &raw[1..],
+            Some(b'+') | Some(b'-') | Some(b'!') | Some(b'~') => &raw[1..],
             _ => raw,
         }
     }
@@ -67,6 +67,7 @@ impl KdlNodeExt for KdlNode {
             Some(b'+') => Modifier::Append,
             Some(b'-') => Modifier::Remove,
             Some(b'!') => Modifier::Replace,
+            Some(b'~') => Modifier::Flatten,
             _ => Modifier::Inherit,
         }
     }

@@ -769,6 +769,63 @@ struct OptionalPresenceOnlyRender {
     enabled: Option<bool>,
 }
 
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config", deny_unknown)]
+struct PathConfig {
+    #[kdl(path = "app.http")]
+    port: u32,
+}
+
+#[test]
+fn path_re_roots_relative() {
+    let parsed = parse_named::<PathConfig>(
+        "config { app { http port=8080 } }",
+        "config",
+    )
+    .unwrap();
+    assert_eq!(parsed.port, 8080);
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct AbsolutePathRoot {
+    #[kdl(child)]
+    app: AppStub,
+    #[kdl(child)]
+    child: AbsolutePathChild,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "app")]
+struct AppStub {
+    #[kdl(child)]
+    http: HttpStub,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "http")]
+struct HttpStub {
+    #[kdl(attr)]
+    port: u32,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "child")]
+struct AbsolutePathChild {
+    #[kdl(path = "/app.http", attr)]
+    port: u32,
+}
+
+#[test]
+fn path_absolute_uses_root() {
+    let parsed = parse_named::<AbsolutePathRoot>(
+        "config {\n  app { http port=8080 }\n  child {}\n}",
+        "config",
+    )
+    .unwrap();
+    assert_eq!(parsed.child.port, 8080);
+}
+
 #[test]
 fn presence_only_optional_renders_only_positive_flag() {
     let rendered = kdl_config::to_kdl(

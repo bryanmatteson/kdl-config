@@ -50,6 +50,7 @@ If `keyed` is explicitly set, flags are not considered unless `flag` is also set
 
 **Field-Level Modifiers**
 - `#[kdl(name = "custom-key")]` or `#[kdl(rename = "custom-key")]`: override KDL key name.
+- `#[kdl(path = "a.b.c")]`: re-root decoding at the child path (relative by default). Use a leading `/` for absolute paths (e.g., `"/app.http"`). Rendering is unchanged (path is decode-only).
 - `#[kdl(container = "custom-container")]`: override the container node name for `registry` fields (the repeated node name).
 - `#[kdl(required)]` or `#[kdl(optional)]`: override required-ness.
 - `#[kdl(default)]`, `#[kdl(default = "...")]`, `#[kdl(default_fn = "path")]`: default value.
@@ -319,49 +320,291 @@ Rules:
 - Multiple children: repeated `key { ... }` into `Vec<T>`.
 - Registry: repeated `<container> <key> { ... }` into `HashMap<String, T>` or `Vec<(String, T)>` (only when `#[kdl(registry)]` is set).
 
-## Templates and Use
+## Fragment Mechanics (kdl_config layer)
 
-Templates use KDL’s native **type annotation** syntax:
+Fragments are a kdl_config–level primitive resolved before application parsing. They provide reusable, optionally typed configuration templates that may either:
+- insert nodes into a target block, or
+- merge/flatten into the target node itself.
+
+Fragments are expanded away entirely before `#[derive(Kdl)]` parsing.
+The application never sees `fragment`, `use`, or patch nodes.
+
+**Overview**
 
 ```
-(source)template "code" {
-  chunking max-size=1500
-  enrichment enabled
+fragment "name" {
+  <insert-node>*
+  <merge-patch>*
+}
+
+<target-node> {
+  use "name"
+  ...
 }
 ```
 
-This means: a `template` node typed as `source` with a template name `"code"`.
+- Insert nodes are normal KDL nodes and are inserted as children.
+- Merge patches are nodes whose names begin with `~` and are flattened into the target node using deep-merge semantics.
+- Insert and merge may coexist in the same fragment.
+- Overrides at the use site always win.
 
-**Template Rules**
-- Templates must use a type annotation: `(type)template "name"`.
-- Templates accept a **single string argument** (the template name).
-- Templates do **not** accept attributes or modifiers.
-- Templates may appear:
-  - At the document top level.
-  - As children of the single root node (when the document has exactly one non-template top-level node).
-- Template definitions are removed before parsing and stored in a registry.
+**Fragment Definition**
 
-**Use Rules**
-- A `use` node references a template by name: `use "code"`.
-- `use` accepts a **single string argument**.
-- `use` does **not** accept attributes, children, or modifiers.
-- `use` must be a child of a parent node (never top-level).
-
-**Expansion / Validation**
-- Each `use` node is replaced **in place** with the template’s children.
-- The template’s **type annotation** must match the parent context:
-  - If the parent node has a type annotation, compare to that.
-  - Otherwise compare to the parent node name.
-- Errors are raised for unknown templates, duplicate template names, invalid forms, or type mismatches.
-- Template recursion is rejected.
-
-Example type mismatch:
 ```
-(source)template "code" { ... }
-vectors "default" {
-  use "code" // ERROR: template type is "source", parent is "vectors"
+fragment "<fragment-name>" {
+  <fragment-entry>*
 }
 ```
+
+- `<fragment-name>` must be a string.
+- Type annotations on fragment nodes are optional:
+  - `(source)fragment "code"` explicitly types the fragment and validates uses against that type.
+  - `fragment "code"` is implicitly typed on first use and must match subsequent uses.
+- Fragments may appear at top-level or inside other nodes (lexical scoping optional).
+- Fragments are removed from the document after expansion.
+
+**Fragment Entries**
+
+A fragment may contain two kinds of entries:
+- Insert nodes — normal nodes (no modifier)
+- Merge patches — nodes whose name begins with `~`
+
+**Insert Nodes (no flatten)**
+
+Insert nodes are copied verbatim into the target node’s body.
+
+```
+fragment "qdrant-hnsw" {
+  hnsw {
+    ef 128
+    m 16
+    ef-search 128
+  }
+}
+
+vectors "production" qdrant {
+  use "qdrant-hnsw"
+}
+```
+
+Expansion result:
+```
+vectors "production" qdrant {
+  hnsw {
+    ef 128
+    m 16
+    ef-search 128
+  }
+}
+```
+
+Rules:
+- Insert nodes are appended as children in the order they appear.
+- Insert nodes must be valid children under the target node’s schema.
+- Invalid insertions are a schema error.
+- Insert nodes do not merge with existing children unless the application’s schema allows it later.
+
+Insert nodes are ideal for:
+- `hnsw { ... }`
+- `language "rust" { ... }`
+- `crawler { ... }`
+- any block that naturally belongs inside the target.
+
+**Merge Patches (`~` — flatten semantics)**
+
+Merge patches are nodes whose name begins with `~`. They do not insert a child node. Instead, they merge into the target node itself.
+
+```
+fragment "local-defaults" {
+  ~source local {
+    chunking { max-size 1500; overlap 200 }
+    enrichment { symbols; hover; definitions }
+    embed "code-model"
+  }
+}
+```
+
+Applied to:
+```
+source "app" local "." {
+  use "local-defaults"
+}
+```
+
+Expansion result:
+```
+source "app" local "." {
+  chunking { max-size 1500; overlap 200 }
+  enrichment { symbols; hover; definitions }
+  embed "code-model"
+}
+```
+
+**Patch Syntax**
+
+```
+~<target-node> [<discriminator>] [<attrs...>] { <children...> }
+```
+
+- `<target-node>`: base node name (e.g. `source`, `embed`, `vectors`)
+- `<discriminator>` (optional): matched against the target’s discriminator
+- Patch attrs and children describe what to merge
+
+Examples:
+```
+~source local { ... }
+~source git { ... }
+~vectors qdrant { ... }
+~embed onnx { ... }
+~search { limit 20 }
+```
+
+**Patch Matching Rules**
+
+When expanding `use "<fragment>"` inside a target node `N`:
+1. Collect merge patches where:
+   - `patch.target_node == N.name`
+2. Among those:
+   - Prefer an exact discriminator match
+
+```
+~source local  // matches source ... local ...
+```
+
+   - Otherwise allow a fallback patch with no discriminator:
+
+```
+~source { ... }
+```
+
+3. Errors:
+   - More than one equally-specific match → error
+   - No matching patch → no merge occurs (insert nodes may still apply)
+
+This allows fragments like:
+```
+fragment "code" {
+  ~source local { ... }
+  ~source git { ... }
+  language "rust" { server "rust-analyzer" }
+}
+```
+
+**Merge Semantics (`~`)**
+
+Merge patches flatten into the target node using deep merge rules equivalent to Layer:
+
+Header:
+- Patch attributes merge into target attributes (last-wins).
+- Patch positional args:
+  - Not allowed by default (too ambiguous).
+  - If enabled later, must use explicit selector rules.
+
+Children are merged recursively:
+
+| Type | Behavior |
+| --- | --- |
+| Scalar | Last wins |
+| Vec&lt;T&gt; | Append if conflict = append, else last |
+| Struct | Recursive merge |
+| Registry | Merge by key, last wins |
+
+Order of application within a target node:
+1. Apply merge patch (`~`)
+2. Insert insert-nodes
+3. Apply use-site overrides (attrs + children)
+4. Existing node content remains; later content wins
+
+This preserves read-as-written semantics.
+
+**Overrides at the use Site**
+
+`use` may carry overrides in both attribute and child forms.
+
+```
+source "generated" local "./generated" {
+  use "local-defaults" no-enrichment chunking.max-size=500
+}
+```
+
+Attribute expansion:
+- `chunking.max-size=500` → `chunking { max-size 500 }`
+- `embed="prose-model"` → `embed "prose-model"`
+- `no-enrichment` → child flag node
+
+Overrides are expanded before merging and always win over fragment content.
+
+**Combined Example (Insert + Merge)**
+
+```
+fragment "code" {
+  // Insert
+  language "rust" { server "rust-analyzer" }
+
+  // Merge
+  ~source local {
+    chunking { max-size 1500; overlap 200 }
+    enrichment { symbols; hover; definitions }
+    embed "code-model"
+  }
+
+  ~source git {
+    chunking { max-size 1500; overlap 200 }
+    enrichment { symbols; hover; definitions }
+    embed "code-model"
+  }
+}
+
+source "app" local "." {
+  use "code"
+  include "src/**"
+}
+```
+
+Result:
+```
+source "app" local "." {
+  language "rust" { server "rust-analyzer" }
+  chunking { max-size 1500; overlap 200 }
+  enrichment { symbols; hover; definitions }
+  embed "code-model"
+  include "src/**"
+}
+```
+
+**IDE & Schema Integration**
+
+Because merge patches are typed nodes (`~source local { ... }`), IDEs can:
+- Validate children against the correct schema
+- Offer autocomplete inside fragment bodies
+- Reject invalid insertions early
+
+Suggested schema model:
+- fragment children:
+  - normal nodes allowed under any target
+  - patch nodes `~<node>` validated as `<node>` schema
+- `use "<name>"`:
+  - context-aware suggestions based on available fragments
+  - error if no matching patch or valid insert applies
+
+**Error Cases**
+
+Errors must include both definition and use locations.
+
+| Error | Description |
+| --- | --- |
+| Unknown fragment | `use "missing"` |
+| Duplicate patch | Two `~source local` patches |
+| Invalid insert | Insert node not allowed under target schema |
+| Circular fragment | Fragments reference each other |
+
+**Summary**
+- Insert nodes = structural reuse
+- `~` merge patches = flatten + override
+- Typed, schema-aware, IDE-friendly
+- No new KDL syntax
+- No runtime indirection
+- Aligns with Layer semantics
 
 ## Signals / Modifiers
 
@@ -369,6 +612,7 @@ Node names may be prefixed with a modifier signal:
 - `+name`: append semantics
 - `-name`: remove semantics
 - `!name`: replace semantics
+- `~name`: flatten semantics (merge the node’s contents into the target)
 
 These modifiers are accepted on any node (top-level, child, registry entry). For field matching, the prefix is stripped and the base name is used. The modifier is preserved on the parsed node for downstream merge logic.
 
@@ -485,13 +729,15 @@ Flag style expansion:
 
 Use `#[kdl(render = "attr" | "value" | "child" | "children" | "registry")]` to override per field.
 
-### Template-Aware Updates
+### Fragment-Aware Updates
 
-Round-trip parsing preserves `template` and `use` nodes. When rendering updates:
-- The default update path may emit **explicit overrides** (expanded children) and keep templates unchanged.
-- A **template-aware** update mode can be used to push changes back into template definitions when it is safe:
-  - If **all uses** of a template result in identical updated children, the template definition is updated.
-  - Otherwise the template remains unchanged and per-use overrides are emitted after the `use` node.
+Round-trip parsing preserves `fragment` and `use` nodes. When rendering updates:
+- The default update path may emit **explicit overrides** (expanded children) and keep fragments unchanged.
+- A **fragment-aware** update mode can be used to push changes back into fragment definitions when it is safe:
+  - If **all uses** of a fragment result in identical updated children, the fragment definition is updated.
+  - Otherwise the fragment remains unchanged and per-use overrides are emitted after the `use` node.
+- If `use` overrides are supported, they are treated as **local** and remain after the `use` node.
+- Attribute overrides on `use` nodes are preserved when possible and updated from the expanded override view.
 
 ## Examples
 
@@ -560,7 +806,10 @@ Notes:
 - Union types can generate `choice` schemas for alternative value types.
 - Schema outputs may use `type=[...]` to express multiple scalar types (e.g., duration values).
 - Schema outputs may include a `type_annotation` block to describe required or allowed type annotations.
-- The `template` node schema uses a required `type_annotation` and resolves its child schema using the referenced definition(s).
+- Fragment schemas should:
+  - allow both insert nodes and `~` patch nodes as children,
+  - validate patch nodes against the referenced target schema, and
+  - support context-aware validation for `use "<name>"` within a target node.
 
 ## Notes
 

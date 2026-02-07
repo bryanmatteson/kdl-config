@@ -1,5 +1,7 @@
 use crate::config::ParseConfig;
+use crate::node_ext::KdlNodeExt;
 use crate::node_path::NodePath;
+use crate::KdlNode;
 use crate::types::NodeLocation;
 
 #[derive(Debug, Clone)]
@@ -58,6 +60,8 @@ pub struct DecodeContext<'a> {
     pub config: &'a ParseConfig,
     pub source: Option<&'a Source>,
     pub path: Option<NodePath>,
+    pub root: Option<&'a KdlNode>,
+    pub root_path: Option<NodePath>,
     pub allow_any_name: bool,
 }
 
@@ -67,15 +71,32 @@ impl<'a> DecodeContext<'a> {
             config,
             source,
             path: None,
+            root: None,
+            root_path: None,
             allow_any_name: false,
         }
     }
 
     pub fn with_root(&self, name: impl Into<String>, index: usize) -> Self {
+        let path = NodePath::root(name, index);
         Self {
             config: self.config,
             source: self.source,
-            path: Some(NodePath::root(name, index)),
+            path: Some(path.clone()),
+            root: self.root,
+            root_path: Some(path),
+            allow_any_name: self.allow_any_name,
+        }
+    }
+
+    pub fn with_root_node(&self, node: &'a KdlNode, index: usize) -> Self {
+        let path = NodePath::root(node.name_str(), index);
+        Self {
+            config: self.config,
+            source: self.source,
+            path: Some(path.clone()),
+            root: Some(node),
+            root_path: Some(path),
             allow_any_name: self.allow_any_name,
         }
     }
@@ -89,6 +110,19 @@ impl<'a> DecodeContext<'a> {
             config: self.config,
             source: self.source,
             path,
+            root: self.root,
+            root_path: self.root_path.clone(),
+            allow_any_name: self.allow_any_name,
+        }
+    }
+
+    pub fn with_path(&self, path: NodePath) -> Self {
+        Self {
+            config: self.config,
+            source: self.source,
+            path: Some(path),
+            root: self.root,
+            root_path: self.root_path.clone(),
             allow_any_name: self.allow_any_name,
         }
     }
@@ -98,6 +132,8 @@ impl<'a> DecodeContext<'a> {
             config: self.config,
             source: self.source,
             path: self.path.clone(),
+            root: self.root,
+            root_path: self.root_path.clone(),
             allow_any_name: true,
         }
     }

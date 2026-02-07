@@ -28,6 +28,7 @@ pub struct FieldInfo {
     pub is_scalar: bool,
     pub is_skipped: bool,
     pub flatten: bool,
+    pub path: Option<super::field::FieldPath>,
     pub map_node: Option<String>,
     pub children_map_kind: Option<ChildrenMapKind>,
     pub collection: Option<CollectionSpec>,
@@ -76,10 +77,14 @@ impl FieldInfo {
         let err_span = attrs.span;
 
         // Validate tuple field restrictions
-        if attrs.name.is_some() || attrs.container.is_some() || attrs.select.is_some() {
+        if attrs.name.is_some()
+            || attrs.container.is_some()
+            || attrs.select.is_some()
+            || attrs.path.is_some()
+        {
             return Err(syn::Error::new(
                 err_span,
-                "tuple struct fields only support positional placement without names or selectors",
+                "tuple struct fields only support positional placement without names, paths, or selectors",
             ));
         }
         if attrs.children_map || attrs.map_node.is_some() {
@@ -198,6 +203,7 @@ impl FieldInfo {
             is_scalar,
             is_skipped: attrs.skip,
             flatten: false,
+            path: None,
             map_node: None,
             children_map_kind: None,
             collection: None,
@@ -297,6 +303,7 @@ impl FieldInfo {
             is_scalar,
             is_skipped: attrs.skip,
             flatten: attrs.flatten,
+            path: attrs.path,
             map_node: attrs.map_node,
             children_map_kind: extract_children_map_types(&ty).map(|(kind, _, _)| kind),
             collection,
@@ -354,13 +361,23 @@ impl FieldInfo {
                     "flatten cannot be combined with explicit placement",
                 ));
             }
-            if attrs.container.is_some() || attrs.map_node.is_some() || attrs.select.is_some()
+            if attrs.container.is_some()
+                || attrs.map_node.is_some()
+                || attrs.select.is_some()
+                || attrs.path.is_some()
             {
                 return Err(syn::Error::new(
                     err_span,
-                    "flatten cannot be combined with container, map_node, or selector options",
+                    "flatten cannot be combined with container, map_node, selector, or path options",
                 ));
             }
+        }
+
+        if attrs.path.is_some() && attrs.placement.modifier {
+            return Err(syn::Error::new(
+                err_span,
+                "path cannot be combined with modifier placement",
+            ));
         }
 
         // Value placement validation

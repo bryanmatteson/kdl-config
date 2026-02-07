@@ -437,6 +437,15 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
                 raw.container = Some(s.value());
             }
         }
+        Some("path") => {
+            let value: Expr = meta.value()?.parse()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = value
+            {
+                raw.path = Some(super::field::FieldPath::parse(&s.value(), s.span())?);
+            }
+        }
         Some("children_map") => raw.children_map = true,
         Some("map_node") => {
             let value: Expr = meta.value()?.parse()?;

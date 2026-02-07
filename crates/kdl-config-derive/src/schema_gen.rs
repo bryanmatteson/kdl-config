@@ -175,6 +175,7 @@ struct SchemaParts {
     prop_inserts: Vec<TokenStream>,
     value_entries: Vec<(usize, TokenStream)>,
     child_inserts: Vec<TokenStream>,
+    path_inserts: Vec<TokenStream>,
     flatten_inserts: Vec<TokenStream>,
 }
 
@@ -224,6 +225,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
     let mut prop_inserts = Vec::new();
     let mut value_entries: Vec<(usize, TokenStream)> = Vec::new();
     let mut child_inserts = Vec::new();
+    let mut path_inserts = Vec::new();
     let mut register_calls = Vec::new();
     let mut flatten_inserts = Vec::new();
 
@@ -501,6 +503,25 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             });
             continue;
         }
+        let has_path = field.path.is_some();
+        let mut local_prop_inserts = Vec::new();
+        let mut local_value_entries: Vec<(usize, TokenStream)> = Vec::new();
+        let mut local_child_inserts = Vec::new();
+        let prop_inserts_target = if has_path {
+            &mut local_prop_inserts
+        } else {
+            &mut prop_inserts
+        };
+        let value_entries_target = if has_path {
+            &mut local_value_entries
+        } else {
+            &mut value_entries
+        };
+        let child_inserts_target = if has_path {
+            &mut local_child_inserts
+        } else {
+            &mut child_inserts
+        };
         let required = field.schema.resolved_required().unwrap_or(field.required);
         let bool_mode = field
             .bool_mode
@@ -565,6 +586,8 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             });
         }
 
+        let mut handled = false;
+
         if matches!(
             field.collection.as_ref().map(|spec| &spec.mode),
             Some(CollectionMode::Registry { .. })
@@ -584,14 +607,14 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 .map(|spec| &spec.selector)
                 .unwrap_or(&default_selector);
             let key_schema = selector_key_schema_expr(selector);
-            child_inserts.push(registry_child_insert(
+            child_inserts_target.push(registry_child_insert(
                 val_ty,
                 &container,
                 key_schema,
                 required,
                 desc_expr.clone(),
             ));
-            continue;
+            handled = true;
         }
 
         if matches!(
@@ -618,7 +641,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 Some(CollectionMode::ChildrenMapAll) => ("*".to_string(), None, None),
                 _ => ("*".to_string(), None, None),
                 };
-            child_inserts.push(children_map_child_insert(
+            child_inserts_target.push(children_map_child_insert(
                 val_ty,
                 key_ty,
                 &node_name,
@@ -626,6 +649,25 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 required,
                 desc_expr.clone(),
             ));
+            handled = true;
+        }
+
+        if handled {
+            if has_path {
+                let path = field
+                    .path
+                    .as_ref()
+                    .expect("handled path field must have path");
+                let leaf_parts = SchemaParts {
+                    register_calls: Vec::new(),
+                    prop_inserts: local_prop_inserts,
+                    value_entries: local_value_entries,
+                    child_inserts: local_child_inserts,
+                    path_inserts: Vec::new(),
+                    flatten_inserts: Vec::new(),
+                };
+                path_inserts.push(wrap_path_insert(&path.segments, required, leaf_parts));
+            }
             continue;
         }
 
@@ -641,7 +683,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         if has_explicit {
             if field.placement.attr || field.placement.keyed {
                 let variadic = field.is_vec || field.is_option_vec;
-                prop_inserts.push(prop_insert(
+                prop_inserts_target.push(prop_insert(
                     type_expr.clone(),
                     &kdl_key,
                     variadic,
@@ -653,13 +695,13 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 ));
             }
             if let Some(index) = field.placement.positional {
-                value_entries.push((
+                value_entries_target.push((
                     index,
                     value_insert(type_expr.clone(), required, desc_expr.clone()),
                 ));
             }
             if field.placement.positional_list {
-                value_entries.push((
+                value_entries_target.push((
                     0,
                     value_insert(type_expr.clone(), required, desc_expr.clone()),
                 ));
@@ -668,7 +710,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 match field_kind(field) {
                     SchemaFieldKind::Value => {
                         let variadic = field.is_vec || field.is_option_vec;
-                        child_inserts.push(value_child_insert(
+                        child_inserts_target.push(value_child_insert(
                             type_expr.clone(),
                             &kdl_key,
                             variadic,
@@ -677,7 +719,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                             desc_expr.clone(),
                         ));
                     }
-                    SchemaFieldKind::Node => child_inserts.push(node_child_insert(
+                    SchemaFieldKind::Node => child_inserts_target.push(node_child_insert(
                         ty,
                         &kdl_key,
                         required,
@@ -692,7 +734,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 } else {
                     kdl_key.clone()
                 };
-                child_inserts.push(node_child_insert(
+                child_inserts_target.push(node_child_insert(
                     ty,
                     &node_name,
                     required,
@@ -704,7 +746,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 SchemaFieldKind::Value => match default_placement {
                     DefaultPlacement::Exhaustive => {
                         let variadic = field.is_vec || field.is_option_vec;
-                        prop_inserts.push(prop_insert(
+                        prop_inserts_target.push(prop_insert(
                             type_expr.clone(),
                             &kdl_key,
                             variadic,
@@ -715,7 +757,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                             desc_expr.clone(),
                         ));
                         let variadic = field.is_vec || field.is_option_vec;
-                        child_inserts.push(value_child_insert(
+                        child_inserts_target.push(value_child_insert(
                             type_expr.clone(),
                             &kdl_key,
                             variadic,
@@ -726,7 +768,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                     }
                     DefaultPlacement::Attr => {
                         let variadic = field.is_vec || field.is_option_vec;
-                        prop_inserts.push(prop_insert(
+                        prop_inserts_target.push(prop_insert(
                             type_expr.clone(),
                             &kdl_key,
                             variadic,
@@ -739,7 +781,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                     }
                     DefaultPlacement::Value | DefaultPlacement::Child => {
                         let variadic = field.is_vec || field.is_option_vec;
-                        child_inserts.push(value_child_insert(
+                        child_inserts_target.push(value_child_insert(
                             type_expr.clone(),
                             &kdl_key,
                             variadic,
@@ -751,7 +793,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 },
                 SchemaFieldKind::Node => match default_placement {
                     DefaultPlacement::Exhaustive | DefaultPlacement::Child => {
-                        child_inserts.push(node_child_insert(
+                        child_inserts_target.push(node_child_insert(
                             ty,
                             &kdl_key,
                             required,
@@ -765,6 +807,22 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 }
             }
         }
+
+        if has_path {
+            let path = field
+                .path
+                .as_ref()
+                .expect("path field must have path");
+            let leaf_parts = SchemaParts {
+                register_calls: Vec::new(),
+                prop_inserts: local_prop_inserts,
+                value_entries: local_value_entries,
+                child_inserts: local_child_inserts,
+                path_inserts: Vec::new(),
+                flatten_inserts: Vec::new(),
+            };
+            path_inserts.push(wrap_path_insert(&path.segments, required, leaf_parts));
+        }
     }
 
     SchemaParts {
@@ -772,6 +830,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         prop_inserts,
         value_entries,
         child_inserts,
+        path_inserts,
         flatten_inserts,
     }
 }
@@ -793,6 +852,7 @@ fn collect_schema_parts_with_offset(
 fn render_schema_parts(parts: &SchemaParts) -> TokenStream {
     let prop_inserts = &parts.prop_inserts;
     let child_inserts = &parts.child_inserts;
+    let path_inserts = &parts.path_inserts;
     let flatten_inserts = &parts.flatten_inserts;
     let mut value_entries = parts.value_entries.clone();
     value_entries.sort_by_key(|(idx, _)| *idx);
@@ -808,10 +868,60 @@ fn render_schema_parts(parts: &SchemaParts) -> TokenStream {
         // Children
         let mut children_nodes: Option<::kdl_config::schema::ChildrenSchema> = None;
         #(#child_inserts)*
+        #(#path_inserts)*
         schema.children = children_nodes.map(Box::new);
 
         // Flatten
         #(#flatten_inserts)*
+    }
+}
+
+fn wrap_path_insert(path: &[String], required: bool, leaf_parts: SchemaParts) -> TokenStream {
+    let leaf_body = render_schema_parts(&leaf_parts);
+    let last = path
+        .last()
+        .expect("path must contain at least one segment");
+    let parents: Vec<&String> = path.iter().take(path.len().saturating_sub(1)).collect();
+    let required_assign = if required {
+        quote! { node_schema.required = Some(true); }
+    } else {
+        quote! {}
+    };
+    let leaf_required_assign = if required {
+        quote! { schema.required = Some(true); }
+    } else {
+        quote! {}
+    };
+
+    quote! {
+        {
+            let mut current = {
+                let mut schema = ::kdl_config::schema::KdlNodeSchema::default();
+                #leaf_body
+                schema.name = Some(#last.to_string());
+                #leaf_required_assign
+                schema
+            };
+            #(
+                {
+                    let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
+                    node_schema.name = Some(#parents.to_string());
+                    #required_assign
+                    node_schema.children = Some(::std::boxed::Box::new(
+                        ::kdl_config::schema::ChildrenSchema {
+                            nodes: vec![::kdl_config::schema::SchemaRef::Inline(current)],
+                        },
+                    ));
+                    current = node_schema;
+                }
+            )*
+            if children_nodes.is_none() {
+                children_nodes = Some(::kdl_config::schema::ChildrenSchema { nodes: vec![] });
+            }
+            if let Some(c) = &mut children_nodes {
+                c.nodes.push(::kdl_config::schema::SchemaRef::Inline(current));
+            }
+        }
     }
 }
 

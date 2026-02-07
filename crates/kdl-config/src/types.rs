@@ -14,6 +14,7 @@ pub enum Modifier {
     Replace,
     Append,
     Remove,
+    Flatten,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -466,6 +467,19 @@ impl Node {
                     child.modifier = Modifier::Inherit;
                 }
                 self.children.push(child);
+            }
+            Modifier::Flatten => {
+                if let Some(existing) = self.children.iter_mut().find(|c| c.name == child.name) {
+                    if matches!(policy, MergeModifierPolicy::Consume) {
+                        child.modifier = Modifier::Inherit;
+                    }
+                    existing.merge_with(child, policy);
+                } else {
+                    if matches!(policy, MergeModifierPolicy::Consume) {
+                        child.modifier = Modifier::Inherit;
+                    }
+                    self.children.push(child);
+                }
             }
             Modifier::Inherit => {
                 if let Some(existing) = self.children.iter_mut().find(|c| c.name == child.name) {

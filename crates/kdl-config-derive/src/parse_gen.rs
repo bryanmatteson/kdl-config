@@ -262,6 +262,119 @@ fn generate_field_overrides(field: &FieldInfo) -> TokenStream {
     }
 }
 
+fn path_claims_shadow(field: &FieldInfo) -> TokenStream {
+    if field.path.is_some() {
+        quote! { let mut claims = ::kdl_config::helpers::Claims::new(); }
+    } else {
+        quote! {}
+    }
+}
+
+fn path_parent_claims(field: &FieldInfo) -> TokenStream {
+    let path = match field.path.as_ref() {
+        Some(path) => path,
+        None => return quote! {},
+    };
+    let first = path.segments.first().expect("path requires at least one segment");
+    let claim_block = if path.absolute {
+        quote! {
+            if let Some(root) = ctx.root {
+                if ::core::ptr::eq(root, node) {
+                    for (idx, child) in node.iter_children().enumerate() {
+                        if child.name_str() == #first {
+                            claims.claim_child(idx);
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {
+            for (idx, child) in node.iter_children().enumerate() {
+                if child.name_str() == #first {
+                    claims.claim_child(idx);
+                }
+            }
+        }
+    };
+
+    quote! {
+        if struct_config.deny_unknown {
+            #claim_block
+        }
+    }
+}
+
+fn wrap_path_scan(
+    field: &FieldInfo,
+    struct_name: &str,
+    field_name: &str,
+    kdl_key: &str,
+    scan_block: TokenStream,
+) -> TokenStream {
+    let path = match field.path.as_ref() {
+        Some(path) => path,
+        None => return scan_block,
+    };
+
+    let path_candidates_ident = format_ident!("__kdl_path_candidates_{}", field.ident);
+    let path_candidate_ident = format_ident!("__kdl_path_candidate_{}", field.ident);
+    let path_ctx_ident = format_ident!("__kdl_path_ctx_{}", field.ident);
+    let path_segments: Vec<TokenStream> = path
+        .segments
+        .iter()
+        .map(|segment| quote! { #segment })
+        .collect();
+    let path_segments_expr = quote! { &[#(#path_segments),*] };
+    let path_raw = &path.raw;
+
+    let resolve_expr = if path.absolute {
+        quote! {
+            if let (Some(root), Some(root_path)) = (ctx.root, ctx.root_path.as_ref()) {
+                ::kdl_config::helpers::resolve_path_candidates(root, Some(root_path), #path_segments_expr)
+            } else {
+                return Err(::kdl_config::KdlConfigError {
+                    struct_name: #struct_name.to_string(),
+                    field_name: Some(#field_name.to_string()),
+                    kdl_key: Some(#kdl_key.to_string()),
+                    placement: ::kdl_config::Placement::Unknown,
+                    required: false,
+                    kind: ::kdl_config::ErrorKind::Custom(format!(
+                        "absolute path '{}' requires root context",
+                        #path_raw
+                    )),
+                    node_path: None,
+                    location: None,
+                });
+            }
+        }
+    } else {
+        quote! {
+            ::kdl_config::helpers::resolve_path_candidates(node, ctx.path.as_ref(), #path_segments_expr)
+        }
+    };
+
+    quote! {
+        let #path_candidates_ident = { #resolve_expr };
+        for #path_candidate_ident in #path_candidates_ident {
+            let node = #path_candidate_ident.node;
+            let #path_ctx_ident = if let Some(ref path) = #path_candidate_ident.path {
+                ctx.with_path(path.clone())
+            } else {
+                ctx.clone()
+            };
+            let ctx = &#path_ctx_ident;
+            let __kdl_scan_result: ::core::result::Result<(), ::kdl_config::KdlConfigError> = (|| {
+                #scan_block
+                Ok(())
+            })();
+            if let Err(err) = __kdl_scan_result {
+                return Err(err.with_context(ctx.source, ctx.path.as_ref(), Some(node.span().offset())));
+            }
+        }
+    }
+}
+
 fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
     let _ = field;
     quote! {}
@@ -270,6 +383,11 @@ fn generate_usage_marks(field: &FieldInfo) -> TokenStream {
 pub(crate) fn generate_skip_marks(field: &FieldInfo, struct_name: &str) -> TokenStream {
     if field.is_modifier {
         return quote! {};
+    }
+
+    if let Some(path) = field.path.as_ref() {
+        let _ = path;
+        return path_parent_claims(field);
     }
 
     let key = field.kdl_key.clone();
@@ -551,23 +669,9 @@ fn generate_value_scalar_parser(
         quote! { val }
     };
 
-    quote! {
-        #mark_usage
-        let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
-        let custom_pos = #custom_pos_expr;
-        let custom_neg = #custom_neg_expr;
-        let pos_index = #pos_index_expr;
-        let has_placement = #allow_attr_keyed || #allow_value || pos_index.is_some() || #allow_attr_positional_list || #allow_flags;
-
-        enum #source_ident {
-            AttrKeyed,
-            Arg(usize),
-            Flag(Vec<usize>),
-            Child(usize),
-        }
-
-        let mut #candidates_ident: ::std::vec::Vec<(#value_ty, #source_ident)> = ::std::vec::Vec::new();
-
+    let parent_claims = path_parent_claims(field);
+    let claims_shadow = path_claims_shadow(field);
+    let scan_block = quote! {
         let flags_allowed = if has_placement {
             #allow_flags
         } else {
@@ -1014,58 +1118,84 @@ fn generate_value_scalar_parser(
                 }
             }
         }
+    };
 
-        let selected = match field_config.conflict {
-            ::kdl_config::ConflictPolicy::Error => {
-                if #candidates_ident.len() > 1 {
-                    return Err(::kdl_config::KdlConfigError::ambiguous(
-                        #struct_name,
-                        #field_name,
-                        #kdl_key,
-                        ::kdl_config::Placement::Unknown,
-                        "multiple candidates for scalar field",
-                    ));
-                }
-                #candidates_ident.pop()
-            }
-            ::kdl_config::ConflictPolicy::First => {
-                if #candidates_ident.is_empty() {
-                    None
-                } else {
-                    Some(#candidates_ident.remove(0))
-                }
-            }
-            ::kdl_config::ConflictPolicy::Last => #candidates_ident.pop(),
-            ::kdl_config::ConflictPolicy::Append => {
-                return Err(::kdl_config::KdlConfigError::incompatible_placement(
-                    #struct_name,
-                    #field_name,
-                    "append conflict policy is not supported for scalar fields",
-                ));
-            }
-        };
+    let scan_block = wrap_path_scan(field, struct_name, &field_name, kdl_key, scan_block);
 
-        let #field_ident: #ty = if let Some((val, source)) = selected {
-            match source {
-                #source_ident::AttrKeyed => {
-                    claims.claim_attr(#kdl_key);
+    quote! {
+        #mark_usage
+        let #field_ident: #ty = {
+            #parent_claims
+            #claims_shadow
+            let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
+            let custom_pos = #custom_pos_expr;
+            let custom_neg = #custom_neg_expr;
+            let pos_index = #pos_index_expr;
+            let has_placement = #allow_attr_keyed || #allow_value || pos_index.is_some() || #allow_attr_positional_list || #allow_flags;
+
+            enum #source_ident {
+                AttrKeyed,
+                Arg(usize),
+                Flag(Vec<usize>),
+                Child(usize),
+            }
+
+            let mut #candidates_ident: ::std::vec::Vec<(#value_ty, #source_ident)> = ::std::vec::Vec::new();
+
+            #scan_block
+
+            let selected = match field_config.conflict {
+                ::kdl_config::ConflictPolicy::Error => {
+                    if #candidates_ident.len() > 1 {
+                        return Err(::kdl_config::KdlConfigError::ambiguous(
+                            #struct_name,
+                            #field_name,
+                            #kdl_key,
+                            ::kdl_config::Placement::Unknown,
+                            "multiple candidates for scalar field",
+                        ));
+                    }
+                    #candidates_ident.pop()
                 }
-                #source_ident::Arg(idx) => {
-                    claims.claim_arg(idx);
-                }
-                #source_ident::Flag(indices) => {
-                    for idx in indices {
-                        claims.claim_arg(idx);
+                ::kdl_config::ConflictPolicy::First => {
+                    if #candidates_ident.is_empty() {
+                        None
+                    } else {
+                        Some(#candidates_ident.remove(0))
                     }
                 }
-                #source_ident::Child(idx) => {
-                    claims.claim_child(idx);
+                ::kdl_config::ConflictPolicy::Last => #candidates_ident.pop(),
+                ::kdl_config::ConflictPolicy::Append => {
+                    return Err(::kdl_config::KdlConfigError::incompatible_placement(
+                        #struct_name,
+                        #field_name,
+                        "append conflict policy is not supported for scalar fields",
+                    ));
                 }
+            };
+
+            if let Some((val, source)) = selected {
+                match source {
+                    #source_ident::AttrKeyed => {
+                        claims.claim_attr(#kdl_key);
+                    }
+                    #source_ident::Arg(idx) => {
+                        claims.claim_arg(idx);
+                    }
+                    #source_ident::Flag(indices) => {
+                        for idx in indices {
+                            claims.claim_arg(idx);
+                        }
+                    }
+                    #source_ident::Child(idx) => {
+                        claims.claim_child(idx);
+                    }
+                }
+                let val = val;
+                #finalize_value
+            } else {
+                #default_expr
             }
-            let val = val;
-            #finalize_value
-        } else {
-            #default_expr
         };
     }
 }
@@ -1118,14 +1248,9 @@ fn generate_value_vec_parser(
         quote! { val }
     };
 
-    quote! {
-        #mark_usage
-        let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
-        let mut #field_ident: ::core::option::Option<Vec<#elem_ty>> = None;
-
-        let pos_index = #pos_index_expr;
-        let has_placement = #allow_attr_keyed || #allow_value || pos_index.is_some() || #allow_attr_positional_list;
-
+    let parent_claims = path_parent_claims(field);
+    let claims_shadow = path_claims_shadow(field);
+    let scan_block = quote! {
         if !has_placement {
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive => {
@@ -1272,11 +1397,29 @@ fn generate_value_vec_parser(
                 }
             }
         }
+    };
 
-        let #field_ident: #ty = if let Some(val) = #field_ident {
-            #finalize_value
-        } else {
-            #default_expr
+    let scan_block = wrap_path_scan(field, struct_name, &field_name, kdl_key, scan_block);
+
+    quote! {
+        #mark_usage
+        let #field_ident: #ty = {
+            #parent_claims
+            #claims_shadow
+            let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
+            let mut #field_ident: ::core::option::Option<Vec<#elem_ty>> = None;
+
+            let pos_index = #pos_index_expr;
+            let has_placement = #allow_attr_keyed || #allow_value || pos_index.is_some() || #allow_attr_positional_list;
+
+            #scan_block
+
+            let #field_ident: #ty = if let Some(val) = #field_ident {
+                #finalize_value
+            } else {
+                #default_expr
+            };
+            #field_ident
         };
     }
 }
@@ -1389,13 +1532,9 @@ fn generate_node_parser(
         || field.placement.children_any
         || field.placement.value;
 
-    quote! {
-        #mark_usage
-        let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
-        let mut #field_ident: ::core::option::Option<#value_ty> = None;
-
-        let has_placement = #allow_child;
-
+    let parent_claims = path_parent_claims(field);
+    let claims_shadow = path_claims_shadow(field);
+    let scan_block = quote! {
         if !has_placement {
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
@@ -1436,11 +1575,28 @@ fn generate_node_parser(
         } else {
             #explicit_child_loop
         }
+    };
 
-        let #field_ident: #ty = if let Some(val) = #field_ident {
-            #finalize_value
-        } else {
-            #default_expr
+    let scan_block = wrap_path_scan(field, struct_name, &field_name, kdl_key, scan_block);
+
+    quote! {
+        #mark_usage
+        let #field_ident: #ty = {
+            #parent_claims
+            #claims_shadow
+            let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
+            let mut #field_ident: ::core::option::Option<#value_ty> = None;
+
+            let has_placement = #allow_child;
+
+            #scan_block
+
+            let #field_ident: #ty = if let Some(val) = #field_ident {
+                #finalize_value
+            } else {
+                #default_expr
+            };
+            #field_ident
         };
     }
 }
@@ -1575,13 +1731,9 @@ fn generate_node_vec_parser(
         quote! { val }
     };
 
-    quote! {
-        #mark_usage
-        let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
-        let mut #field_ident: ::core::option::Option<Vec<#elem_ty>> = None;
-
-        let has_placement = #allow_child;
-
+    let parent_claims = path_parent_claims(field);
+    let claims_shadow = path_claims_shadow(field);
+    let scan_block = quote! {
         if !has_placement {
             match field_config.default_placement {
                 ::kdl_config::DefaultPlacement::Exhaustive | ::kdl_config::DefaultPlacement::Child => {
@@ -1633,11 +1785,28 @@ fn generate_node_vec_parser(
                 #field_ident = Some(#values_ident);
             }
         }
+    };
 
-        let #field_ident: #ty = if let Some(val) = #field_ident {
-            #finalize_value
-        } else {
-            #default_expr
+    let scan_block = wrap_path_scan(field, struct_name, &field_name, kdl_key, scan_block);
+
+    quote! {
+        #mark_usage
+        let #field_ident: #ty = {
+            #parent_claims
+            #claims_shadow
+            let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
+            let mut #field_ident: ::core::option::Option<Vec<#elem_ty>> = None;
+
+            let has_placement = #allow_child;
+
+            #scan_block
+
+            let #field_ident: #ty = if let Some(val) = #field_ident {
+                #finalize_value
+            } else {
+                #default_expr
+            };
+            #field_ident
         };
     }
 }
@@ -2617,11 +2786,9 @@ fn generate_collection_parser(
         quote! {}
     };
 
-    quote! {
-        #mark_usage
-        let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
-        #field_init
-
+    let parent_claims = path_parent_claims(field);
+    let claims_shadow = path_claims_shadow(field);
+    let scan_block = quote! {
         for (child_index, #child_ident) in node.iter_children().enumerate() {
             #filter
             let child_ctx = ctx.with_child(#child_ident.name_str(), child_index);
@@ -2632,17 +2799,32 @@ fn generate_collection_parser(
             #map_insert
             claims.claim_child(child_index);
         }
+    };
 
-        if #required && #field_ident.is_empty() {
-            return Err(::kdl_config::KdlConfigError::missing_required(
-                #struct_name,
-                #field_name,
-                #missing_key,
-                #missing_placement,
-            ));
-        }
+    let scan_block = wrap_path_scan(field, struct_name, &field_name, kdl_key, scan_block);
 
-        #finalize_vec
+    quote! {
+        #mark_usage
+        let #field_ident: #ty = {
+            #parent_claims
+            #claims_shadow
+            let field_config = ::kdl_config::resolve_field(&struct_config, #field_overrides);
+            #field_init
+
+            #scan_block
+
+            if #required && #field_ident.is_empty() {
+                return Err(::kdl_config::KdlConfigError::missing_required(
+                    #struct_name,
+                    #field_name,
+                    #missing_key,
+                    #missing_placement,
+                ));
+            }
+
+            #finalize_vec
+            #field_ident
+        };
     }
 }
 
