@@ -5,9 +5,164 @@ use std::str::FromStr;
 use crate::schema::{KdlNodeSchema, KdlSchema, SchemaRef, SchemaRegistry, SchemaType, SchemaValue};
 use crate::{
     DecodeContext, FromKdlValue, KdlConfigError, KdlDecode, KdlNode, KdlNodeExt, KdlRender,
-    NodeRenderer, Placement, Value, convert_value_checked,
+    KdlUpdate, NodeRenderer, Placement, UpdateContext, Value, convert_value_checked,
 };
-use kdl::KdlValue;
+use kdl::{KdlEntry, KdlValue};
+
+/// Generic KDL-renderable scalar wrapper for map value nodes and other
+/// node-valued scalar shapes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct Scalar<T> {
+    pub value: T,
+}
+
+pub type ScalarString = Scalar<String>;
+pub type ScalarBool = Scalar<bool>;
+pub type ScalarI64 = Scalar<i64>;
+pub type ScalarI128 = Scalar<i128>;
+pub type ScalarI32 = Scalar<i32>;
+pub type ScalarU64 = Scalar<u64>;
+pub type ScalarU32 = Scalar<u32>;
+pub type ScalarUsize = Scalar<usize>;
+pub type ScalarF64 = Scalar<f64>;
+pub type ScalarF32 = Scalar<f32>;
+pub type ScalarPathBuf = Scalar<std::path::PathBuf>;
+
+impl<T> Scalar<T> {
+    pub fn new(value: T) -> Self {
+        Self { value }
+    }
+
+    pub fn into_inner(self) -> T {
+        self.value
+    }
+}
+
+impl ScalarString {
+    pub fn as_str(&self) -> &str {
+        self.value.as_str()
+    }
+}
+
+impl<T> From<T> for Scalar<T> {
+    fn from(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl From<&str> for ScalarString {
+    fn from(value: &str) -> Self {
+        Self {
+            value: value.to_string(),
+        }
+    }
+}
+
+impl<T> std::ops::Deref for Scalar<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> AsRef<T> for Scalar<T> {
+    fn as_ref(&self) -> &T {
+        &self.value
+    }
+}
+
+impl AsRef<str> for ScalarString {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for Scalar<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+impl<T: FromKdlValue> FromKdlValue for Scalar<T> {
+    const TYPE_NAME: &'static str = T::TYPE_NAME;
+
+    fn from_value(value: &KdlValue) -> Option<Self> {
+        T::from_value(value).map(Self::from)
+    }
+}
+
+impl<T: Into<Value>> From<Scalar<T>> for Value {
+    fn from(value: Scalar<T>) -> Self {
+        value.value.into()
+    }
+}
+
+impl<T: KdlSchema> KdlSchema for Scalar<T> {
+    fn schema_ref() -> SchemaRef {
+        T::schema_ref()
+    }
+
+    fn register_definitions(registry: &mut SchemaRegistry) {
+        T::register_definitions(registry);
+    }
+}
+
+impl<T: FromKdlValue> KdlDecode for Scalar<T> {
+    fn decode(node: &KdlNode, _ctx: &DecodeContext) -> Result<Self, KdlConfigError> {
+        let struct_name = std::any::type_name::<Self>();
+        let inline_value = node.args().last().copied();
+        let value = node
+            .iter_children()
+            .find(|child| child.base_name() == "value")
+            .and_then(|child| child.arg(0))
+            .or_else(|| {
+                // If the node carries both map key and scalar payload as positional
+                // args, the scalar payload is conventionally the last arg.
+                inline_value
+            })
+            .or_else(|| node.iter_children().next().and_then(|child| child.arg(0)))
+            .ok_or_else(|| {
+                KdlConfigError::missing_required(
+                    struct_name,
+                    "value",
+                    "value",
+                    Placement::Value,
+                )
+            })?;
+
+        let parsed =
+            convert_value_checked::<T>(value, struct_name, "value", "value", Placement::Value)?;
+        Ok(Self { value: parsed })
+    }
+}
+
+impl<T: Clone + Into<Value>> KdlRender for Scalar<T> {
+    fn render<W: std::fmt::Write>(
+        &self,
+        w: &mut W,
+        name: &str,
+        _indent: usize,
+    ) -> std::fmt::Result {
+        let mut renderer = NodeRenderer::new(name, crate::Modifier::Inherit);
+        renderer.positional(0, &self.value.clone().into());
+        write!(w, "{}", renderer.render())
+    }
+}
+
+impl<T: Clone + Into<Value>> KdlUpdate for Scalar<T> {
+    fn update(&self, node: &mut KdlNode, _ctx: &UpdateContext) -> Result<(), KdlConfigError> {
+        let value = crate::value_to_kdl(&self.value.clone().into());
+        node.entries_mut().clear();
+        node.entries_mut().push(KdlEntry::new(value));
+        if let Some(children) = node.children_mut() {
+            children.nodes_mut().clear();
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -494,7 +649,7 @@ impl From<PositiveCount> for Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{Duration, PositiveCount, Weight};
+    use super::{Duration, PositiveCount, ScalarI64, ScalarString, Weight};
     use crate::FromKdlValue;
     use crate::KdlValue;
 
@@ -556,5 +711,36 @@ mod tests {
 
         let val = KdlValue::Integer(0);
         assert!(PositiveCount::from_value(&val).is_none());
+    }
+
+    #[test]
+    fn scalar_decode_from_inline_value() {
+        let parsed: ScalarString = crate::parse_str(r#"item "alpha""#).unwrap();
+        assert_eq!(parsed.value, "alpha");
+
+        let parsed: ScalarI64 = crate::parse_str("item 42").unwrap();
+        assert_eq!(parsed.value, 42);
+
+        let parsed: ScalarString = crate::parse_str(r#"item "key" "payload""#).unwrap();
+        assert_eq!(parsed.value, "payload");
+    }
+
+    #[test]
+    fn scalar_decode_from_value_child() {
+        let parsed: ScalarString = crate::parse_str(
+            r#"
+item {
+  value "beta"
+}
+"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.value, "beta");
+    }
+
+    #[test]
+    fn scalar_render_as_single_positional_value() {
+        let rendered = crate::to_kdl(&ScalarString::from("hello"), "item");
+        assert_eq!(rendered.trim(), r#"item "hello""#);
     }
 }

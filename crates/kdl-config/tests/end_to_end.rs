@@ -4,6 +4,7 @@ use kdl_config::{
     BoolMode, DefaultPlacement, KdlConfigError, KdlDecode, ParseConfig, parse_config, parse_str,
     parse_str_with_config,
 };
+use kdl_config::newtypes::ScalarString;
 use kdl_config::{Kdl, KdlNode, KdlValue};
 
 fn parse_named<T: KdlDecode>(kdl: &str, _name: &str) -> Result<T, KdlConfigError> {
@@ -370,6 +371,13 @@ struct ChildrenMapVecConfig {
 }
 
 #[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ChildrenMapScalarValueConfig {
+    #[kdl(children_map, map_node = "category")]
+    categories: HashMap<String, ScalarString>,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
 #[kdl(node = "category", deny_unknown)]
 struct CategoryOverridesStrict {
     #[kdl(child)]
@@ -482,6 +490,18 @@ fn parses_children_map_vec_append() {
     assert_eq!(parsed.categories[0].1.indexing.chunk_size, 3000);
     assert_eq!(parsed.categories[1].0, "docs".to_string());
     assert_eq!(parsed.categories[1].1.indexing.chunk_size, 3500);
+}
+
+#[test]
+fn parses_children_map_scalar_values() {
+    let parsed = parse_named::<ChildrenMapScalarValueConfig>(
+        "config {\n  category \"docs\" \"doc-value\"\n  category \"code\" \"code-value\"\n}",
+        "config",
+    )
+    .unwrap();
+
+    assert_eq!(parsed.categories.get("docs").unwrap().value, "doc-value");
+    assert_eq!(parsed.categories.get("code").unwrap().value, "code-value");
 }
 
 #[derive(Debug, PartialEq, Kdl)]
