@@ -5,6 +5,7 @@ pub mod context;
 pub mod convert;
 pub mod error;
 pub mod formatter;
+pub mod fragments;
 pub mod helpers;
 pub mod layer;
 pub mod loader;
@@ -13,13 +14,14 @@ pub mod newtypes;
 pub mod node_ext;
 pub mod node_path;
 pub mod parse;
+mod primitive_decode;
 pub mod render;
 pub mod round_trip;
 pub mod schema;
 pub mod selector;
-pub mod fragments;
 pub mod types;
-mod primitive_decode;
+
+pub use newtypes::{Duration, PositiveCount, Scalar, Weight};
 
 pub use config::{
     BoolMode, ConflictPolicy, DefaultPlacement, EffectiveConfig, FieldOverrides, FlagStyle,
@@ -32,6 +34,7 @@ pub use convert::{
 };
 pub use error::{ErrorKind, KdlConfigError, NodeLocation, Placement};
 pub use formatter::KdlFormatter;
+pub use fragments::{FragmentExpansion, expand_fragments};
 pub use kdl::{KdlDocument, KdlEntry, KdlNode, KdlValue};
 pub use node_ext::{
     KdlNodeExt, arg_entry_index, attr_entry_indices, remove_attr_entries, remove_entry_indices,
@@ -49,7 +52,6 @@ pub use render::{
 pub use round_trip::{RoundTripAst, parse_str_roundtrip};
 pub use selector::{CollectMode, CollectionSpec, InjectOpt, SelectOpts, SelectSpec, SelectorAst};
 pub use types::{MergeModifierPolicy, Modifier, Node, NodeLocation as NodeLocationLegacy, Value};
-pub use fragments::{FragmentExpansion, expand_fragments};
 
 /// Trait for decoding a typed configuration from a KDL Node.
 pub trait KdlDecode: Sized {
