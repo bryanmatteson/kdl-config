@@ -1,23 +1,25 @@
 use crate::context::LineIndex;
 use crate::error::{ErrorKind, KdlConfigError, Placement};
-use crate::render::is_valid_identifier;
-use crate::types::{Modifier, Node, Value};
 use crate::fragments::expand_fragments;
+use crate::node_ext::KdlNodeExt;
+use crate::render::is_valid_identifier;
+use crate::types::{Node, Value};
 use kdl::{KdlDocument, KdlNode, KdlValue};
 
 pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
-    let mut document: KdlDocument = contents
-        .parse()
-        .map_err(|e: kdl::KdlError| KdlConfigError {
-            struct_name: "KDL Document".into(),
-            field_name: None,
-            kdl_key: None,
-            placement: Placement::Unknown,
-            required: true,
-            kind: ErrorKind::Parse(e.to_string()),
-            node_path: None,
-            location: None,
-        })?;
+    let mut document: KdlDocument =
+        contents
+            .parse()
+            .map_err(|e: kdl::KdlError| KdlConfigError {
+                struct_name: "KDL Document".into(),
+                field_name: None,
+                kdl_key: None,
+                placement: Placement::Unknown,
+                required: true,
+                kind: ErrorKind::Parse(e.to_string()),
+                node_path: None,
+                location: None,
+            })?;
 
     let mut root = Node::new();
     let index = LineIndex::new(contents);
@@ -33,18 +35,19 @@ pub fn parse_config(contents: &str) -> Result<Node, KdlConfigError> {
 }
 
 pub fn parse_node(contents: &str) -> Result<Node, KdlConfigError> {
-    let mut document: KdlDocument = contents
-        .parse()
-        .map_err(|e: kdl::KdlError| KdlConfigError {
-            struct_name: "KDL Node".into(),
-            field_name: None,
-            kdl_key: None,
-            placement: Placement::Unknown,
-            required: true,
-            kind: ErrorKind::Parse(e.to_string()),
-            node_path: None,
-            location: None,
-        })?;
+    let mut document: KdlDocument =
+        contents
+            .parse()
+            .map_err(|e: kdl::KdlError| KdlConfigError {
+                struct_name: "KDL Node".into(),
+                field_name: None,
+                kdl_key: None,
+                placement: Placement::Unknown,
+                required: true,
+                kind: ErrorKind::Parse(e.to_string()),
+                node_path: None,
+                location: None,
+            })?;
 
     expand_fragments(&mut document, Some(&LineIndex::new(contents)))?;
     let nodes = document.nodes();
@@ -70,22 +73,9 @@ pub(crate) fn parse_kdl_node(
     parent_path: Option<&str>,
     child_index: usize,
 ) -> Result<Node, KdlConfigError> {
-    let name_ident = node.name();
-    let raw_name = name_ident.value();
-    let repr = name_ident.repr();
-    let is_quoted = repr
-        .map(|repr| {
-            repr.starts_with('"')
-                || repr.starts_with('#')
-                || repr.starts_with('r')
-                || repr.is_empty()
-        })
-        .unwrap_or(false);
-    let (name, modifier) = if is_quoted {
-        (raw_name.to_string(), Modifier::Inherit)
-    } else {
-        parse_node_name(raw_name)
-    };
+    let name = node.base_name().to_string();
+    let modifier = node.modifier();
+    let repr = node.name().repr();
     let path = match parent_path {
         Some(parent) => format!("{parent}/{name}[{child_index}]"),
         None => format!("/{name}[{child_index}]"),
@@ -129,20 +119,6 @@ pub(crate) fn parse_kdl_node(
     }
 
     Ok(result)
-}
-
-fn parse_node_name(raw: &str) -> (String, Modifier) {
-    if let Some(stripped) = raw.strip_prefix('+') {
-        (stripped.to_string(), Modifier::Append)
-    } else if let Some(stripped) = raw.strip_prefix('-') {
-        (stripped.to_string(), Modifier::Remove)
-    } else if let Some(stripped) = raw.strip_prefix('!') {
-        (stripped.to_string(), Modifier::Replace)
-    } else if let Some(stripped) = raw.strip_prefix('~') {
-        (stripped.to_string(), Modifier::Flatten)
-    } else {
-        (raw.to_string(), Modifier::Inherit)
-    }
 }
 
 fn kdl_value_to_value(val: &KdlValue) -> Result<Value, KdlConfigError> {

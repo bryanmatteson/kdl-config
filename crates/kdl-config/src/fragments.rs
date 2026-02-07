@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use kdl::{KdlDocument, KdlEntry, KdlNode, KdlValue};
 
 use crate::context::{LineIndex, Source};
-use crate::error::{suggest_similar, KdlConfigError};
+use crate::error::{KdlConfigError, suggest_similar};
 use crate::node_ext::{
     KdlNodeExt, remove_attr_entries, remove_positional_entry, update_or_insert_attr,
     update_or_insert_positional,
@@ -30,9 +30,18 @@ impl LocationProvider for Source {
 struct FragmentDef {
     name: String,
     schema_type: Option<String>,
+    defined_at: Option<NodeLocation>,
     inserts: Vec<KdlNode>,
     patches: Vec<FragmentPatch>,
 }
+
+#[derive(Debug, Clone)]
+struct InferredFragmentType {
+    schema_type: String,
+    first_use: Option<NodeLocation>,
+}
+
+type InferredTypeMap = HashMap<String, InferredFragmentType>;
 
 #[derive(Debug, Clone)]
 struct ParentInfo {
@@ -131,6 +140,7 @@ struct OverrideNode {
 struct FragmentPatch {
     target: String,
     discriminator: Option<String>,
+    defined_at: Option<NodeLocation>,
     node: KdlNode,
 }
 
@@ -139,19 +149,14 @@ pub fn expand_fragments(
     location: Option<&dyn LocationProvider>,
 ) -> Result<FragmentExpansion, KdlConfigError> {
     let mut fragments = HashMap::new();
-    let mut inferred_types: HashMap<String, String> = HashMap::new();
+    let mut inferred_types: InferredTypeMap = HashMap::new();
     let mut had_fragments = false;
-    collect_fragments_in_nodes(doc.nodes_mut(), &mut fragments, location, &mut had_fragments)?;
-    if doc.nodes().len() == 1 {
-        if let Some(children) = doc.nodes_mut()[0].children_mut().as_mut() {
-            collect_fragments_in_nodes(
-                children.nodes_mut(),
-                &mut fragments,
-                location,
-                &mut had_fragments,
-            )?;
-        }
-    }
+    collect_fragments_in_nodes(
+        doc.nodes_mut(),
+        &mut fragments,
+        location,
+        &mut had_fragments,
+    )?;
     let mut expansion = FragmentExpansion {
         had_fragments,
         had_uses: false,
@@ -174,7 +179,7 @@ pub(crate) fn expand_fragments_with_map(
 ) -> Result<(FragmentExpansion, FragmentMap), KdlConfigError> {
     let mut map = FragmentMap::default();
     let mut fragments = HashMap::new();
-    let mut inferred_types: HashMap<String, String> = HashMap::new();
+    let mut inferred_types: InferredTypeMap = HashMap::new();
     let mut had_fragments = false;
     collect_fragments_in_nodes_with_map(
         doc.nodes_mut(),
@@ -184,26 +189,6 @@ pub(crate) fn expand_fragments_with_map(
         &mut had_fragments,
         &mut map,
     )?;
-
-    let root_path = if doc.nodes().len() == 1 {
-        let node = &doc.nodes()[0];
-        Some(NamePath::root(node.base_name(), 0))
-    } else {
-        None
-    };
-
-    if let Some(root_path) = root_path.clone() {
-        if let Some(children) = doc.nodes_mut()[0].children_mut().as_mut() {
-            collect_fragments_in_nodes_with_map(
-                children.nodes_mut(),
-                Some(root_path),
-                &mut fragments,
-                location,
-                &mut had_fragments,
-                &mut map,
-            )?;
-        }
-    }
 
     let mut expansion = FragmentExpansion {
         had_fragments,
@@ -229,27 +214,35 @@ fn collect_fragments_in_nodes(
     had_fragments: &mut bool,
 ) -> Result<(), KdlConfigError> {
     let mut kept = Vec::with_capacity(nodes.len());
-    for node in nodes.iter() {
+    for mut node in nodes.drain(..) {
         if node.base_name() == "fragment" {
             if node.modifier() != Modifier::Inherit {
                 return Err(fragment_error(
                     "modifiers are not allowed on fragment nodes",
-                    Some(node),
+                    Some(&node),
                     location,
                 ));
             }
             *had_fragments = true;
-            let fragment = parse_fragment(node, location)?;
-            if fragments.contains_key(&fragment.name) {
-                return Err(fragment_error(
-                    format!("duplicate fragment name {:?}", fragment.name),
-                    Some(node),
-                    location,
-                ));
+            let fragment = parse_fragment(&node, location)?;
+            if let Some(existing) = fragments.get(&fragment.name) {
+                let mut message = format!("duplicate fragment name {:?}", fragment.name);
+                if let Some(loc) = format_location(existing.defined_at) {
+                    message.push_str(&format!(" (first defined at {loc})"));
+                }
+                return Err(fragment_error(message, Some(&node), location));
             }
             fragments.insert(fragment.name.clone(), fragment);
         } else {
-            kept.push(node.clone());
+            if let Some(children) = node.children_mut().as_mut() {
+                collect_fragments_in_nodes(
+                    children.nodes_mut(),
+                    fragments,
+                    location,
+                    had_fragments,
+                )?;
+            }
+            kept.push(node);
         }
     }
     *nodes = kept;
@@ -265,23 +258,23 @@ fn collect_fragments_in_nodes_with_map(
     map: &mut FragmentMap,
 ) -> Result<(), KdlConfigError> {
     let mut kept = Vec::with_capacity(nodes.len());
-    for node in nodes.iter() {
+    for mut node in nodes.drain(..) {
         if node.base_name() == "fragment" {
             if node.modifier() != Modifier::Inherit {
                 return Err(fragment_error(
                     "modifiers are not allowed on fragment nodes",
-                    Some(node),
+                    Some(&node),
                     location,
                 ));
             }
             *had_fragments = true;
-            let fragment = parse_fragment(node, location)?;
-            if fragments.contains_key(&fragment.name) {
-                return Err(fragment_error(
-                    format!("duplicate fragment name {:?}", fragment.name),
-                    Some(node),
-                    location,
-                ));
+            let fragment = parse_fragment(&node, location)?;
+            if let Some(existing) = fragments.get(&fragment.name) {
+                let mut message = format!("duplicate fragment name {:?}", fragment.name);
+                if let Some(loc) = format_location(existing.defined_at) {
+                    message.push_str(&format!(" (first defined at {loc})"));
+                }
+                return Err(fragment_error(message, Some(&node), location));
             }
             let fragment_name = fragment.name.clone();
             fragments.insert(fragment_name.clone(), fragment);
@@ -289,10 +282,24 @@ fn collect_fragments_in_nodes_with_map(
                 fragment_name,
                 parent_path: parent_path.clone(),
                 index: kept.len(),
-                node: node.clone(),
+                node,
             });
         } else {
-            kept.push(node.clone());
+            let child_path = match parent_path.as_ref() {
+                Some(path) => path.child(node.base_name(), kept.len()),
+                None => NamePath::root(node.base_name(), kept.len()),
+            };
+            if let Some(children) = node.children_mut().as_mut() {
+                collect_fragments_in_nodes_with_map(
+                    children.nodes_mut(),
+                    Some(child_path),
+                    fragments,
+                    location,
+                    had_fragments,
+                    map,
+                )?;
+            }
+            kept.push(node);
         }
     }
     *nodes = kept;
@@ -323,7 +330,7 @@ fn parse_fragment(
                 ),
                 Some(node),
                 location,
-            ))
+            ));
         }
     };
 
@@ -370,6 +377,7 @@ fn parse_fragment(
     Ok(FragmentDef {
         name,
         schema_type: fragment_type,
+        defined_at: node_location(node, location),
         inserts,
         patches,
     })
@@ -420,28 +428,36 @@ fn select_fragment_patch<'a>(
     }
 
     if matches.len() > 1 {
-        return Err(fragment_error(
-            format!(
-                "duplicate fragment patch for {:?} with discriminator {:?}",
-                target, discriminator
-            ),
-            Some(parent),
-            location,
-        ));
+        let locations = matches
+            .iter()
+            .filter_map(|patch| format_location(patch.defined_at))
+            .collect::<Vec<_>>();
+        let mut message = format!(
+            "duplicate fragment patch for {:?} with discriminator {:?}",
+            target, discriminator
+        );
+        if !locations.is_empty() {
+            message.push_str(&format!(" (defined at {})", locations.join(", ")));
+        }
+        return Err(fragment_error(message, Some(parent), location));
     }
     if let Some(found) = matches.pop() {
         return Ok(Some(found));
     }
 
     if fallback.len() > 1 {
-        return Err(fragment_error(
-            format!(
-                "duplicate fragment patch for {:?} with no discriminator",
-                target
-            ),
-            Some(parent),
-            location,
-        ));
+        let locations = fallback
+            .iter()
+            .filter_map(|patch| format_location(patch.defined_at))
+            .collect::<Vec<_>>();
+        let mut message = format!(
+            "duplicate fragment patch for {:?} with no discriminator",
+            target
+        );
+        if !locations.is_empty() {
+            message.push_str(&format!(" (defined at {})", locations.join(", ")));
+        }
+        return Err(fragment_error(message, Some(parent), location));
     }
     Ok(fallback.pop())
 }
@@ -537,7 +553,10 @@ fn merge_nodes(
         return Ok(());
     }
 
-    let mut child_doc = target.children_mut().take().unwrap_or_else(KdlDocument::new);
+    let mut child_doc = target
+        .children_mut()
+        .take()
+        .unwrap_or_else(KdlDocument::new);
     let mut insert_at = child_doc.nodes().len();
     let mut inserted = 0usize;
     merge_patch_children(
@@ -588,9 +607,7 @@ where
                 insert_child_at(nodes, insert_at, child, inserted);
             }
             Modifier::Flatten | Modifier::Inherit => {
-                if let Some(existing) = nodes
-                    .iter_mut()
-                    .find(|node| node.base_name() == base_name)
+                if let Some(existing) = nodes.iter_mut().find(|node| node.base_name() == base_name)
                 {
                     let mut child = strip_modifier(patch_child.clone());
                     expand_node(&mut child)?;
@@ -661,20 +678,13 @@ fn apply_fragment_patch(
     fragment: &FragmentDef,
     location: Option<&dyn LocationProvider>,
     fragments: &HashMap<String, FragmentDef>,
-    inferred_types: &mut HashMap<String, String>,
+    inferred_types: &mut InferredTypeMap,
     expansion: &mut FragmentExpansion,
     stack: &mut Vec<String>,
 ) -> Result<usize, KdlConfigError> {
-    apply_fragment_patch_inner(
-        parent,
-        nodes,
-        insert_at,
-        fragment,
-        location,
-        &mut |child| {
-            expand_node(child, fragments, inferred_types, location, expansion, stack)
-        },
-    )
+    apply_fragment_patch_inner(parent, nodes, insert_at, fragment, location, &mut |child| {
+        expand_node(child, fragments, inferred_types, location, expansion, stack)
+    })
 }
 
 fn apply_fragment_patch_with_map(
@@ -685,36 +695,29 @@ fn apply_fragment_patch_with_map(
     location: Option<&dyn LocationProvider>,
     parent_path: Option<&NamePath>,
     fragments: &HashMap<String, FragmentDef>,
-    inferred_types: &mut HashMap<String, String>,
+    inferred_types: &mut InferredTypeMap,
     expansion: &mut FragmentExpansion,
     stack: &mut Vec<String>,
     map: &mut FragmentMap,
 ) -> Result<usize, KdlConfigError> {
-    apply_fragment_patch_inner(
-        parent,
-        nodes,
-        insert_at,
-        fragment,
-        location,
-        &mut |child| {
-            expand_node_with_map(
-                child,
-                parent_path,
-                fragments,
-                inferred_types,
-                location,
-                expansion,
-                stack,
-                map,
-            )
-        },
-    )
+    apply_fragment_patch_inner(parent, nodes, insert_at, fragment, location, &mut |child| {
+        expand_node_with_map(
+            child,
+            parent_path,
+            fragments,
+            inferred_types,
+            location,
+            expansion,
+            stack,
+            map,
+        )
+    })
 }
 
 fn expand_document_nodes(
     nodes: &mut Vec<KdlNode>,
     fragments: &HashMap<String, FragmentDef>,
-    inferred_types: &mut HashMap<String, String>,
+    inferred_types: &mut InferredTypeMap,
     location: Option<&dyn LocationProvider>,
     expansion: &mut FragmentExpansion,
     stack: &mut Vec<String>,
@@ -735,7 +738,7 @@ fn expand_document_nodes(
 fn expand_node(
     node: &mut KdlNode,
     fragments: &HashMap<String, FragmentDef>,
-    inferred_types: &mut HashMap<String, String>,
+    inferred_types: &mut InferredTypeMap,
     location: Option<&dyn LocationProvider>,
     expansion: &mut FragmentExpansion,
     stack: &mut Vec<String>,
@@ -766,7 +769,7 @@ fn expand_child_nodes(
     parent_info: &ParentInfo,
     nodes: &mut Vec<KdlNode>,
     fragments: &HashMap<String, FragmentDef>,
-    inferred_types: &mut HashMap<String, String>,
+    inferred_types: &mut InferredTypeMap,
     location: Option<&dyn LocationProvider>,
     expansion: &mut FragmentExpansion,
     stack: &mut Vec<String>,
@@ -796,28 +799,34 @@ fn expand_child_nodes(
             let expected_type = parent_info.expected_type();
             if let Some(schema_type) = fragment.schema_type.as_deref() {
                 if schema_type != expected_type {
-                    return Err(fragment_error(
-                        format!(
-                            "fragment {:?} is typed as {:?} but used under {:?}",
-                            fragment.name, schema_type, expected_type
-                        ),
-                        Some(&nodes[idx]),
-                        location,
-                    ));
+                    let mut message = format!(
+                        "fragment {:?} is typed as {:?} but used under {:?}",
+                        fragment.name, schema_type, expected_type
+                    );
+                    if let Some(loc) = format_location(fragment.defined_at) {
+                        message.push_str(&format!(" (defined at {loc})"));
+                    }
+                    return Err(fragment_error(message, Some(&nodes[idx]), location));
                 }
             } else if let Some(inferred) = inferred_types.get(&fragment.name) {
-                if inferred != expected_type {
-                    return Err(fragment_error(
-                        format!(
-                            "fragment {:?} is implicitly typed as {:?} but used under {:?}",
-                            fragment.name, inferred, expected_type
-                        ),
-                        Some(&nodes[idx]),
-                        location,
-                    ));
+                if inferred.schema_type != expected_type {
+                    let mut message = format!(
+                        "fragment {:?} is implicitly typed as {:?} but used under {:?}",
+                        fragment.name, inferred.schema_type, expected_type
+                    );
+                    if let Some(loc) = format_location(inferred.first_use) {
+                        message.push_str(&format!(" (first used at {loc})"));
+                    }
+                    return Err(fragment_error(message, Some(&nodes[idx]), location));
                 }
             } else {
-                inferred_types.insert(fragment.name.clone(), expected_type.to_string());
+                inferred_types.insert(
+                    fragment.name.clone(),
+                    InferredFragmentType {
+                        schema_type: expected_type.to_string(),
+                        first_use: node_location(&nodes[idx], location),
+                    },
+                );
             }
 
             if stack.contains(&fragment_name) {
@@ -872,7 +881,14 @@ fn expand_child_nodes(
             continue;
         }
 
-        expand_node(&mut nodes[idx], fragments, inferred_types, location, expansion, stack)?;
+        expand_node(
+            &mut nodes[idx],
+            fragments,
+            inferred_types,
+            location,
+            expansion,
+            stack,
+        )?;
         idx += 1;
     }
 
@@ -882,7 +898,7 @@ fn expand_child_nodes(
 fn expand_document_nodes_with_map(
     nodes: &mut Vec<KdlNode>,
     fragments: &HashMap<String, FragmentDef>,
-    inferred_types: &mut HashMap<String, String>,
+    inferred_types: &mut InferredTypeMap,
     location: Option<&dyn LocationProvider>,
     expansion: &mut FragmentExpansion,
     stack: &mut Vec<String>,
@@ -915,7 +931,7 @@ fn expand_node_with_map(
     node: &mut KdlNode,
     parent_path: Option<&NamePath>,
     fragments: &HashMap<String, FragmentDef>,
-    inferred_types: &mut HashMap<String, String>,
+    inferred_types: &mut InferredTypeMap,
     location: Option<&dyn LocationProvider>,
     expansion: &mut FragmentExpansion,
     stack: &mut Vec<String>,
@@ -950,7 +966,7 @@ fn expand_child_nodes_with_map(
     parent_path: Option<&NamePath>,
     nodes: &mut Vec<KdlNode>,
     fragments: &HashMap<String, FragmentDef>,
-    inferred_types: &mut HashMap<String, String>,
+    inferred_types: &mut InferredTypeMap,
     location: Option<&dyn LocationProvider>,
     expansion: &mut FragmentExpansion,
     stack: &mut Vec<String>,
@@ -980,28 +996,34 @@ fn expand_child_nodes_with_map(
             let expected_type = parent_info.expected_type();
             if let Some(schema_type) = fragment.schema_type.as_deref() {
                 if schema_type != expected_type {
-                    return Err(fragment_error(
-                        format!(
-                            "fragment {:?} is typed as {:?} but used under {:?}",
-                            fragment.name, schema_type, expected_type
-                        ),
-                        Some(&nodes[idx]),
-                        location,
-                    ));
+                    let mut message = format!(
+                        "fragment {:?} is typed as {:?} but used under {:?}",
+                        fragment.name, schema_type, expected_type
+                    );
+                    if let Some(loc) = format_location(fragment.defined_at) {
+                        message.push_str(&format!(" (defined at {loc})"));
+                    }
+                    return Err(fragment_error(message, Some(&nodes[idx]), location));
                 }
             } else if let Some(inferred) = inferred_types.get(&fragment.name) {
-                if inferred != &expected_type {
-                    return Err(fragment_error(
-                        format!(
-                            "fragment {:?} is implicitly typed as {:?} but used under {:?}",
-                            fragment.name, inferred, expected_type
-                        ),
-                        Some(&nodes[idx]),
-                        location,
-                    ));
+                if inferred.schema_type != expected_type {
+                    let mut message = format!(
+                        "fragment {:?} is implicitly typed as {:?} but used under {:?}",
+                        fragment.name, inferred.schema_type, expected_type
+                    );
+                    if let Some(loc) = format_location(inferred.first_use) {
+                        message.push_str(&format!(" (first used at {loc})"));
+                    }
+                    return Err(fragment_error(message, Some(&nodes[idx]), location));
                 }
             } else {
-                inferred_types.insert(fragment.name.clone(), expected_type.to_string());
+                inferred_types.insert(
+                    fragment.name.clone(),
+                    InferredFragmentType {
+                        schema_type: expected_type.to_string(),
+                        first_use: node_location(&nodes[idx], location),
+                    },
+                );
             }
 
             if stack.contains(&fragment_name) {
@@ -1174,7 +1196,11 @@ fn find_node_mut<'a>(nodes: &'a mut [KdlNode], path: &NamePath) -> Option<&'a mu
         None
     }
 
-    fn helper<'a>(nodes: &'a mut [KdlNode], path: &[(String, usize)], seg_idx: usize) -> Option<&'a mut KdlNode> {
+    fn helper<'a>(
+        nodes: &'a mut [KdlNode],
+        path: &[(String, usize)],
+        seg_idx: usize,
+    ) -> Option<&'a mut KdlNode> {
         let (name, occurrence) = path.get(seg_idx)?;
         let idx = find_child_index(nodes, name, *occurrence)?;
         if seg_idx + 1 == path.len() {
@@ -1273,13 +1299,15 @@ pub(crate) fn apply_fragment_aware_updates(
             let updated_override_end =
                 (updated_fragment_end + override_len).min(updated_children.len());
             let updated_patch = updated_children[updated_cursor..updated_patch_end].to_vec();
-            let updated_fragment = updated_children[updated_patch_end..updated_fragment_end].to_vec();
+            let updated_fragment =
+                updated_children[updated_patch_end..updated_fragment_end].to_vec();
             let updated_attr_overrides =
                 updated_children[updated_fragment_end..updated_attr_override_end].to_vec();
             let updated_child_overrides =
                 updated_children[updated_attr_override_end..updated_override_end].to_vec();
 
-            let mismatch = updated_patch.len() != patch_len || updated_fragment.len() != fragment_len;
+            let mismatch =
+                updated_patch.len() != patch_len || updated_fragment.len() != fragment_len;
 
             collected.push(UseSlices {
                 fragment_name: use_info.fragment_name.clone(),
@@ -1299,10 +1327,10 @@ pub(crate) fn apply_fragment_aware_updates(
                 mismatch,
             });
 
-            base_cursor =
-                (base_cursor + patch_len + fragment_len + override_len).min(baseline_children.len());
-            updated_cursor =
-                (updated_cursor + patch_len + fragment_len + override_len).min(updated_children.len());
+            base_cursor = (base_cursor + patch_len + fragment_len + override_len)
+                .min(baseline_children.len());
+            updated_cursor = (updated_cursor + patch_len + fragment_len + override_len)
+                .min(updated_children.len());
         }
     }
 
@@ -1367,22 +1395,22 @@ pub(crate) fn apply_fragment_aware_updates(
 
             let override_children: Vec<KdlNode> =
                 if updated_fragments.contains_key(&use_info.fragment_name) {
-                let patch_diff =
-                    diff_fragment_children(&use_info.baseline_patch, &use_info.updated_patch);
-                patch_diff
-                    .into_iter()
-                    .chain(use_info.updated_child_overrides.clone())
-                    .collect()
-            } else {
-                let mut baseline_combined = use_info.baseline_patch.clone();
-                baseline_combined.extend(use_info.baseline_fragment.clone());
-                let mut updated_combined = use_info.updated_patch.clone();
-                updated_combined.extend(use_info.updated_fragment.clone());
-                diff_fragment_children(&baseline_combined, &updated_combined)
-                    .into_iter()
-                    .chain(use_info.updated_child_overrides.clone())
-                    .collect()
-            };
+                    let patch_diff =
+                        diff_fragment_children(&use_info.baseline_patch, &use_info.updated_patch);
+                    patch_diff
+                        .into_iter()
+                        .chain(use_info.updated_child_overrides.clone())
+                        .collect()
+                } else {
+                    let mut baseline_combined = use_info.baseline_patch.clone();
+                    baseline_combined.extend(use_info.baseline_fragment.clone());
+                    let mut updated_combined = use_info.updated_patch.clone();
+                    updated_combined.extend(use_info.updated_fragment.clone());
+                    diff_fragment_children(&baseline_combined, &updated_combined)
+                        .into_iter()
+                        .chain(use_info.updated_child_overrides.clone())
+                        .collect()
+                };
 
             let mut use_node = use_info.use_node.clone();
             apply_attr_overrides(
@@ -1400,9 +1428,11 @@ pub(crate) fn apply_fragment_aware_updates(
             new_children.push(use_node);
 
             base_cursor += use_info.patch_len + use_info.fragment_len + use_info.override_len;
-            updated_cursor =
-                (updated_cursor + use_info.patch_len + use_info.fragment_len + use_info.override_len)
-                    .min(updated_children.len());
+            updated_cursor = (updated_cursor
+                + use_info.patch_len
+                + use_info.fragment_len
+                + use_info.override_len)
+                .min(updated_children.len());
         }
 
         if updated_cursor < updated_children.len() {
@@ -1438,13 +1468,9 @@ pub(crate) fn apply_fragment_aware_updates(
             let nodes = match parent_path {
                 None => doc.nodes_mut(),
                 Some(path) => {
-                    let parent =
-                        find_node_mut(doc.nodes_mut(), &path).ok_or_else(|| {
-                            KdlConfigError::custom(
-                                "KDL Document",
-                                "failed to locate fragment parent",
-                            )
-                        })?;
+                    let parent = find_node_mut(doc.nodes_mut(), &path).ok_or_else(|| {
+                        KdlConfigError::custom("KDL Document", "failed to locate fragment parent")
+                    })?;
                     parent.ensure_children().nodes_mut()
                 }
             };
@@ -1488,7 +1514,7 @@ fn parse_fragment_patch(
                 ),
                 Some(node),
                 location,
-            ))
+            ));
         }
         None => None,
     };
@@ -1508,6 +1534,7 @@ fn parse_fragment_patch(
     Ok(FragmentPatch {
         target: node.base_name().to_string(),
         discriminator,
+        defined_at: node_location(node, location),
         node: patch,
     })
 }
@@ -1534,23 +1561,36 @@ fn parse_use(
                 ),
                 Some(node),
                 location,
-            ))
+            ));
         }
     };
 
-    if node.args().len() > 1 {
-        return Err(fragment_error(
-            "use nodes accept only a single name argument",
-            Some(node),
-            location,
-        ));
+    let mut token_overrides = Vec::new();
+    for (arg_index, arg) in node.args().into_iter().enumerate().skip(1) {
+        match arg {
+            KdlValue::String(token) => {
+                token_overrides.push(KdlNode::new(token.clone()));
+            }
+            other => {
+                return Err(fragment_error(
+                    format!(
+                        "use override token at arg[{arg_index}] must be a string, found {}",
+                        kdl_value_type(other)
+                    ),
+                    Some(node),
+                    location,
+                ));
+            }
+        }
     }
 
     let (attr_overrides, attr_nodes) = parse_attr_overrides(node, location)?;
-    let child_overrides = node
-        .children()
-        .map(|doc| doc.nodes().to_vec())
-        .unwrap_or_default();
+    let mut child_overrides = token_overrides;
+    child_overrides.extend(
+        node.children()
+            .map(|doc| doc.nodes().to_vec())
+            .unwrap_or_default(),
+    );
 
     Ok(ParsedUse {
         name,
@@ -1735,12 +1775,39 @@ fn find_override_value(nodes: &[KdlNode], path: &[String]) -> Option<KdlValue> {
 }
 
 fn diff_fragment_children(baseline: &[KdlNode], updated: &[KdlNode]) -> Vec<KdlNode> {
+    let mut ordered_names = Vec::new();
+    let mut seen = HashSet::new();
+    for node in baseline.iter().chain(updated.iter()) {
+        let name = node.base_name().to_string();
+        if seen.insert(name.clone()) {
+            ordered_names.push(name);
+        }
+    }
+
     let mut diff = Vec::new();
-    for (idx, node) in updated.iter().enumerate() {
-        if baseline.get(idx) != Some(node) {
+    for name in ordered_names {
+        let baseline_nodes: Vec<&KdlNode> = baseline
+            .iter()
+            .filter(|node| node.base_name() == name)
+            .collect();
+        let updated_nodes: Vec<&KdlNode> = updated
+            .iter()
+            .filter(|node| node.base_name() == name)
+            .collect();
+
+        if baseline_nodes == updated_nodes {
+            continue;
+        }
+
+        if !baseline_nodes.is_empty() {
+            diff.push(KdlNode::new(format!("-{}", name)));
+        }
+
+        for node in updated_nodes {
             diff.push(node.clone());
         }
     }
+
     diff
 }
 
@@ -1786,6 +1853,14 @@ fn kdl_value_type(value: &KdlValue) -> &'static str {
         KdlValue::Bool(_) => "bool",
         KdlValue::Null => "null",
     }
+}
+
+fn node_location(node: &KdlNode, location: Option<&dyn LocationProvider>) -> Option<NodeLocation> {
+    location.map(|source| source.location(node.span().offset()))
+}
+
+fn format_location(location: Option<NodeLocation>) -> Option<String> {
+    location.map(|loc| format!("line {}, column {}", loc.line, loc.column))
 }
 
 fn fragment_error(

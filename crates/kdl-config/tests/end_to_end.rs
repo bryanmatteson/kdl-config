@@ -778,11 +778,7 @@ struct PathConfig {
 
 #[test]
 fn path_re_roots_relative() {
-    let parsed = parse_named::<PathConfig>(
-        "config { app { http port=8080 } }",
-        "config",
-    )
-    .unwrap();
+    let parsed = parse_named::<PathConfig>("config { app { http port=8080 } }", "config").unwrap();
     assert_eq!(parsed.port, 8080);
 }
 
@@ -1123,6 +1119,33 @@ fn registry_key_fn_is_used() {
         parse_named::<RegistryKeyFnConfig>("config {\n  item key=\"gamma\" value=3\n}", "config")
             .unwrap();
     assert_eq!(parsed.items.get("gamma").unwrap().value, 3);
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct RegistryInjectPreserveConfig {
+    #[kdl(registry, container = "item", select(arg(0), inject = "selected"))]
+    items: HashMap<String, RegistryInjectPreserveItem>,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "item")]
+struct RegistryInjectPreserveItem {
+    #[kdl(attr, positional = 0)]
+    raw: String,
+    #[kdl(attr)]
+    selected: String,
+}
+
+#[test]
+fn selector_inject_defaults_to_preserve_for_registry() {
+    let parsed =
+        parse_named::<RegistryInjectPreserveConfig>("config {\n  item \"alpha\"\n}", "config")
+            .unwrap();
+
+    let item = parsed.items.get("alpha").expect("registry item");
+    assert_eq!(item.raw, "alpha");
+    assert_eq!(item.selected, "alpha");
 }
 
 #[derive(Debug, PartialEq, KdlNode)]

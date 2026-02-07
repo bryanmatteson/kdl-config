@@ -1,7 +1,7 @@
 //! Processed field information for code generation.
 
 use proc_macro2::Span;
-use syn::{spanned::Spanned, Field, Ident, Type};
+use syn::{Field, Ident, Type, spanned::Spanned};
 
 use super::field::{FieldAttrs, FieldPlacement, FieldSchemaOverride};
 use super::parse::parse_field_attrs;
@@ -613,7 +613,7 @@ fn build_collection_spec(attrs: &FieldAttrs, kdl_key: &str) -> Option<Collection
         .select
         .as_ref()
         .and_then(|spec| spec.opts.consume)
-        .unwrap_or(inject.is_some());
+        .unwrap_or(false);
 
     Some(CollectionSpec {
         mode,

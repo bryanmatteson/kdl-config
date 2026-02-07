@@ -72,7 +72,12 @@ pub fn generate_parse_impl(
     let valid_child_names: Vec<&str> = fields
         .iter()
         .filter(|f| !f.is_skipped)
-        .filter(|f| matches!(field_kind(f), FieldKind::Node | FieldKind::NodeVec | FieldKind::Flatten | FieldKind::Collection))
+        .filter(|f| {
+            matches!(
+                field_kind(f),
+                FieldKind::Node | FieldKind::NodeVec | FieldKind::Flatten | FieldKind::Collection
+            )
+        })
         .map(|f| f.kdl_key.as_str())
         .collect();
 
@@ -175,8 +180,7 @@ pub(crate) fn generate_field_parser(field: &FieldInfo, struct_name: &str) -> Tok
     if field.is_hashmap && field.collection.is_none() {
         return quote! { compile_error!("HashMap fields require #[kdl(registry)] or #[kdl(children_map)]"); };
     }
-    if crate::attrs::extract_registry_vec_value(&field.ty).is_some() && field.collection.is_none()
-    {
+    if crate::attrs::extract_registry_vec_value(&field.ty).is_some() && field.collection.is_none() {
         return quote! { compile_error!("Vec<(String, T)> fields require #[kdl(registry)] or #[kdl(children_map)]"); };
     }
 
@@ -201,8 +205,10 @@ pub(crate) fn generate_field_parser(field: &FieldInfo, struct_name: &str) -> Tok
 
     match kind {
         FieldKind::Collection => {
-            let collection =
-                field.collection.as_ref().expect("collection fields must have a spec");
+            let collection = field
+                .collection
+                .as_ref()
+                .expect("collection fields must have a spec");
             generate_collection_parser(field, struct_name, &field_overrides, mark_usage, collection)
         }
         FieldKind::Flatten => {
@@ -275,7 +281,10 @@ fn path_parent_claims(field: &FieldInfo) -> TokenStream {
         Some(path) => path,
         None => return quote! {},
     };
-    let first = path.segments.first().expect("path requires at least one segment");
+    let first = path
+        .segments
+        .first()
+        .expect("path requires at least one segment");
     let claim_block = if path.absolute {
         quote! {
             if let Some(root) = ctx.root {
@@ -1449,7 +1458,7 @@ fn generate_node_parser(
                 InjectOpt::Implicit => "name".to_string(),
                 InjectOpt::Field(name) => name.clone(),
             };
-            let consume = spec.opts.consume.unwrap_or(true);
+            let consume = spec.opts.consume.unwrap_or(false);
             let inject_extract = selector_inject_extract(
                 &spec.selector,
                 struct_name,
@@ -1464,7 +1473,10 @@ fn generate_node_parser(
                 entry.set_name(Some(#inject_name));
                 #inject_node_ident.entries_mut().push(entry);
             };
-            (quote! { #inject_extract #inject_attr }, quote! { &#inject_node_ident })
+            (
+                quote! { #inject_extract #inject_attr },
+                quote! { &#inject_node_ident },
+            )
         } else {
             (quote! {}, quote! { #child_ident })
         }
@@ -1690,7 +1702,7 @@ fn generate_node_vec_parser(
                 InjectOpt::Implicit => "name".to_string(),
                 InjectOpt::Field(name) => name.clone(),
             };
-            let consume = spec.opts.consume.unwrap_or(true);
+            let consume = spec.opts.consume.unwrap_or(false);
             let inject_extract = selector_inject_extract(
                 &spec.selector,
                 struct_name,
@@ -1705,7 +1717,10 @@ fn generate_node_vec_parser(
                 entry.set_name(Some(#inject_name));
                 #inject_node_ident.entries_mut().push(entry);
             };
-            (quote! { #inject_extract #inject_attr }, quote! { &#inject_node_ident })
+            (
+                quote! { #inject_extract #inject_attr },
+                quote! { &#inject_node_ident },
+            )
         } else {
             (quote! {}, quote! { #child_ident })
         }
@@ -1811,6 +1826,13 @@ fn generate_node_vec_parser(
     }
 }
 
+fn selector_func_path(path: &str) -> TokenStream {
+    path.parse().unwrap_or_else(|_| {
+        let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
+        quote! { #ident }
+    })
+}
+
 fn registry_key_extract(
     selector: &SelectorAst,
     struct_name: &str,
@@ -1885,10 +1907,7 @@ fn registry_key_extract(
             }
         }
         SelectorAst::Func(path) => {
-            let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
-                let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
-                quote! { #ident }
-            });
+            let key_fn = selector_func_path(path);
             quote! {
                 let #key_ident = #key_fn(#child_ident)?;
                 let mut #node_copy_ident = #child_ident.clone();
@@ -1954,10 +1973,7 @@ fn registry_key_extract(
                         }
                     }
                     SelectorAst::Func(path) => {
-                        let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
-                            let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
-                            quote! { #ident }
-                        });
+                        let key_fn = selector_func_path(path);
                         quote! {
                             if #key_ident.is_none() {
                                 let value = #key_fn(#child_ident)?;
@@ -2076,10 +2092,7 @@ fn children_map_key_extract(
             }
         }
         SelectorAst::Func(path) => {
-            let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
-                let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
-                quote! { #ident }
-            });
+            let key_fn = selector_func_path(path);
             quote! {
                 let #key_ident = #key_fn(#child_ident)?;
                 let mut #node_copy_ident = #child_ident.clone();
@@ -2147,10 +2160,7 @@ fn children_map_key_extract(
                         }
                     }
                     SelectorAst::Func(path) => {
-                        let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
-                            let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
-                            quote! { #ident }
-                        });
+                        let key_fn = selector_func_path(path);
                         quote! {
                             if #key_ident.is_none() {
                                 let value = #key_fn(#child_ident)?;
@@ -2257,10 +2267,7 @@ fn selector_inject_extract(
             }
         }
         SelectorAst::Func(path) => {
-            let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
-                let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
-                quote! { #ident }
-            });
+            let key_fn = selector_func_path(path);
             quote! {
                 let mut #node_copy_ident = #child_ident.clone();
                 let value = #key_fn(#child_ident)?;
@@ -2314,10 +2321,7 @@ fn selector_inject_extract(
                         }
                     }
                     SelectorAst::Func(path) => {
-                        let key_fn: TokenStream = path.parse().unwrap_or_else(|_| {
-                            let ident = syn::Ident::new(path, proc_macro2::Span::call_site());
-                            quote! { #ident }
-                        });
+                        let key_fn = selector_func_path(path);
                         quote! {
                             if #value_ident.is_none() {
                                 let value = #key_fn(#child_ident)?;
@@ -2349,7 +2353,6 @@ fn selector_inject_extract(
         }
     }
 }
-
 
 fn generate_collection_parser(
     field: &FieldInfo,

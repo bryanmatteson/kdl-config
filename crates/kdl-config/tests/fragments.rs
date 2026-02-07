@@ -1,6 +1,6 @@
+use kdl::KdlDocument;
 use kdl_config::parse_config;
 use kdl_config::{KdlNode, KdlNodeExt, Value, parse_str_roundtrip};
-use kdl::KdlDocument;
 
 #[test]
 fn expands_typed_fragments() {
@@ -41,6 +41,7 @@ vectors "default" {
     let message = format!("{err}");
     assert!(message.contains("fragment"));
     assert!(message.contains("typed as"));
+    assert!(message.contains("defined at line"));
 }
 
 #[test]
@@ -79,6 +80,7 @@ vectors "default" {
     let err = parse_config(doc).expect_err("should fail");
     let message = format!("{err}");
     assert!(message.contains("implicitly typed"));
+    assert!(message.contains("first used at line"));
 }
 
 #[test]
@@ -100,6 +102,30 @@ config {
     let source = config.child("source").expect("source child");
     assert!(source.children_named("include").next().is_some());
     assert!(config.children_named("fragment").next().is_none());
+}
+
+#[test]
+fn expands_fragments_nested_deeper_than_root_children() {
+    let doc = r#"
+config {
+  scope {
+    (source)fragment "code" {
+      include "src/**"
+    }
+
+    source "app" {
+      use "code"
+    }
+  }
+}
+"#;
+
+    let root = parse_config(doc).expect("parse");
+    let config = root.child("config").expect("config node");
+    let scope = config.child("scope").expect("scope node");
+    let source = scope.child("source").expect("source child");
+    assert!(source.children_named("include").next().is_some());
+    assert!(scope.children_named("fragment").next().is_none());
 }
 
 #[test]
@@ -154,6 +180,26 @@ config {
 }
 
 #[test]
+fn expands_use_flag_tokens_as_child_overrides() {
+    let doc = r#"
+config {
+  (source)fragment "code" {
+    include "src/**"
+  }
+
+  source "app" {
+    use "code" no-enrichment
+  }
+}
+"#;
+
+    let root = parse_config(doc).expect("parse");
+    let config = root.child("config").expect("config node");
+    let source = config.child("source").expect("source child");
+    assert!(source.children_named("no-enrichment").next().is_some());
+}
+
+#[test]
 fn expands_fragment_merge_patches() {
     let doc = r#"
 fragment "defaults" {
@@ -175,7 +221,10 @@ source "app" local "." {
         .child("max-size")
         .and_then(|node| node.arg(0))
         .cloned();
-    let overlap = chunking.child("overlap").and_then(|node| node.arg(0)).cloned();
+    let overlap = chunking
+        .child("overlap")
+        .and_then(|node| node.arg(0))
+        .cloned();
     assert_eq!(max_size, Some(Value::Int(500)));
     assert_eq!(overlap, Some(Value::Int(200)));
 }
@@ -218,6 +267,22 @@ struct SourceConfig {
 struct IncludeConfig {
     #[kdl(positional = 0)]
     path: String,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct MultiRoundTripConfig {
+    #[kdl(children)]
+    source: Vec<MultiRoundTripSource>,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "source")]
+struct MultiRoundTripSource {
+    #[kdl(positional = 0)]
+    name: String,
+    #[kdl(child)]
+    include: Option<IncludeConfig>,
 }
 
 #[test]
@@ -269,10 +334,7 @@ config {
         .iter()
         .find(|node| node.base_name() == "fragment")
         .expect("fragment node");
-    let fragment_children = fragment
-        .children()
-        .map(|doc| doc.nodes())
-        .unwrap_or(&[]);
+    let fragment_children = fragment.children().map(|doc| doc.nodes()).unwrap_or(&[]);
     assert!(fragment_children.iter().any(|node| {
         node.base_name() == "include"
             && node.get(0).and_then(|val| val.as_string()) == Some("lib/**")
@@ -284,9 +346,11 @@ config {
         .expect("source node");
     let source_children = source.children().map(|doc| doc.nodes()).unwrap_or(&[]);
     assert!(source_children.iter().any(|node| node.base_name() == "use"));
-    assert!(source_children
-        .iter()
-        .all(|node| node.base_name() != "include"));
+    assert!(
+        source_children
+            .iter()
+            .all(|node| node.base_name() != "include")
+    );
 }
 
 #[test]
@@ -318,10 +382,7 @@ fn fragment_aware_update_preserves_use_overrides() {
         .iter()
         .find(|node| node.base_name() == "fragment")
         .expect("fragment node");
-    let fragment_children = fragment
-        .children()
-        .map(|doc| doc.nodes())
-        .unwrap_or(&[]);
+    let fragment_children = fragment.children().map(|doc| doc.nodes()).unwrap_or(&[]);
     assert!(fragment_children.iter().any(|node| {
         node.base_name() == "include"
             && node.get(0).and_then(|val| val.as_string()) == Some("lib/**")
@@ -337,7 +398,11 @@ fn fragment_aware_update_preserves_use_overrides() {
         .find(|node| node.base_name() == "use")
         .expect("use node");
     let use_children = use_node.children().map(|doc| doc.nodes()).unwrap_or(&[]);
-    assert!(use_children.iter().any(|node| node.base_name() == "exclude"));
+    assert!(
+        use_children
+            .iter()
+            .any(|node| node.base_name() == "exclude")
+    );
 }
 
 #[test]
@@ -358,4 +423,30 @@ fn fragment_aware_update_preserves_use_attrs() {
     let rendered = rt.to_kdl_fragment_aware().expect("render");
     assert!(rendered.contains("use \"code\" include=\"lib/**\""));
     assert!(!rendered.contains("use \"code\" {"));
+}
+
+#[test]
+fn fragment_aware_update_emits_remove_override_for_single_use_deletion() {
+    let doc = r#"config {
+  (source)fragment "code" {
+    include "src/**"
+  }
+
+  source "app-one" {
+    use "code"
+  }
+
+  source "app-two" {
+    use "code"
+  }
+}
+"#;
+
+    let mut rt = parse_str_roundtrip::<MultiRoundTripConfig>(doc).expect("parse");
+    rt.value_mut().source[0].include = None;
+    let rendered = rt.to_kdl_fragment_aware().expect("render");
+
+    assert!(rendered.contains("fragment \"code\""));
+    assert!(rendered.contains("include \"src/**\""));
+    assert!(rendered.contains("-include"));
 }
