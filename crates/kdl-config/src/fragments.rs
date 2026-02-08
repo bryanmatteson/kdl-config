@@ -723,9 +723,9 @@ fn expand_document_nodes(
     stack: &mut Vec<String>,
 ) -> Result<(), KdlConfigError> {
     for node in nodes.iter_mut() {
-        if node.base_name() == "use" {
+        if node.base_name() == "with" {
             return Err(fragment_error(
-                "use nodes must be inside a parent node",
+                "with nodes must be inside a parent node",
                 Some(node),
                 location,
             ));
@@ -773,7 +773,7 @@ fn adjust_frame_end_for_len_change(frame_end: &mut usize, len_before: usize, len
 }
 
 fn is_object_merge_candidate(node: &KdlNode) -> bool {
-    if node.base_name() == "use" {
+    if node.base_name() == "with" {
         return false;
     }
     if !node.args().is_empty() {
@@ -818,7 +818,7 @@ fn expand_child_node_at_index(
         return Ok(idx);
     }
 
-    if nodes[idx].base_name() != "use" {
+    if nodes[idx].base_name() != "with" {
         expand_node(
             &mut nodes[idx],
             fragments,
@@ -832,14 +832,14 @@ fn expand_child_node_at_index(
 
     if nodes[idx].modifier() != Modifier::Inherit {
         return Err(fragment_error(
-            "modifiers are not allowed on use nodes",
+            "modifiers are not allowed on with nodes",
             Some(&nodes[idx]),
             location,
         ));
     }
 
-    let parsed_use = parse_use(&nodes[idx], location)?;
-    let fragment_name = parsed_use.name.clone();
+    let parsed_with = parse_with(&nodes[idx], location)?;
+    let fragment_name = parsed_with.name.clone();
     let fragment = fragments.get(&fragment_name).ok_or_else(|| {
         let candidates: Vec<&str> = fragments.keys().map(|key| key.as_str()).collect();
         let mut message = format!("unknown fragment {:?}", fragment_name);
@@ -909,11 +909,11 @@ fn expand_child_node_at_index(
         stack,
     )?;
 
-    let ParsedUse {
+    let ParsedWith {
         attr_nodes,
         child_overrides,
         ..
-    } = parsed_use;
+    } = parsed_with;
     let fragment_len = fragment.inserts.len();
     let mut inserted = fragment.inserts.clone();
     inserted.extend(attr_nodes);
@@ -959,7 +959,7 @@ fn expand_child_nodes(
     let mut idx = 0usize;
     let mut had_direct_use = false;
     while idx < nodes.len() {
-        if nodes[idx].base_name() == "use" {
+        if nodes[idx].base_name() == "with" {
             had_direct_use = true;
         }
         idx = expand_child_node_at_index(
@@ -991,9 +991,9 @@ fn expand_document_nodes_with_map(
     map: &mut FragmentMap,
 ) -> Result<(), KdlConfigError> {
     for (idx, node) in nodes.iter_mut().enumerate() {
-        if node.base_name() == "use" {
+        if node.base_name() == "with" {
             return Err(fragment_error(
-                "use nodes must be inside a parent node",
+                "with nodes must be inside a parent node",
                 Some(node),
                 location,
             ));
@@ -1063,7 +1063,7 @@ fn expand_child_node_with_map_at_index(
         return Ok(idx);
     }
 
-    if nodes[idx].base_name() != "use" {
+    if nodes[idx].base_name() != "with" {
         let child_path = child_path(parent_path, nodes, idx);
         expand_node_with_map(
             &mut nodes[idx],
@@ -1080,14 +1080,14 @@ fn expand_child_node_with_map_at_index(
 
     if nodes[idx].modifier() != Modifier::Inherit {
         return Err(fragment_error(
-            "modifiers are not allowed on use nodes",
+            "modifiers are not allowed on with nodes",
             Some(&nodes[idx]),
             location,
         ));
     }
 
-    let parsed_use = parse_use(&nodes[idx], location)?;
-    let fragment_name = parsed_use.name.clone();
+    let parsed_with = parse_with(&nodes[idx], location)?;
+    let fragment_name = parsed_with.name.clone();
     let fragment = fragments.get(&fragment_name).ok_or_else(|| {
         let candidates: Vec<&str> = fragments.keys().map(|key| key.as_str()).collect();
         let mut message = format!("unknown fragment {:?}", fragment_name);
@@ -1159,12 +1159,12 @@ fn expand_child_node_with_map_at_index(
         map,
     )?;
 
-    let ParsedUse {
+    let ParsedWith {
         attr_overrides,
         attr_nodes,
         child_overrides,
         ..
-    } = parsed_use;
+    } = parsed_with;
     let fragment_len = fragment.inserts.len();
     let attr_override_len = attr_nodes.len();
     let mut inserted = fragment.inserts.clone();
@@ -1230,7 +1230,7 @@ fn expand_child_nodes_with_map(
     let mut idx = 0usize;
     let mut had_direct_use = false;
     while idx < nodes.len() {
-        if nodes[idx].base_name() == "use" {
+        if nodes[idx].base_name() == "with" {
             had_direct_use = true;
         }
         idx = expand_child_node_with_map_at_index(
@@ -1606,7 +1606,7 @@ pub(crate) fn apply_fragment_aware_updates(
 }
 
 #[derive(Debug, Clone)]
-struct ParsedUse {
+struct ParsedWith {
     name: String,
     attr_overrides: Vec<AttrOverride>,
     attr_nodes: Vec<KdlNode>,
@@ -1653,13 +1653,13 @@ fn parse_fragment_patch(
     })
 }
 
-fn parse_use(
+fn parse_with(
     node: &KdlNode,
     location: Option<&dyn LocationProvider>,
-) -> Result<ParsedUse, KdlConfigError> {
+) -> Result<ParsedWith, KdlConfigError> {
     let name_value = node.arg(0).ok_or_else(|| {
         fragment_error(
-            "use nodes must have a fragment name argument",
+            "with nodes must have a fragment name argument",
             Some(node),
             location,
         )
@@ -1688,7 +1688,7 @@ fn parse_use(
             other => {
                 return Err(fragment_error(
                     format!(
-                        "use override token at arg[{arg_index}] must be a string, found {}",
+                        "with override token at arg[{arg_index}] must be a string, found {}",
                         kdl_value_type(other)
                     ),
                     Some(node),
@@ -1706,7 +1706,7 @@ fn parse_use(
             .unwrap_or_default(),
     );
 
-    Ok(ParsedUse {
+    Ok(ParsedWith {
         name,
         attr_overrides,
         attr_nodes,
@@ -1725,7 +1725,7 @@ fn parse_attr_overrides(
             let key = name.value().to_string();
             if !seen.insert(key.clone()) {
                 return Err(fragment_error(
-                    format!("duplicate use attribute override {:?}", key),
+                    format!("duplicate with attribute override {:?}", key),
                     Some(node),
                     location,
                 ));
@@ -1759,7 +1759,7 @@ fn parse_attr_override_path(
     let parts: Vec<&str> = key.split('.').collect();
     if parts.iter().any(|part| part.is_empty()) {
         return Err(fragment_error(
-            format!("invalid use attribute override {:?}", key),
+            format!("invalid with attribute override {:?}", key),
             Some(node),
             location,
         ));
@@ -1801,7 +1801,7 @@ fn insert_attr_override(
                     if !current[index].children.is_empty() {
                         return Err(fragment_error(
                             format!(
-                                "conflicting use attribute overrides for {:?}",
+                                "conflicting with attribute overrides for {:?}",
                                 path.join(".")
                             ),
                             Some(node),
@@ -1813,7 +1813,7 @@ fn insert_attr_override(
                     if current[index].value.is_some() {
                         return Err(fragment_error(
                             format!(
-                                "conflicting use attribute overrides for {:?}",
+                                "conflicting with attribute overrides for {:?}",
                                 path.join(".")
                             ),
                             Some(node),

@@ -327,7 +327,7 @@ Fragments are a kdl_config–level primitive resolved before application parsing
 - merge/flatten into the target node itself.
 
 Fragments are expanded away entirely before `#[derive(Kdl)]` parsing.
-The application never sees `fragment`, `use`, or patch nodes.
+The application never sees `fragment`, `with`, or patch nodes.
 
 **Overview**
 
@@ -338,7 +338,7 @@ fragment "name" {
 }
 
 <target-node> {
-  use "name"
+  with "name"
   ...
 }
 ```
@@ -346,7 +346,7 @@ fragment "name" {
 - Insert nodes are normal KDL nodes and are inserted as children.
 - Merge patches are nodes whose names begin with `~` and are flattened into the target node using deep-merge semantics.
 - Insert and merge may coexist in the same fragment.
-- Overrides at the use site always win.
+- Overrides at the with site always win.
 
 **Fragment Definition**
 
@@ -358,8 +358,8 @@ fragment "<fragment-name>" {
 
 - `<fragment-name>` must be a string.
 - Type annotations on fragment nodes are optional:
-  - `(source)fragment "code"` explicitly types the fragment and validates uses against that type.
-  - `fragment "code"` is implicitly typed on first use and must match subsequent uses.
+  - `(source)fragment "code"` explicitly types the fragment and validates `with` invocations against that type.
+  - `fragment "code"` is implicitly typed on first `with` invocation and must match subsequent invocations.
 - Fragments may appear at top-level or inside other nodes (lexical scoping optional).
 - Fragments are removed from the document after expansion.
 
@@ -383,7 +383,7 @@ fragment "qdrant-hnsw" {
 }
 
 vectors "production" qdrant {
-  use "qdrant-hnsw"
+  with "qdrant-hnsw"
 }
 ```
 
@@ -427,7 +427,7 @@ fragment "local-defaults" {
 Applied to:
 ```
 source "app" local "." {
-  use "local-defaults"
+  with "local-defaults"
 }
 ```
 
@@ -461,7 +461,7 @@ Examples:
 
 **Patch Matching Rules**
 
-When expanding `use "<fragment>"` inside a target node `N`:
+When expanding `with "<fragment>"` inside a target node `N`:
 1. Collect merge patches where:
    - `patch.target_node == N.name`
 2. Among those:
@@ -512,18 +512,18 @@ Children are merged recursively:
 Order of application within a target node:
 1. Apply merge patch (`~`)
 2. Insert insert-nodes
-3. Apply use-site overrides (attrs + children)
+3. Apply with-site overrides (attrs + children)
 4. Existing node content remains; later content wins
 
 This preserves read-as-written semantics.
 
-**Overrides at the use Site**
+**Overrides at the with Site**
 
-`use` may carry overrides in both attribute and child forms.
+`with` may carry overrides in both attribute and child forms.
 
 ```
 source "generated" local "./generated" {
-  use "local-defaults" no-enrichment chunking.max-size=500
+  with "local-defaults" no-enrichment chunking.max-size=500
 }
 ```
 
@@ -556,7 +556,7 @@ fragment "code" {
 }
 
 source "app" local "." {
-  use "code"
+  with "code"
   include "src/**"
 }
 ```
@@ -583,17 +583,17 @@ Suggested schema model:
 - fragment children:
   - normal nodes allowed under any target
   - patch nodes `~<node>` validated as `<node>` schema
-- `use "<name>"`:
+- `with "<name>"`:
   - context-aware suggestions based on available fragments
   - error if no matching patch or valid insert applies
 
 **Error Cases**
 
-Errors must include both definition and use locations.
+Errors must include both definition and with locations.
 
 | Error | Description |
 | --- | --- |
-| Unknown fragment | `use "missing"` |
+| Unknown fragment | `with "missing"` |
 | Duplicate patch | Two `~source local` patches |
 | Invalid insert | Insert node not allowed under target schema |
 | Circular fragment | Fragments reference each other |
@@ -731,13 +731,13 @@ Use `#[kdl(render = "attr" | "value" | "child" | "children" | "registry")]` to o
 
 ### Fragment-Aware Updates
 
-Round-trip parsing preserves `fragment` and `use` nodes. When rendering updates:
+Round-trip parsing preserves `fragment` and `with` nodes. When rendering updates:
 - The default update path may emit **explicit overrides** (expanded children) and keep fragments unchanged.
 - A **fragment-aware** update mode can be used to push changes back into fragment definitions when it is safe:
-  - If **all uses** of a fragment result in identical updated children, the fragment definition is updated.
-  - Otherwise the fragment remains unchanged and per-use overrides are emitted after the `use` node.
-- If `use` overrides are supported, they are treated as **local** and remain after the `use` node.
-- Attribute overrides on `use` nodes are preserved when possible and updated from the expanded override view.
+  - If **all `with` invocations** of a fragment result in identical updated children, the fragment definition is updated.
+  - Otherwise the fragment remains unchanged and per-`with` overrides are emitted after the `with` node.
+- If `with` overrides are supported, they are treated as **local** and remain after the `with` node.
+- Attribute overrides on `with` nodes are preserved when possible and updated from the expanded override view.
 
 ## Examples
 
@@ -809,7 +809,7 @@ Notes:
 - Fragment schemas should:
   - allow both insert nodes and `~` patch nodes as children,
   - validate patch nodes against the referenced target schema, and
-  - support context-aware validation for `use "<name>"` within a target node.
+  - support context-aware validation for `with "<name>"` within a target node.
 
 ## Notes
 

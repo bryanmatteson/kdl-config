@@ -10,7 +10,7 @@ fn expands_typed_fragments() {
 }
 
 source "app" local "." {
-  use "code"
+  with "code"
   include "src/**"
 }
 "#;
@@ -22,7 +22,7 @@ source "app" local "." {
     let child_names: Vec<_> = source.children().iter().map(|c| c.name.as_str()).collect();
     assert_eq!(child_names.first().copied(), Some("chunking"));
     assert!(child_names.contains(&"include"));
-    assert!(source.children_named("use").next().is_none());
+    assert!(source.children_named("with").next().is_none());
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn rejects_fragment_type_mismatch() {
 }
 
 vectors "default" {
-  use "code"
+  with "code"
 }
 "#;
 
@@ -52,7 +52,7 @@ fragment "code" {
 }
 
 source "app" local "." {
-  use "code"
+  with "code"
 }
 "#;
 
@@ -69,11 +69,11 @@ fragment "code" {
 }
 
 source "app" local "." {
-  use "code"
+  with "code"
 }
 
 vectors "default" {
-  use "code"
+  with "code"
 }
 "#;
 
@@ -92,7 +92,7 @@ config {
   }
 
   source "app" {
-    use "code"
+    with "code"
   }
 }
 "#;
@@ -114,7 +114,7 @@ config {
     }
 
     source "app" {
-      use "code"
+      with "code"
     }
   }
 }
@@ -137,7 +137,7 @@ config {
   }
 
   source "app" {
-    use "code" {
+    with "code" {
       exclude "**/tests/**"
     }
   }
@@ -160,7 +160,7 @@ config {
   }
 
   source "app" {
-    use "code" include="src/**" chunking.max-size=2000
+    with "code" include="src/**" chunking.max-size=2000
   }
 }
 "#;
@@ -188,7 +188,7 @@ config {
   }
 
   source "app" {
-    use "code" no-enrichment
+    with "code" no-enrichment
   }
 }
 "#;
@@ -207,33 +207,33 @@ fn expands_nested_use_from_fragment_body() {
 }
 
 (source)fragment "a" {
-  use "b"
+  with "b"
 }
 
 source "app" local "." {
-  use "a"
+  with "a"
 }
 "#;
 
     let root = parse_config(doc).expect("parse");
     let source = root.child("source").expect("source node");
     assert!(source.children_named("include").next().is_some());
-    assert!(source.children_named("use").next().is_none());
+    assert!(source.children_named("with").next().is_none());
 }
 
 #[test]
 fn nested_fragment_recursion_reports_recursion_chain() {
     let doc = r#"
 (source)fragment "a" {
-  use "b"
+  with "b"
 }
 
 (source)fragment "b" {
-  use "a"
+  with "a"
 }
 
 source "app" local "." {
-  use "a"
+  with "a"
 }
 "#;
 
@@ -255,7 +255,7 @@ fn fragment_and_local_object_override_are_deep_merged() {
 }
 
 source "app" local "." {
-  use "defaults"
+  with "defaults"
   extraction {
     limit 5
     query "latest"
@@ -299,7 +299,7 @@ fragment "defaults" {
 
 source "app" local "." {
   chunking { max-size 500 }
-  use "defaults"
+  with "defaults"
 }
 "#;
 
@@ -328,7 +328,7 @@ fragment "defaults" {
 }
 
 source "app" git "https://example.com/repo.git" {
-  use "defaults"
+  with "defaults"
 }
 "#;
 
@@ -383,7 +383,7 @@ config {
   }
 
   source "app" {
-    use "code"
+    with "code"
   }
 }
 "#;
@@ -392,7 +392,7 @@ config {
     rt.value_mut().source.include.path = "lib/**".to_string();
     let rendered = rt.to_kdl().expect("render");
     assert!(rendered.contains("(source)fragment"));
-    assert!(rendered.contains("use \"code\""));
+    assert!(rendered.contains("with \"code\""));
 }
 
 #[test]
@@ -404,7 +404,7 @@ config {
   }
 
   source "app" {
-    use "code"
+    with "code"
   }
 }
 "#;
@@ -434,7 +434,7 @@ config {
         .find(|node| node.base_name() == "source")
         .expect("source node");
     let source_children = source.children().map(|doc| doc.nodes()).unwrap_or(&[]);
-    assert!(source_children.iter().any(|node| node.base_name() == "use"));
+    assert!(source_children.iter().any(|node| node.base_name() == "with"));
     assert!(
         source_children
             .iter()
@@ -450,7 +450,7 @@ fn fragment_aware_update_preserves_use_overrides() {
   }
 
   source "app" {
-    use "code" {
+    with "code" {
       exclude "**/tests/**"
     }
   }
@@ -484,7 +484,7 @@ fn fragment_aware_update_preserves_use_overrides() {
     let source_children = source.children().map(|doc| doc.nodes()).unwrap_or(&[]);
     let use_node = source_children
         .iter()
-        .find(|node| node.base_name() == "use")
+        .find(|node| node.base_name() == "with")
         .expect("use node");
     let use_children = use_node.children().map(|doc| doc.nodes()).unwrap_or(&[]);
     assert!(
@@ -502,7 +502,7 @@ fn fragment_aware_update_preserves_use_attrs() {
   }
 
   source "app" {
-    use "code" include="src/**"
+    with "code" include="src/**"
   }
 }
 "#;
@@ -510,8 +510,8 @@ fn fragment_aware_update_preserves_use_attrs() {
     let mut rt = parse_str_roundtrip::<RoundTripConfig>(doc).expect("parse");
     rt.value_mut().source.include.path = "lib/**".to_string();
     let rendered = rt.to_kdl_fragment_aware().expect("render");
-    assert!(rendered.contains("use \"code\" include=\"lib/**\""));
-    assert!(!rendered.contains("use \"code\" {"));
+    assert!(rendered.contains("with \"code\" include=\"lib/**\""));
+    assert!(!rendered.contains("with \"code\" {"));
 }
 
 #[test]
@@ -522,11 +522,11 @@ fn fragment_aware_update_emits_remove_override_for_single_use_deletion() {
   }
 
   source "app-one" {
-    use "code"
+    with "code"
   }
 
   source "app-two" {
-    use "code"
+    with "code"
   }
 }
 "#;
