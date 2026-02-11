@@ -300,8 +300,10 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                               variadic: bool,
                               required: bool,
                               bool_mode: TokenStream,
-                              description: TokenStream|
+                              description: TokenStream,
+                              validations: &[super::attrs::ValidationRule]|
      -> TokenStream {
+        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
         quote! {
             let type_spec = #type_expr;
             let type_spec = if #variadic {
@@ -312,6 +314,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
             node_schema.name = Some(#kdl_key.to_string());
             node_schema.description = #description;
+            node_schema.validations = vec![#(#validation_exprs),*];
             node_schema.values.push(::kdl_config::schema::SchemaValue {
                 ty: type_spec,
                 required: #required,
@@ -333,14 +336,20 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
         }
     };
 
-    let node_child_insert =
-        |ty: &Type, kdl_key: &str, required: bool, description: TokenStream| -> TokenStream {
-            quote! {
+    let node_child_insert = |ty: &Type,
+                              kdl_key: &str,
+                              required: bool,
+                              description: TokenStream,
+                              validations: &[super::attrs::ValidationRule]|
+     -> TokenStream {
+        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
+        quote! {
                 let schema_ref = <#ty as ::kdl_config::schema::KdlSchema>::schema_ref();
                 let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
                 node_schema.name = Some(#kdl_key.to_string());
                 node_schema.description = #description;
                 node_schema.required = Some(#required);
+                node_schema.validations = vec![#(#validation_exprs),*];
                 match schema_ref {
                     ::kdl_config::schema::SchemaRef::Ref(r) => {
                         node_schema.ref_type = Some(r);
@@ -372,17 +381,20 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                                  container: &str,
                                  key_schema: Option<TokenStream>,
                                  required: bool,
-                                 description: TokenStream|
+                                 description: TokenStream,
+                                 validations: &[super::attrs::ValidationRule]|
      -> TokenStream {
         let key_schema_assign = match key_schema {
             Some(ks) => quote! { node_schema.registry_key = Some(#ks); },
             None => quote! {},
         };
+        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
         quote! {
             let schema_ref = <#val_ty as ::kdl_config::schema::KdlSchema>::schema_ref();
             let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
             node_schema.name = Some(#container.to_string());
             node_schema.description = #description;
+            node_schema.validations = vec![#(#validation_exprs),*];
             node_schema.values.push(::kdl_config::schema::SchemaValue {
                 ty: ::kdl_config::schema::SchemaType::String,
                 required: #required,
@@ -424,7 +436,8 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                                      node_name: &str,
                                      registry_key: Option<TokenStream>,
                                      required: bool,
-                                     description: TokenStream|
+                                     description: TokenStream,
+                                     validations: &[super::attrs::ValidationRule]|
      -> TokenStream {
         let key_value_insert = match key_ty.map(schema_type_expr) {
             Some(ks) => quote! {
@@ -442,12 +455,14 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             Some(rk) => quote! { node_schema.registry_key = Some(#rk); },
             None => quote! {},
         };
+        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
         quote! {
             let schema_ref = <#val_ty as ::kdl_config::schema::KdlSchema>::schema_ref();
             let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
             node_schema.name = Some(#node_name.to_string());
             node_schema.description = #description;
             node_schema.required = Some(#required);
+            node_schema.validations = vec![#(#validation_exprs),*];
             #key_value_insert
             #registry_key_assign
             match schema_ref {
@@ -624,6 +639,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 key_schema,
                 required,
                 desc_expr.clone(),
+                &field.schema.validations,
             ));
             handled = true;
         }
@@ -663,6 +679,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 key_schema,
                 required,
                 desc_expr.clone(),
+                &field.schema.validations,
             ));
             handled = true;
         }
@@ -733,6 +750,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                             required,
                             bool_mode_expr.clone(),
                             desc_expr.clone(),
+                            &field.schema.validations,
                         ));
                     }
                     SchemaFieldKind::Node => child_inserts_target.push(node_child_insert(
@@ -740,6 +758,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                         &kdl_key,
                         required,
                         desc_expr.clone(),
+                        &field.schema.validations,
                     )),
                     SchemaFieldKind::Registry | SchemaFieldKind::Modifier => {}
                 }
@@ -755,6 +774,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                     &node_name,
                     required,
                     desc_expr.clone(),
+                    &field.schema.validations,
                 ));
             }
         } else {
@@ -781,6 +801,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                             required,
                             bool_mode_expr.clone(),
                             desc_expr.clone(),
+                            &field.schema.validations,
                         ));
                     }
                     DefaultPlacement::Attr => {
@@ -806,6 +827,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                             required,
                             bool_mode_expr.clone(),
                             desc_expr.clone(),
+                            &field.schema.validations,
                         ));
                     }
                 },
@@ -816,6 +838,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                             &kdl_key,
                             required,
                             desc_expr.clone(),
+                            &field.schema.validations,
                         ));
                     }
                     DefaultPlacement::Attr | DefaultPlacement::Value => {}
