@@ -197,6 +197,7 @@ fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
                                         required: true,
                                         description: None,
                                         enum_values: Some(vec![#(#enum_values),*]),
+                                        validations: vec![],
                                     }],
                                     ..Default::default()
                                 },
@@ -241,6 +242,7 @@ fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
                                     required: true,
                                     description: None,
                                     enum_values: None,
+                                    validations: vec![],
                                 }],
                                 ..Default::default()
                             },

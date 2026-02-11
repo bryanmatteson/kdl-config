@@ -208,6 +208,24 @@ fn parse_struct_meta(
         Some("deny_unknown") => {
             result.deny_unknown = Some(true);
         }
+        Some("validate") => {
+            if meta.input.peek(syn::Token![=]) {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }) = value
+                {
+                    let rules = parse_validation_dsl_str(&s.value(), s.span())?;
+                    result.validations.extend(rules);
+                }
+            } else if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
+                meta.parse_nested_meta(|nested| {
+                    let rule = parse_validation_rule_meta(&nested)?;
+                    result.validations.push(rule);
+                    Ok(())
+                })?;
+            }
+        }
         Some("schema") => {
             if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
                 meta.parse_nested_meta(|nested| {
@@ -274,6 +292,24 @@ fn parse_struct_schema_meta(
             } else {
                 true
             });
+        }
+        Some("validate") => {
+            if meta.input.peek(syn::Token![=]) {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }) = value
+                {
+                    let rules = parse_validation_dsl_str(&s.value(), s.span())?;
+                    schema.validations.extend(rules);
+                }
+            } else if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
+                meta.parse_nested_meta(|nested| {
+                    let rule = parse_validation_rule_meta(&nested)?;
+                    schema.validations.push(rule);
+                    Ok(())
+                })?;
+            }
         }
         _ => {}
     }
@@ -663,6 +699,28 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
             };
         }
 
+        // Validation
+        Some("validate") => {
+            if meta.input.peek(syn::Token![=]) {
+                // String DSL: #[kdl(validate = "range(1, 65535) non_empty")]
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }) = value
+                {
+                    let rules = parse_validation_dsl_str(&s.value(), s.span())?;
+                    raw.validations.extend(rules);
+                }
+            } else if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
+                // Nested meta: #[kdl(validate(range(1, 65535), non_empty))]
+                meta.parse_nested_meta(|nested| {
+                    let rule = parse_validation_rule_meta(&nested)?;
+                    raw.validations.push(rule);
+                    Ok(())
+                })?;
+            }
+        }
+
         // Schema - handle specially because `type` is a keyword
         Some("schema") => {
             if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
@@ -755,6 +813,24 @@ fn parse_schema_meta(
             }) = value
             {
                 schema.description = Some(s.value());
+            }
+        }
+        Some("validate") => {
+            if meta.input.peek(syn::Token![=]) {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }) = value
+                {
+                    let rules = parse_validation_dsl_str(&s.value(), s.span())?;
+                    schema.validations.extend(rules);
+                }
+            } else if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
+                meta.parse_nested_meta(|nested| {
+                    let rule = parse_validation_rule_meta(&nested)?;
+                    schema.validations.push(rule);
+                    Ok(())
+                })?;
             }
         }
         _ => {}
@@ -1458,6 +1534,486 @@ fn parse_default_expr(expr: &syn::Expr) -> Option<super::types::DefaultLiteral> 
             }
         }
         _ => None,
+    }
+}
+
+// ============================================================================
+// Validation DSL parsing
+// ============================================================================
+
+/// Parse a validation DSL string into rules.
+fn parse_validation_dsl_str(
+    input: &str,
+    span: proc_macro2::Span,
+) -> syn::Result<Vec<super::types::ValidationRule>> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut rules = Vec::new();
+    let mut chars = input.chars().peekable();
+
+    while chars.peek().is_some() {
+        while chars.peek().map_or(false, |c| c.is_whitespace() || *c == ',') {
+            chars.next();
+        }
+        if chars.peek().is_none() {
+            break;
+        }
+
+        let mut ident = String::new();
+        while chars
+            .peek()
+            .map_or(false, |c| c.is_alphanumeric() || *c == '_')
+        {
+            ident.push(chars.next().unwrap());
+        }
+
+        if ident.is_empty() {
+            return Err(syn::Error::new(
+                span,
+                format!(
+                    "unexpected character in validation DSL: {:?}",
+                    chars.peek()
+                ),
+            ));
+        }
+
+        let rule = if chars.peek() == Some(&'(') {
+            chars.next();
+            let mut depth = 1;
+            let mut args = String::new();
+            while let Some(c) = chars.next() {
+                match c {
+                    '(' => {
+                        depth += 1;
+                        args.push(c);
+                    }
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        args.push(c);
+                    }
+                    _ => args.push(c),
+                }
+            }
+            if depth != 0 {
+                return Err(syn::Error::new(
+                    span,
+                    "unclosed parenthesis in validation DSL",
+                ));
+            }
+            parse_validation_rule_with_args(&ident, &args, span)?
+        } else {
+            parse_validation_rule_bare(&ident, span)?
+        };
+
+        rules.push(rule);
+    }
+
+    Ok(rules)
+}
+
+fn parse_validation_f64(s: &str, span: proc_macro2::Span) -> syn::Result<f64> {
+    s.trim()
+        .parse::<f64>()
+        .map_err(|_| syn::Error::new(span, format!("expected number, got {:?}", s.trim())))
+}
+
+fn parse_validation_usize(s: &str, span: proc_macro2::Span) -> syn::Result<usize> {
+    s.trim().parse::<usize>().map_err(|_| {
+        syn::Error::new(
+            span,
+            format!("expected non-negative integer, got {:?}", s.trim()),
+        )
+    })
+}
+
+fn parse_validation_string_arg(s: &str) -> String {
+    let s = s.trim();
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+fn parse_validation_rule_with_args(
+    name: &str,
+    args: &str,
+    span: proc_macro2::Span,
+) -> syn::Result<super::types::ValidationRule> {
+    use super::types::ValidationRule;
+    match name {
+        "min" => Ok(ValidationRule::Min(parse_validation_f64(args, span)?)),
+        "max" => Ok(ValidationRule::Max(parse_validation_f64(args, span)?)),
+        "range" => {
+            let parts: Vec<&str> = args.split(',').collect();
+            if parts.len() != 2 {
+                return Err(syn::Error::new(
+                    span,
+                    "range() requires exactly 2 arguments",
+                ));
+            }
+            Ok(ValidationRule::Range(
+                parse_validation_f64(parts[0], span)?,
+                parse_validation_f64(parts[1], span)?,
+            ))
+        }
+        "multiple_of" => Ok(ValidationRule::MultipleOf(parse_validation_f64(
+            args, span,
+        )?)),
+        "min_len" => Ok(ValidationRule::MinLen(parse_validation_usize(args, span)?)),
+        "max_len" => Ok(ValidationRule::MaxLen(parse_validation_usize(args, span)?)),
+        "len" => {
+            let parts: Vec<&str> = args.split(',').collect();
+            if parts.len() != 2 {
+                return Err(syn::Error::new(span, "len() requires exactly 2 arguments"));
+            }
+            Ok(ValidationRule::Len(
+                parse_validation_usize(parts[0], span)?,
+                parse_validation_usize(parts[1], span)?,
+            ))
+        }
+        "pattern" => Ok(ValidationRule::Pattern(parse_validation_string_arg(args))),
+        "min_items" => Ok(ValidationRule::MinItems(parse_validation_usize(
+            args, span,
+        )?)),
+        "max_items" => Ok(ValidationRule::MaxItems(parse_validation_usize(
+            args, span,
+        )?)),
+        "func" => Ok(ValidationRule::Func(parse_validation_string_arg(args))),
+        "less_than" | "lt" => Ok(ValidationRule::LessThan(parse_validation_string_arg(args))),
+        "less_than_or_equal" | "lte" => {
+            Ok(ValidationRule::LessThanOrEqual(parse_validation_string_arg(args)))
+        }
+        "greater_than" | "gt" => Ok(ValidationRule::GreaterThan(parse_validation_string_arg(args))),
+        "greater_than_or_equal" | "gte" => {
+            Ok(ValidationRule::GreaterThanOrEqual(parse_validation_string_arg(args)))
+        }
+        "equal_to" | "eq" => Ok(ValidationRule::EqualTo(parse_validation_string_arg(args))),
+        "not_equal_to" | "neq" => {
+            Ok(ValidationRule::NotEqualTo(parse_validation_string_arg(args)))
+        }
+        _ => Err(syn::Error::new(
+            span,
+            format!("unknown validation rule: {}", name),
+        )),
+    }
+}
+
+fn parse_validation_rule_bare(
+    name: &str,
+    span: proc_macro2::Span,
+) -> syn::Result<super::types::ValidationRule> {
+    use super::types::ValidationRule;
+    match name {
+        "positive" => Ok(ValidationRule::Positive),
+        "negative" => Ok(ValidationRule::Negative),
+        "non_negative" => Ok(ValidationRule::NonNegative),
+        "non_positive" => Ok(ValidationRule::NonPositive),
+        "non_empty" => Ok(ValidationRule::NonEmpty),
+        "ascii" => Ok(ValidationRule::Ascii),
+        "alphanumeric" => Ok(ValidationRule::Alphanumeric),
+        _ => Err(syn::Error::new(
+            span,
+            format!(
+                "unknown validation rule or missing arguments: {}",
+                name
+            ),
+        )),
+    }
+}
+
+/// Parse a single validation rule from nested meta syntax.
+/// E.g., `range(1, 65535)` or `non_empty`
+fn parse_validation_rule_meta(
+    meta: &syn::meta::ParseNestedMeta,
+) -> syn::Result<super::types::ValidationRule> {
+    use super::types::ValidationRule;
+    use syn::parse::Parse;
+    use syn::{Expr, ExprLit, Lit};
+
+    let ident = meta
+        .path
+        .get_ident()
+        .map(|i| i.to_string())
+        .ok_or_else(|| {
+            syn::Error::new_spanned(&meta.path, "expected identifier for validation rule")
+        })?;
+
+    // Check for parenthesized arguments: validate(range(1, 65535))
+    if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
+        if meta.input.peek(syn::token::Paren) {
+            // This is a function-style rule with args
+            let content;
+            syn::parenthesized!(content in meta.input);
+            let args: syn::punctuated::Punctuated<Expr, syn::Token![,]> =
+                content.parse_terminated(Expr::parse, syn::Token![,])?;
+
+            return parse_validation_rule_from_exprs(&ident, &args, meta.path.span());
+        }
+
+        // Check for `= value` style
+        if meta.input.peek(syn::Token![=]) {
+            let value: Expr = meta.value()?.parse()?;
+            match &ident[..] {
+                "min" => return Ok(ValidationRule::Min(expr_to_f64(&value)?)),
+                "max" => return Ok(ValidationRule::Max(expr_to_f64(&value)?)),
+                "multiple_of" => return Ok(ValidationRule::MultipleOf(expr_to_f64(&value)?)),
+                "min_len" => return Ok(ValidationRule::MinLen(expr_to_usize(&value)?)),
+                "max_len" => return Ok(ValidationRule::MaxLen(expr_to_usize(&value)?)),
+                "min_items" => return Ok(ValidationRule::MinItems(expr_to_usize(&value)?)),
+                "max_items" => return Ok(ValidationRule::MaxItems(expr_to_usize(&value)?)),
+                "pattern" => {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = value
+                    {
+                        return Ok(ValidationRule::Pattern(s.value()));
+                    }
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "pattern requires a string argument",
+                    ));
+                }
+                "func" => {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = value
+                    {
+                        return Ok(ValidationRule::Func(s.value()));
+                    }
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "func requires a string argument",
+                    ));
+                }
+                "less_than" | "lt" => {
+                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                        return Ok(ValidationRule::LessThan(s.value()));
+                    }
+                    return Err(syn::Error::new(meta.path.span(), "less_than requires a string field name"));
+                }
+                "less_than_or_equal" | "lte" => {
+                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                        return Ok(ValidationRule::LessThanOrEqual(s.value()));
+                    }
+                    return Err(syn::Error::new(meta.path.span(), "less_than_or_equal requires a string field name"));
+                }
+                "greater_than" | "gt" => {
+                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                        return Ok(ValidationRule::GreaterThan(s.value()));
+                    }
+                    return Err(syn::Error::new(meta.path.span(), "greater_than requires a string field name"));
+                }
+                "greater_than_or_equal" | "gte" => {
+                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                        return Ok(ValidationRule::GreaterThanOrEqual(s.value()));
+                    }
+                    return Err(syn::Error::new(meta.path.span(), "greater_than_or_equal requires a string field name"));
+                }
+                "equal_to" | "eq" => {
+                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                        return Ok(ValidationRule::EqualTo(s.value()));
+                    }
+                    return Err(syn::Error::new(meta.path.span(), "equal_to requires a string field name"));
+                }
+                "not_equal_to" | "neq" => {
+                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                        return Ok(ValidationRule::NotEqualTo(s.value()));
+                    }
+                    return Err(syn::Error::new(meta.path.span(), "not_equal_to requires a string field name"));
+                }
+                _ => {
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        format!("unknown validation rule: {}", ident),
+                    ))
+                }
+            }
+        }
+    }
+
+    // Bare ident (no args)
+    parse_validation_rule_bare(&ident, meta.path.span())
+}
+
+fn expr_to_f64(expr: &syn::Expr) -> syn::Result<f64> {
+    use syn::{Expr, ExprLit, ExprUnary, Lit, UnOp};
+    match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Int(i), ..
+        }) => i.base10_parse::<f64>(),
+        Expr::Lit(ExprLit {
+            lit: Lit::Float(f), ..
+        }) => f.base10_parse::<f64>(),
+        Expr::Unary(ExprUnary {
+            op: UnOp::Neg(_),
+            expr,
+            ..
+        }) => Ok(-expr_to_f64(expr)?),
+        _ => Err(syn::Error::new_spanned(expr, "expected numeric literal")),
+    }
+}
+
+fn expr_to_usize(expr: &syn::Expr) -> syn::Result<usize> {
+    use syn::{Expr, ExprLit, Lit};
+    match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Int(i), ..
+        }) => i.base10_parse::<usize>(),
+        _ => Err(syn::Error::new_spanned(
+            expr,
+            "expected non-negative integer",
+        )),
+    }
+}
+
+fn parse_validation_rule_from_exprs(
+    name: &str,
+    args: &syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>,
+    span: proc_macro2::Span,
+) -> syn::Result<super::types::ValidationRule> {
+    use super::types::ValidationRule;
+    use syn::{Expr, ExprLit, Lit};
+
+    match name {
+        "min" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "min() takes 1 argument"));
+            }
+            Ok(ValidationRule::Min(expr_to_f64(&args[0])?))
+        }
+        "max" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "max() takes 1 argument"));
+            }
+            Ok(ValidationRule::Max(expr_to_f64(&args[0])?))
+        }
+        "range" => {
+            if args.len() != 2 {
+                return Err(syn::Error::new(span, "range() takes 2 arguments"));
+            }
+            Ok(ValidationRule::Range(
+                expr_to_f64(&args[0])?,
+                expr_to_f64(&args[1])?,
+            ))
+        }
+        "multiple_of" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "multiple_of() takes 1 argument"));
+            }
+            Ok(ValidationRule::MultipleOf(expr_to_f64(&args[0])?))
+        }
+        "min_len" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "min_len() takes 1 argument"));
+            }
+            Ok(ValidationRule::MinLen(expr_to_usize(&args[0])?))
+        }
+        "max_len" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "max_len() takes 1 argument"));
+            }
+            Ok(ValidationRule::MaxLen(expr_to_usize(&args[0])?))
+        }
+        "len" => {
+            if args.len() != 2 {
+                return Err(syn::Error::new(span, "len() takes 2 arguments"));
+            }
+            Ok(ValidationRule::Len(
+                expr_to_usize(&args[0])?,
+                expr_to_usize(&args[1])?,
+            ))
+        }
+        "pattern" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "pattern() takes 1 argument"));
+            }
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &args[0]
+            {
+                Ok(ValidationRule::Pattern(s.value()))
+            } else {
+                Err(syn::Error::new(
+                    span,
+                    "pattern() requires a string argument",
+                ))
+            }
+        }
+        "min_items" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "min_items() takes 1 argument"));
+            }
+            Ok(ValidationRule::MinItems(expr_to_usize(&args[0])?))
+        }
+        "max_items" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "max_items() takes 1 argument"));
+            }
+            Ok(ValidationRule::MaxItems(expr_to_usize(&args[0])?))
+        }
+        "func" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "func() takes 1 argument"));
+            }
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &args[0]
+            {
+                Ok(ValidationRule::Func(s.value()))
+            } else {
+                Err(syn::Error::new(
+                    span,
+                    "func() requires a string argument",
+                ))
+            }
+        }
+        "less_than" | "lt" => {
+            if args.len() != 1 { return Err(syn::Error::new(span, "less_than() takes 1 argument")); }
+            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+                Ok(ValidationRule::LessThan(s.value()))
+            } else { Err(syn::Error::new(span, "less_than() requires a string field name")) }
+        }
+        "less_than_or_equal" | "lte" => {
+            if args.len() != 1 { return Err(syn::Error::new(span, "less_than_or_equal() takes 1 argument")); }
+            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+                Ok(ValidationRule::LessThanOrEqual(s.value()))
+            } else { Err(syn::Error::new(span, "less_than_or_equal() requires a string field name")) }
+        }
+        "greater_than" | "gt" => {
+            if args.len() != 1 { return Err(syn::Error::new(span, "greater_than() takes 1 argument")); }
+            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+                Ok(ValidationRule::GreaterThan(s.value()))
+            } else { Err(syn::Error::new(span, "greater_than() requires a string field name")) }
+        }
+        "greater_than_or_equal" | "gte" => {
+            if args.len() != 1 { return Err(syn::Error::new(span, "greater_than_or_equal() takes 1 argument")); }
+            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+                Ok(ValidationRule::GreaterThanOrEqual(s.value()))
+            } else { Err(syn::Error::new(span, "greater_than_or_equal() requires a string field name")) }
+        }
+        "equal_to" | "eq" => {
+            if args.len() != 1 { return Err(syn::Error::new(span, "equal_to() takes 1 argument")); }
+            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+                Ok(ValidationRule::EqualTo(s.value()))
+            } else { Err(syn::Error::new(span, "equal_to() requires a string field name")) }
+        }
+        "not_equal_to" | "neq" => {
+            if args.len() != 1 { return Err(syn::Error::new(span, "not_equal_to() takes 1 argument")); }
+            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+                Ok(ValidationRule::NotEqualTo(s.value()))
+            } else { Err(syn::Error::new(span, "not_equal_to() requires a string field name")) }
+        }
+        _ => Err(syn::Error::new(
+            span,
+            format!("unknown validation rule: {}", name),
+        )),
     }
 }
 

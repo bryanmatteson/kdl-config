@@ -34,5 +34,5 @@ pub use type_utils::{
 pub use types::{
     BoolMode, ChildrenMapKind, CollectionMode, CollectionSpec, ConflictPolicy, DefaultLiteral,
     DefaultPlacement, DefaultSpec, FlagStyle, InjectOpt, RenameStrategy, RenderPlacement,
-    SchemaTypeOverride, SelectOpts, SelectSpec, SelectorAst,
+    SchemaTypeOverride, SelectOpts, SelectSpec, SelectorAst, ValidationRule,
 };

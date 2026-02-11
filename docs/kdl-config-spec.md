@@ -38,6 +38,8 @@ In child form, `attr1` and `attr2` are child node names. A child â€œvalue nodeâ€
 - `#[kdl(value)]`: allow child value node `key <args...>`.
 - `#[kdl(child)]`: allow child struct node `key { ... }`.
 - `#[kdl(children)]`: allow multiple child struct nodes `key { ... }` into `Vec<T>`.
+- `#[kdl(children_any)]` or `#[kdl(choice)]`: allow any child node into a `Vec<T>` of choice enums (variant selected by node name).
+- `#[kdl(flatten)]`: merge the child node's fields into the current struct (decode-only; rendering uses child placement).
 - `#[kdl(registry)]`: parse a registry map from repeated nodes keyed by their **first positional arg**.
   - Override key source with `#[kdl(registry, key_arg = N)]`, `#[kdl(registry, key_attr = "id")]`, or `#[kdl(registry, key_fn = "path")]`.
 - `#[kdl(children_map)]`: parse all children into a map keyed by their **node name**.
@@ -60,7 +62,7 @@ If `keyed` is explicitly set, flags are not considered unless `flag` is also set
 - `#[kdl(render = "attr" | "value" | "child" | "children" | "registry")]`: canonical render target.
 - `#[kdl(skip)]`: skip both parsing and rendering; the field is set to `Default::default()` when parsing.
 - `#[kdl(skip_serializing_if = "path")]`: rendering-only skip predicate.
-- `#[kdl(scalar)]` or `#[kdl(value_type)]`: treat custom type as scalar for attr/positional/value placements (requires `FromKdlValue` implementation).
+- `#[kdl(scalar)]` (aliases: `#[kdl(value_type)]`, `#[kdl(value_like)]`, `#[kdl(kdl_value)]`): treat custom type as scalar for attr/positional/value placements (requires `FromKdlValue` implementation).
 - `#[kdl(modifier)]`: capture the node's signal modifier (`+`, `-`, `!`) into a `Modifier` or `Option<Modifier>` field.
 
 Note: `#[kdl(modifier)]` cannot be combined with other placements and only one modifier field is allowed per struct or enum variant.
@@ -810,6 +812,34 @@ Notes:
   - allow both insert nodes and `~` patch nodes as children,
   - validate patch nodes against the referenced target schema, and
   - support context-aware validation for `with "<name>"` within a target node.
+
+## Rust Traits
+
+The runtime crate defines these core traits:
+
+| Trait | Description |
+| --- | --- |
+| `KdlDecode` | Parse a typed configuration from a `KdlNode`. |
+| `KdlRender` | Render a value into canonical KDL text. |
+| `KdlUpdate` | Update an existing `KdlNode` AST in-place for round-trip preservation. |
+| `KdlEncode` | Encode a value into a new `KdlNode`. |
+| `KdlSchema` | Describe the KDL schema for a type. |
+| `FromKdlValue` | Convert a KDL scalar value to a Rust type. |
+
+Derive macros generate `KdlDecode`, `KdlRender`, `KdlUpdate`, and `KdlEncode` implementations. `KdlSchema` is generated separately.
+
+## Built-in Newtypes
+
+The runtime crate provides these reusable newtypes that implement `KdlDecode`, `KdlRender`, `KdlUpdate`, `FromKdlValue`, and `KdlSchema`:
+
+| Type | Description |
+| --- | --- |
+| `Scalar<T>` | Generic wrapper for map value nodes and other node-valued scalar shapes. Implements all core traits by delegating to `T`. |
+| `Duration` | Parses duration strings (`"500ms"`, `"30s"`, `"5m"`, `"2h"`, `"1d"`) or raw millisecond integers into `std::time::Duration`. |
+| `Weight` | A float constrained to `0.0..=1.0`. |
+| `PositiveCount` | A non-zero `u32` (`NonZeroU32`). |
+
+All newtypes optionally derive `serde::Serialize` and `serde::Deserialize` behind the `serde` cargo feature.
 
 ## Notes
 

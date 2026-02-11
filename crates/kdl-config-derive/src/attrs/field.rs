@@ -4,7 +4,7 @@ use proc_macro2::Span;
 
 use super::types::{
     BoolMode, ConflictPolicy, DefaultLiteral, DefaultSpec, FlagStyle, InjectOpt, RenderPlacement,
-    SchemaTypeOverride, SelectOpts, SelectSpec, SelectorAst,
+    SchemaTypeOverride, SelectOpts, SelectSpec, SelectorAst, ValidationRule,
 };
 
 /// Field placement specification.
@@ -40,6 +40,8 @@ pub struct FieldSchemaOverride {
     pub kind: Option<SchemaTypeOverride>,
     /// Schema description (set by both `description` and `desc` in attributes).
     pub description: Option<String>,
+    /// Validation rules parsed from `#[kdl(validate(...))]` or `#[kdl(validate = "...")]`.
+    pub validations: Vec<ValidationRule>,
 }
 
 impl FieldSchemaOverride {
@@ -181,6 +183,9 @@ pub struct RawFieldAttrs {
 
     // === Schema ===
     pub schema: FieldSchemaOverride,
+
+    // === Validation ===
+    pub validations: Vec<ValidationRule>,
 }
 
 /// Parsed field path for re-rooting decoding.
@@ -222,7 +227,7 @@ impl FieldPath {
 
 impl RawFieldAttrs {
     /// Convert raw parsed attributes to processed form.
-    pub fn into_field_attrs(self, span: Span) -> syn::Result<FieldAttrs> {
+    pub fn into_field_attrs(mut self, span: Span) -> syn::Result<FieldAttrs> {
         // Build placement
         let mut placement = FieldPlacement::default();
         placement.attr = self.attr;
@@ -392,6 +397,11 @@ impl RawFieldAttrs {
 
         // Resolve scalar
         let scalar = self.scalar || self.value_type || self.value_like || self.kdl_value;
+
+        // Merge top-level validate(...) into schema validations
+        if !self.validations.is_empty() {
+            self.schema.validations.extend(self.validations);
+        }
 
         Ok(FieldAttrs {
             span,

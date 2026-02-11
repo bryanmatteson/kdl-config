@@ -243,6 +243,114 @@ pub enum DefaultLiteral {
     String(String),
 }
 
+/// A validation rule parsed from derive macro attributes.
+#[derive(Debug, Clone)]
+pub enum ValidationRule {
+    Min(f64),
+    Max(f64),
+    Range(f64, f64),
+    MultipleOf(f64),
+    Positive,
+    Negative,
+    NonNegative,
+    NonPositive,
+    MinLen(usize),
+    MaxLen(usize),
+    Len(usize, usize),
+    Pattern(String),
+    NonEmpty,
+    Ascii,
+    Alphanumeric,
+    MinItems(usize),
+    MaxItems(usize),
+    Func(String),
+    LessThan(String),
+    LessThanOrEqual(String),
+    GreaterThan(String),
+    GreaterThanOrEqual(String),
+    EqualTo(String),
+    NotEqualTo(String),
+}
+
+impl quote::ToTokens for ValidationRule {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            ValidationRule::Min(v) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Min(#v) })
+            }
+            ValidationRule::Max(v) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Max(#v) })
+            }
+            ValidationRule::Range(min, max) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Range(#min, #max) })
+            }
+            ValidationRule::MultipleOf(v) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::MultipleOf(#v) })
+            }
+            ValidationRule::Positive => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Positive })
+            }
+            ValidationRule::Negative => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Negative })
+            }
+            ValidationRule::NonNegative => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::NonNegative })
+            }
+            ValidationRule::NonPositive => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::NonPositive })
+            }
+            ValidationRule::MinLen(v) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::MinLen(#v) })
+            }
+            ValidationRule::MaxLen(v) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::MaxLen(#v) })
+            }
+            ValidationRule::Len(min, max) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Len(#min, #max) })
+            }
+            ValidationRule::Pattern(p) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Pattern(#p.to_string()) })
+            }
+            ValidationRule::NonEmpty => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::NonEmpty })
+            }
+            ValidationRule::Ascii => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Ascii })
+            }
+            ValidationRule::Alphanumeric => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Alphanumeric })
+            }
+            ValidationRule::MinItems(v) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::MinItems(#v) })
+            }
+            ValidationRule::MaxItems(v) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::MaxItems(#v) })
+            }
+            ValidationRule::Func(path) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Func(#path.to_string()) })
+            }
+            ValidationRule::LessThan(f) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::LessThan(#f.to_string()) })
+            }
+            ValidationRule::LessThanOrEqual(f) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::LessThanOrEqual(#f.to_string()) })
+            }
+            ValidationRule::GreaterThan(f) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::GreaterThan(#f.to_string()) })
+            }
+            ValidationRule::GreaterThanOrEqual(f) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::GreaterThanOrEqual(#f.to_string()) })
+            }
+            ValidationRule::EqualTo(f) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::EqualTo(#f.to_string()) })
+            }
+            ValidationRule::NotEqualTo(f) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::NotEqualTo(#f.to_string()) })
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Helper functions for case conversion
 // ============================================================================

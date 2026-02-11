@@ -347,6 +347,7 @@ impl KdlSchema for Duration {
                     "milliseconds (integer/float) or duration string (e.g. \"5m\")".to_string(),
                 ),
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })

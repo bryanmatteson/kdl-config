@@ -254,8 +254,10 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                        bool_mode: TokenStream,
                        flag_style: TokenStream,
                        conflict: TokenStream,
-                       description: TokenStream|
+                       description: TokenStream,
+                       validations: &[super::attrs::ValidationRule]|
      -> TokenStream {
+        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
         quote! {
             let type_spec = #type_expr;
             let type_spec = if #variadic {
@@ -270,22 +272,28 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 flag_style: #flag_style,
                 conflict: #conflict,
                 description: #description,
+                validations: vec![#(#validation_exprs),*],
             });
         }
     };
 
-    let value_insert =
-        |type_expr: TokenStream, required: bool, description: TokenStream| -> TokenStream {
-            quote! {
-                let type_spec = #type_expr;
-                schema.values.push(::kdl_config::schema::SchemaValue {
-                    ty: type_spec,
-                    required: #required,
-                    description: #description,
-                    enum_values: None,
-                });
-            }
-        };
+    let value_insert = |type_expr: TokenStream,
+                        required: bool,
+                        description: TokenStream,
+                        validations: &[super::attrs::ValidationRule]|
+     -> TokenStream {
+        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
+        quote! {
+            let type_spec = #type_expr;
+            schema.values.push(::kdl_config::schema::SchemaValue {
+                ty: type_spec,
+                required: #required,
+                description: #description,
+                enum_values: None,
+                validations: vec![#(#validation_exprs),*],
+            });
+        }
+    };
 
     let value_child_insert = |type_expr: TokenStream,
                               kdl_key: &str,
@@ -309,6 +317,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 required: #required,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             });
             node_schema.required = Some(#required);
             if let Some(bool_mode) = #bool_mode {
@@ -379,6 +388,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 required: #required,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             });
             node_schema.required = Some(#required);
             #key_schema_assign
@@ -423,6 +433,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                     required: #required,
                     description: None,
                     enum_values: None,
+                    validations: vec![],
                 });
             },
             None => quote! {},
@@ -696,18 +707,19 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                     flag_style_expr.clone(),
                     conflict_expr.clone(),
                     desc_expr.clone(),
+                    &field.schema.validations,
                 ));
             }
             if let Some(index) = field.placement.positional {
                 value_entries_target.push((
                     index,
-                    value_insert(type_expr.clone(), required, desc_expr.clone()),
+                    value_insert(type_expr.clone(), required, desc_expr.clone(), &field.schema.validations),
                 ));
             }
             if field.placement.positional_list {
                 value_entries_target.push((
                     0,
-                    value_insert(type_expr.clone(), required, desc_expr.clone()),
+                    value_insert(type_expr.clone(), required, desc_expr.clone(), &field.schema.validations),
                 ));
             }
             if field.placement.value {
@@ -759,6 +771,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                             flag_style_expr.clone(),
                             conflict_expr.clone(),
                             desc_expr.clone(),
+                            &field.schema.validations,
                         ));
                         let variadic = field.is_vec || field.is_option_vec;
                         child_inserts_target.push(value_child_insert(
@@ -781,6 +794,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                             flag_style_expr.clone(),
                             conflict_expr.clone(),
                             desc_expr.clone(),
+                            &field.schema.validations,
                         ));
                     }
                     DefaultPlacement::Value | DefaultPlacement::Child => {
@@ -1443,6 +1457,7 @@ fn generate_schema_enum_impl(
                                 required: true,
                                 description: None,
                                 enum_values: Some(vec![#tag_literal]),
+                                validations: vec![],
                             });
                             ::kdl_config::schema::SchemaRef::Inline(schema)
                         }
@@ -1464,6 +1479,7 @@ fn generate_schema_enum_impl(
                                 required: true,
                                 description: None,
                                 enum_values: Some(vec![#tag_literal]),
+                                validations: vec![],
                             });
                             match schema_ref {
                                 ::kdl_config::schema::SchemaRef::Ref(r) => {
@@ -1505,6 +1521,7 @@ fn generate_schema_enum_impl(
                                     required: #required,
                                     description: None,
                                     enum_values: None,
+                                    validations: vec![],
                                 });
                             }
                         })
@@ -1523,6 +1540,7 @@ fn generate_schema_enum_impl(
                                 required: true,
                                 description: None,
                                 enum_values: Some(vec![#tag_literal]),
+                                validations: vec![],
                             });
                             #(#value_inserts)*
                             ::kdl_config::schema::SchemaRef::Inline(schema)
@@ -1546,6 +1564,7 @@ fn generate_schema_enum_impl(
                                 required: true,
                                 description: None,
                                 enum_values: Some(vec![#tag_literal]),
+                                validations: vec![],
                             });
                             #schema_body
                             ::kdl_config::schema::SchemaRef::Inline(schema)
@@ -1583,6 +1602,7 @@ fn generate_schema_enum_impl(
                     required: true,
                     description: None,
                     enum_values: Some(vec![#(#enum_literals),*]),
+                    validations: vec![],
                 });
                 enum_schema.variants = Some(vec![#(#variant_nodes),*]);
 
@@ -1648,6 +1668,7 @@ fn generate_schema_union_impl(
                         required: #required_value,
                         description: None,
                         enum_values: None,
+                        validations: vec![],
                     });
                 } else {
                     for value in &mut node_schema.values {
@@ -1664,6 +1685,7 @@ fn generate_schema_union_impl(
                         required: #required_value,
                         description: None,
                         enum_values: None,
+                        validations: vec![],
                     });
                 }
             }

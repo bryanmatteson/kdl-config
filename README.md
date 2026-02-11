@@ -2,7 +2,7 @@
 
 Strongly-typed configuration from KDL documents.
 
-`kdl-config` allows you to define your configuration structure using Rust structs and automatically parse KDL documents into those structs. It supports attributes, arguments, children, and more, with highly customizable mappings.
+`kdl-config` allows you to define your configuration structure using Rust structs and automatically parse KDL documents into those structs. It supports attributes, arguments, children, and more, with highly customizable mappings. Built on [KDL 6.5.0](https://kdl.dev/).
 
 ## Installation
 
@@ -13,7 +13,11 @@ Add the following to your `Cargo.toml`:
 kdl-config = "0.1.0"
 ```
 
-## Usage
+Optional features:
+
+- `serde` — enables `Serialize` and `Deserialize` derives on built-in newtypes (`Duration`, `Weight`, `PositiveCount`, `Scalar`).
+
+## Quick Start
 
 ```rust
 use kdl_config::{KdlNode, parse_str};
@@ -21,6 +25,7 @@ use kdl_config::{KdlNode, parse_str};
 #[derive(Debug, KdlNode)]
 #[kdl(node = "config")]
 struct MyConfig {
+    #[kdl(attr)]
     name: String,
     #[kdl(attr)]
     count: i32,
@@ -32,16 +37,50 @@ fn main() {
 }
 ```
 
-Note: For `bool` fields using `#[kdl(bool = "presence-only")]`, only the positive flag token is valid; negative flags are rejected.
+## Crate Architecture
+
+The workspace contains two crates:
+
+| Crate | Purpose |
+| --- | --- |
+| `kdl-config` | Runtime library with traits, parsing, rendering, round-trip, schema, fragments, and layered config loading. Re-exports derive macros. |
+| `kdl-config-derive` | Proc-macro crate providing `#[derive(KdlNode)]`, `#[derive(KdlValue)]`, `#[derive(KdlChoice)]`, `#[derive(KdlSchema)]`, and the unified `#[derive(Kdl)]`. |
+
+Users only need to depend on `kdl-config`; derive macros are re-exported automatically.
+
+## Derive Macros
+
+| Macro | Use Case |
+| --- | --- |
+| `KdlNode` | Structs and tagged enums: maps KDL nodes to Rust types. |
+| `KdlValue` | Unit enums and newtype structs: maps KDL scalar values to Rust types via `FromKdlValue`. |
+| `KdlChoice` | Choice enums: selects variant by node name. |
+| `KdlSchema` | Schema generation: registers schema definitions for types. |
+| `Kdl` | Unified macro: dispatches to the above based on `#[kdl(choice)]`, `#[kdl(value)]`, or `#[kdl(schema)]` attributes. |
+
+## Core Traits
+
+| Trait | Description |
+| --- | --- |
+| `KdlDecode` | Parse a typed config from a `KdlNode`. |
+| `KdlRender` | Render a value into canonical KDL text. |
+| `KdlUpdate` | Update an existing `KdlNode` AST in-place (round-trip preserving). |
+| `KdlEncode` | Encode a value into a new `KdlNode`. |
+| `KdlSchema` | Describe the KDL schema for a type. |
+| `FromKdlValue` | Convert a KDL scalar value to a Rust type. |
 
 ## Features
 
-- **Declarative Mapping**: Use `#[derive(KdlNode)]` to map KDL nodes to Rust structs.
-- **Attributes & Arguments**: Easily map KDL attributes and arguments to struct fields.
-- **Children**: Automatically collect children nodes into `Vec`, `HashMap`, or nested structs.
-- **Customization**: Renaming, default values, and type conversion support.
-- **Schema Generation**: Generate KDL schema metadata for your types.
-- **Round-trip Rendering**: Preserve original KDL when no changes are made.
+- **Declarative Mapping**: Use derive macros to map KDL nodes to Rust structs and enums.
+- **Attributes & Arguments**: Map KDL keyed attributes, positional arguments, and flags to struct fields.
+- **Children**: Collect child nodes into `Vec`, `HashMap`, or nested structs — including `registry` and `children_map` patterns.
+- **Selectors**: Advanced key/discriminator extraction with `select(...)` (supports `arg(N)`, `attr("name")`, `name`, `func("path")`, and `any(...)`).
+- **Fragments**: Reusable configuration templates with insert nodes and `~` merge patches, expanded before parsing.
+- **Layered Configs**: Load and merge multiple KDL files with `KdlLoader`, using modifier signals (`+`, `-`, `!`) for merge control.
+- **Round-trip Rendering**: Parse, modify, and re-serialize KDL while preserving original formatting via `RoundTripAst`.
+- **Schema Generation**: Generate KDL schema metadata for your types with `KdlSchema`.
+- **Built-in Newtypes**: `Duration`, `Weight`, `PositiveCount`, and `Scalar<T>` for common config value patterns.
+- **Serde Integration**: Optional `serde` feature for serialization/deserialization of built-in newtypes.
 
 ## Booleans
 
@@ -194,6 +233,43 @@ enum Choice {
 }
 ```
 
+## Fragments
+
+Fragments provide reusable, optionally typed configuration templates that are expanded before parsing. They support two kinds of entries:
+
+- **Insert nodes** — normal KDL nodes copied as children into the target.
+- **Merge patches** (`~`) — nodes that flatten into the target using deep-merge semantics.
+
+```kdl
+fragment "local-defaults" {
+    ~source local {
+        chunking { max-size 1500; overlap 200 }
+        enrichment { symbols; hover; definitions }
+        embed "code-model"
+    }
+    language "rust" { server "rust-analyzer" }
+}
+
+source "app" local "." {
+    with "local-defaults"
+    include "src/**"
+}
+```
+
+After expansion:
+
+```kdl
+source "app" local "." {
+    language "rust" { server "rust-analyzer" }
+    chunking { max-size 1500; overlap 200 }
+    enrichment { symbols; hover; definitions }
+    embed "code-model"
+    include "src/**"
+}
+```
+
+Fragments are fully expanded before `#[derive(Kdl)]` parsing runs – the application never sees `fragment` or `with` nodes.
+
 ## Schema Generation
 
 Derive `KdlSchema` (or use `#[derive(Kdl)]` with `#[kdl(schema)]`) to register schema definitions.
@@ -237,10 +313,6 @@ struct Config {
 }
 ```
 
-Notes:
-- `schema(type = ...)` is only valid for scalar value fields.
-- `schema(skip)` excludes a field from schema generation only (parsing/rendering still apply).
-
 ### Custom Scalar Types
 
 If you derive `KdlValue` (or implement `FromKdlValue`) for a custom scalar type and want to use it
@@ -263,19 +335,16 @@ struct Config {
 }
 ```
 
-### Union Schemas
+## Built-in Newtypes
 
-Unions can generate schema-only `choice` nodes:
+| Type | Description |
+| --- | --- |
+| `Scalar<T>` | Generic wrapper for map value nodes and scalar shapes. Implements `KdlDecode`, `KdlRender`, `KdlUpdate`, and `FromKdlValue`. |
+| `Duration` | Parses duration strings (e.g., `"500ms"`, `"30s"`, `"5m"`, `"2h"`, `"1d"`) or raw millisecond integers. |
+| `Weight` | A float in the range `0.0..=1.0`. |
+| `PositiveCount` | A non-zero `u32` (`NonZeroU32`). |
 
-```rust
-use kdl_config::KdlSchema;
-
-#[derive(KdlSchema)]
-union Choice {
-    #[kdl(schema(name = "count", type = "integer"))]
-    count: i64,
-}
-```
+All newtypes implement `KdlDecode`, `KdlRender`, `FromKdlValue`, and `KdlSchema`. When the `serde` feature is enabled, they also derive `Serialize` and `Deserialize`.
 
 ## Layered Configs
 
@@ -283,7 +352,7 @@ Load and merge multiple KDL layers (later layers override earlier ones) with `Kd
 Modifiers on node names control merge behavior: `+name` appends, `-name` removes, and `!name` replaces.
 
 ```rust
-use kdl_config::KdlLoader;
+use kdl_config::loader::KdlLoader;
 
 let loader = KdlLoader::new()
     .add_layer("config/base.kdl")
@@ -298,7 +367,7 @@ let config: Config = loader.load().unwrap();
 
 ## Round-trip Rendering
 
-Use round-trip helpers to preserve the original KDL when the canonical rendering matches the input:
+Use `RoundTripAst` to parse, modify, and re-serialize KDL while preserving the original formatting:
 
 ```rust
 use kdl_config::round_trip::parse_str_roundtrip;
@@ -311,9 +380,17 @@ struct Config {
 }
 
 let src = r#"config name="demo""#;
-let parsed = parse_str_roundtrip::<Config>(src).unwrap();
-assert_eq!(parsed.to_kdl(), src);
+let mut parsed = parse_str_roundtrip::<Config>(src).unwrap();
+
+// If no changes are made, to_kdl() returns the original string unchanged.
+assert_eq!(parsed.to_kdl().unwrap(), src);
+
+// Mutate and re-render:
+parsed.value_mut().name = "updated".to_string();
+let updated = parsed.to_kdl().unwrap();
 ```
+
+Fragment-aware round-trip updates are also supported via `to_kdl_fragment_aware()`, which pushes changes back into fragment definitions when safe.
 
 ## License
 

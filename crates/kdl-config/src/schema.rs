@@ -77,6 +77,7 @@ pub fn fragment_node_schema(definitions: &SchemaRegistry) -> KdlNodeSchema {
         required: true,
         description: Some("Fragment name".to_string()),
         enum_values: None,
+        validations: vec![],
     });
     schema.type_annotation = Some(Box::new(TypeAnnotationSchema {
         required: false,
@@ -208,6 +209,7 @@ pub struct KdlNodeSchema {
     pub deny_unknown: Option<bool>,
     pub required: Option<bool>,
     pub registry_key: Option<RegistryKeySchema>,
+    pub validations: Vec<Validation>,
 }
 
 impl KdlNodeSchema {
@@ -247,6 +249,8 @@ impl KdlNodeSchema {
         if self.registry_key.is_none() {
             self.registry_key = other.registry_key;
         }
+
+        self.validations.extend(other.validations);
 
         Ok(())
     }
@@ -351,6 +355,18 @@ impl KdlRender for KdlNodeSchema {
 
         if let Some(registry_key) = &self.registry_key {
             registry_key.render(w, indent + 1)?;
+        }
+
+        if !self.validations.is_empty() {
+            crate::write_indent(w, indent + 1)?;
+            write!(w, "validate \"")?;
+            for (i, v) in self.validations.iter().enumerate() {
+                if i > 0 {
+                    write!(w, " ")?;
+                }
+                v.render_inline(w)?;
+            }
+            writeln!(w, "\"")?;
         }
 
         if let Some(variants) = &self.variants {
@@ -561,6 +577,7 @@ pub struct SchemaProp {
     pub flag_style: Option<FlagStyle>,
     pub conflict: Option<ConflictPolicy>,
     pub description: Option<String>,
+    pub validations: Vec<Validation>,
 }
 
 impl SchemaProp {
@@ -606,6 +623,16 @@ impl SchemaProp {
                 }
             )?;
         }
+        if !self.validations.is_empty() {
+            write!(w, " validate=\"")?;
+            for (i, v) in self.validations.iter().enumerate() {
+                if i > 0 {
+                    write!(w, " ")?;
+                }
+                v.render_inline(w)?;
+            }
+            write!(w, "\"")?;
+        }
         Ok(())
     }
 }
@@ -616,6 +643,7 @@ pub struct SchemaValue {
     pub required: bool,
     pub description: Option<String>,
     pub enum_values: Option<Vec<SchemaLiteral>>,
+    pub validations: Vec<Validation>,
 }
 
 impl SchemaValue {
@@ -635,6 +663,16 @@ impl SchemaValue {
                 .join(" ");
             write!(w, " enum=[{}]", rendered)?;
         }
+        if !self.validations.is_empty() {
+            write!(w, " validate=\"")?;
+            for (i, v) in self.validations.iter().enumerate() {
+                if i > 0 {
+                    write!(w, " ")?;
+                }
+                v.render_inline(w)?;
+            }
+            write!(w, "\"")?;
+        }
         Ok(())
     }
 }
@@ -646,6 +684,461 @@ pub enum SchemaLiteral {
     Float(f64),
     Bool(bool),
     Null,
+}
+
+/// A validation rule that can be applied to values or props.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Validation {
+    /// Minimum numeric value (inclusive).
+    Min(f64),
+    /// Maximum numeric value (inclusive).
+    Max(f64),
+    /// Numeric range [min, max] (both inclusive).
+    Range(f64, f64),
+    /// Value must be a multiple of this number.
+    MultipleOf(f64),
+    /// Value must be positive (> 0).
+    Positive,
+    /// Value must be negative (< 0).
+    Negative,
+    /// Value must be >= 0.
+    NonNegative,
+    /// Value must be <= 0.
+    NonPositive,
+
+    /// Minimum string length.
+    MinLen(usize),
+    /// Maximum string length.
+    MaxLen(usize),
+    /// String length range [min, max].
+    Len(usize, usize),
+    /// String must match regex pattern.
+    Pattern(String),
+    /// String must be non-empty.
+    NonEmpty,
+    /// String must be ASCII only.
+    Ascii,
+    /// String must be alphanumeric only.
+    Alphanumeric,
+
+    /// Minimum collection item count.
+    MinItems(usize),
+    /// Maximum collection item count.
+    MaxItems(usize),
+
+    /// Custom validation function path.
+    Func(String),
+
+    // === Cross-field reference validators ===
+
+    /// This field's value must be less than the named field's value.
+    LessThan(String),
+    /// This field's value must be less than or equal to the named field's value.
+    LessThanOrEqual(String),
+    /// This field's value must be greater than the named field's value.
+    GreaterThan(String),
+    /// This field's value must be greater than or equal to the named field's value.
+    GreaterThanOrEqual(String),
+    /// This field's value must equal the named field's value.
+    EqualTo(String),
+    /// This field's value must not equal the named field's value.
+    NotEqualTo(String),
+}
+
+impl Validation {
+    fn render_inline<W: std::fmt::Write>(&self, w: &mut W) -> std::fmt::Result {
+        match self {
+            Self::Min(v) => write!(w, "min({})", format_f64(*v)),
+            Self::Max(v) => write!(w, "max({})", format_f64(*v)),
+            Self::Range(min, max) => {
+                write!(w, "range({}, {})", format_f64(*min), format_f64(*max))
+            }
+            Self::MultipleOf(v) => write!(w, "multiple_of({})", format_f64(*v)),
+            Self::Positive => write!(w, "positive"),
+            Self::Negative => write!(w, "negative"),
+            Self::NonNegative => write!(w, "non_negative"),
+            Self::NonPositive => write!(w, "non_positive"),
+            Self::MinLen(v) => write!(w, "min_len({})", v),
+            Self::MaxLen(v) => write!(w, "max_len({})", v),
+            Self::Len(min, max) => write!(w, "len({}, {})", min, max),
+            Self::Pattern(p) => write!(w, "pattern({:?})", p),
+            Self::NonEmpty => write!(w, "non_empty"),
+            Self::Ascii => write!(w, "ascii"),
+            Self::Alphanumeric => write!(w, "alphanumeric"),
+            Self::MinItems(v) => write!(w, "min_items({})", v),
+            Self::MaxItems(v) => write!(w, "max_items({})", v),
+            Self::Func(path) => write!(w, "func({:?})", path),
+            Self::LessThan(f) => write!(w, "less_than({:?})", f),
+            Self::LessThanOrEqual(f) => write!(w, "less_than_or_equal({:?})", f),
+            Self::GreaterThan(f) => write!(w, "greater_than({:?})", f),
+            Self::GreaterThanOrEqual(f) => write!(w, "greater_than_or_equal({:?})", f),
+            Self::EqualTo(f) => write!(w, "equal_to({:?})", f),
+            Self::NotEqualTo(f) => write!(w, "not_equal_to({:?})", f),
+        }
+    }
+
+    /// Validate a string value against this rule. Returns Ok(()) or an error message.
+    pub fn validate_str(&self, value: &str) -> Result<(), String> {
+        match self {
+            Self::NonEmpty => {
+                if value.is_empty() {
+                    return Err("value must not be empty".to_string());
+                }
+            }
+            Self::MinLen(min) => {
+                if value.len() < *min {
+                    return Err(format!(
+                        "length {} is less than minimum {}",
+                        value.len(),
+                        min
+                    ));
+                }
+            }
+            Self::MaxLen(max) => {
+                if value.len() > *max {
+                    return Err(format!(
+                        "length {} exceeds maximum {}",
+                        value.len(),
+                        max
+                    ));
+                }
+            }
+            Self::Len(min, max) => {
+                let len = value.len();
+                if len < *min || len > *max {
+                    return Err(format!(
+                        "length {} is not in range [{}, {}]",
+                        len, min, max
+                    ));
+                }
+            }
+            Self::Pattern(pattern) => {
+                // Pattern validation is best-effort; we store the pattern for schema purposes
+                // but runtime regex matching requires the `regex` crate
+                let _ = pattern;
+            }
+            Self::Ascii => {
+                if !value.is_ascii() {
+                    return Err("value must be ASCII only".to_string());
+                }
+            }
+            Self::Alphanumeric => {
+                if !value.chars().all(|c| c.is_alphanumeric()) {
+                    return Err("value must be alphanumeric only".to_string());
+                }
+            }
+            _ => {} // Numeric validations don't apply to strings
+        }
+        Ok(())
+    }
+
+    /// Validate a numeric value against this rule.
+    pub fn validate_number(&self, value: f64) -> Result<(), String> {
+        match self {
+            Self::Min(min) => {
+                if value < *min {
+                    return Err(format!("{} is less than minimum {}", value, min));
+                }
+            }
+            Self::Max(max) => {
+                if value > *max {
+                    return Err(format!("{} exceeds maximum {}", value, max));
+                }
+            }
+            Self::Range(min, max) => {
+                if value < *min || value > *max {
+                    return Err(format!("{} is not in range [{}, {}]", value, min, max));
+                }
+            }
+            Self::MultipleOf(divisor) => {
+                if *divisor != 0.0 && (value % divisor).abs() > f64::EPSILON {
+                    return Err(format!("{} is not a multiple of {}", value, divisor));
+                }
+            }
+            Self::Positive => {
+                if value <= 0.0 {
+                    return Err(format!("{} is not positive", value));
+                }
+            }
+            Self::Negative => {
+                if value >= 0.0 {
+                    return Err(format!("{} is not negative", value));
+                }
+            }
+            Self::NonNegative => {
+                if value < 0.0 {
+                    return Err(format!("{} is not non-negative", value));
+                }
+            }
+            Self::NonPositive => {
+                if value > 0.0 {
+                    return Err(format!("{} is not non-positive", value));
+                }
+            }
+            _ => {} // String/collection validations don't apply to numbers
+        }
+        Ok(())
+    }
+
+    /// Validate a collection length against this rule.
+    pub fn validate_count(&self, count: usize) -> Result<(), String> {
+        match self {
+            Self::MinItems(min) => {
+                if count < *min {
+                    return Err(format!(
+                        "item count {} is less than minimum {}",
+                        count, min
+                    ));
+                }
+            }
+            Self::MaxItems(max) => {
+                if count > *max {
+                    return Err(format!("item count {} exceeds maximum {}", count, max));
+                }
+            }
+            _ => {} // Other validations don't apply to counts
+        }
+        Ok(())
+    }
+
+    /// Validate this field's numeric value against another field's numeric value.
+    /// `other_field` is the name of the referenced field, `other_value` is its value.
+    pub fn validate_cross_field(
+        &self,
+        value: f64,
+        other_field: &str,
+        other_value: f64,
+    ) -> Result<(), String> {
+        match self {
+            Self::LessThan(_) => {
+                if value >= other_value {
+                    return Err(format!(
+                        "{} must be less than '{}' ({})",
+                        value, other_field, other_value
+                    ));
+                }
+            }
+            Self::LessThanOrEqual(_) => {
+                if value > other_value {
+                    return Err(format!(
+                        "{} must be less than or equal to '{}' ({})",
+                        value, other_field, other_value
+                    ));
+                }
+            }
+            Self::GreaterThan(_) => {
+                if value <= other_value {
+                    return Err(format!(
+                        "{} must be greater than '{}' ({})",
+                        value, other_field, other_value
+                    ));
+                }
+            }
+            Self::GreaterThanOrEqual(_) => {
+                if value < other_value {
+                    return Err(format!(
+                        "{} must be greater than or equal to '{}' ({})",
+                        value, other_field, other_value
+                    ));
+                }
+            }
+            Self::EqualTo(_) => {
+                if (value - other_value).abs() > f64::EPSILON {
+                    return Err(format!(
+                        "{} must equal '{}' ({})",
+                        value, other_field, other_value
+                    ));
+                }
+            }
+            Self::NotEqualTo(_) => {
+                if (value - other_value).abs() <= f64::EPSILON {
+                    return Err(format!(
+                        "{} must not equal '{}' ({})",
+                        value, other_field, other_value
+                    ));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Returns the referenced field name if this is a cross-field validator.
+    pub fn cross_field_ref(&self) -> Option<&str> {
+        match self {
+            Self::LessThan(f)
+            | Self::LessThanOrEqual(f)
+            | Self::GreaterThan(f)
+            | Self::GreaterThanOrEqual(f)
+            | Self::EqualTo(f)
+            | Self::NotEqualTo(f) => Some(f.as_str()),
+            _ => None,
+        }
+    }
+}
+
+fn format_f64(v: f64) -> String {
+    if v == v.floor() && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
+        v.to_string()
+    }
+}
+
+/// Parse a validation DSL string into a list of validation rules.
+///
+/// The DSL supports space/comma-separated rules:
+/// - Numeric: `min(N)`, `max(N)`, `range(MIN, MAX)`, `multiple_of(N)`, `positive`, `negative`, `non_negative`, `non_positive`
+/// - String: `min_len(N)`, `max_len(N)`, `len(MIN, MAX)`, `pattern("REGEX")`, `non_empty`, `ascii`, `alphanumeric`
+/// - Collection: `min_items(N)`, `max_items(N)`
+/// - Cross-field: `less_than("field")`, `lte("field")`, `greater_than("field")`, `gte("field")`, `equal_to("field")`, `not_equal_to("field")`
+/// - Custom: `func("path::to::fn")`
+pub fn parse_validation_dsl(input: &str) -> Result<Vec<Validation>, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut rules = Vec::new();
+    let mut chars = input.chars().peekable();
+
+    while chars.peek().is_some() {
+        while chars.peek().map_or(false, |c| c.is_whitespace() || *c == ',') {
+            chars.next();
+        }
+        if chars.peek().is_none() {
+            break;
+        }
+
+        let mut ident = String::new();
+        while chars
+            .peek()
+            .map_or(false, |c| c.is_alphanumeric() || *c == '_')
+        {
+            ident.push(chars.next().unwrap());
+        }
+
+        if ident.is_empty() {
+            return Err(format!(
+                "unexpected character in validation DSL: {:?}",
+                chars.peek()
+            ));
+        }
+
+        let rule = if chars.peek() == Some(&'(') {
+            chars.next();
+            let mut depth = 1;
+            let mut args = String::new();
+            while let Some(c) = chars.next() {
+                match c {
+                    '(' => {
+                        depth += 1;
+                        args.push(c);
+                    }
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        args.push(c);
+                    }
+                    _ => args.push(c),
+                }
+            }
+            if depth != 0 {
+                return Err("unclosed parenthesis in validation DSL".to_string());
+            }
+            parse_dsl_rule_with_args(&ident, &args)?
+        } else {
+            parse_dsl_rule_bare(&ident)?
+        };
+
+        rules.push(rule);
+    }
+
+    Ok(rules)
+}
+
+fn parse_dsl_f64(s: &str) -> Result<f64, String> {
+    s.trim()
+        .parse::<f64>()
+        .map_err(|_| format!("expected number, got {:?}", s.trim()))
+}
+
+fn parse_dsl_usize(s: &str) -> Result<usize, String> {
+    s.trim()
+        .parse::<usize>()
+        .map_err(|_| format!("expected non-negative integer, got {:?}", s.trim()))
+}
+
+fn parse_dsl_string_arg(s: &str) -> String {
+    let s = s.trim();
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+fn parse_dsl_rule_with_args(name: &str, args: &str) -> Result<Validation, String> {
+    match name {
+        "min" => Ok(Validation::Min(parse_dsl_f64(args)?)),
+        "max" => Ok(Validation::Max(parse_dsl_f64(args)?)),
+        "range" => {
+            let parts: Vec<&str> = args.split(',').collect();
+            if parts.len() != 2 {
+                return Err("range() requires exactly 2 arguments".to_string());
+            }
+            Ok(Validation::Range(
+                parse_dsl_f64(parts[0])?,
+                parse_dsl_f64(parts[1])?,
+            ))
+        }
+        "multiple_of" => Ok(Validation::MultipleOf(parse_dsl_f64(args)?)),
+        "min_len" => Ok(Validation::MinLen(parse_dsl_usize(args)?)),
+        "max_len" => Ok(Validation::MaxLen(parse_dsl_usize(args)?)),
+        "len" => {
+            let parts: Vec<&str> = args.split(',').collect();
+            if parts.len() != 2 {
+                return Err("len() requires exactly 2 arguments".to_string());
+            }
+            Ok(Validation::Len(
+                parse_dsl_usize(parts[0])?,
+                parse_dsl_usize(parts[1])?,
+            ))
+        }
+        "pattern" => Ok(Validation::Pattern(parse_dsl_string_arg(args))),
+        "min_items" => Ok(Validation::MinItems(parse_dsl_usize(args)?)),
+        "max_items" => Ok(Validation::MaxItems(parse_dsl_usize(args)?)),
+        "func" => Ok(Validation::Func(parse_dsl_string_arg(args))),
+        "less_than" | "lt" => Ok(Validation::LessThan(parse_dsl_string_arg(args))),
+        "less_than_or_equal" | "lte" => {
+            Ok(Validation::LessThanOrEqual(parse_dsl_string_arg(args)))
+        }
+        "greater_than" | "gt" => Ok(Validation::GreaterThan(parse_dsl_string_arg(args))),
+        "greater_than_or_equal" | "gte" => {
+            Ok(Validation::GreaterThanOrEqual(parse_dsl_string_arg(args)))
+        }
+        "equal_to" | "eq" => Ok(Validation::EqualTo(parse_dsl_string_arg(args))),
+        "not_equal_to" | "neq" => Ok(Validation::NotEqualTo(parse_dsl_string_arg(args))),
+        _ => Err(format!("unknown validation rule: {}", name)),
+    }
+}
+
+fn parse_dsl_rule_bare(name: &str) -> Result<Validation, String> {
+    match name {
+        "positive" => Ok(Validation::Positive),
+        "negative" => Ok(Validation::Negative),
+        "non_negative" => Ok(Validation::NonNegative),
+        "non_positive" => Ok(Validation::NonPositive),
+        "non_empty" => Ok(Validation::NonEmpty),
+        "ascii" => Ok(Validation::Ascii),
+        "alphanumeric" => Ok(Validation::Alphanumeric),
+        _ => Err(format!(
+            "unknown validation rule or missing arguments: {}",
+            name
+        )),
+    }
 }
 
 fn render_literal(lit: &SchemaLiteral) -> String {
@@ -730,6 +1223,7 @@ impl KdlSchema for String {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -745,6 +1239,7 @@ impl KdlSchema for std::path::PathBuf {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -760,6 +1255,7 @@ impl KdlSchema for i64 {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -775,6 +1271,7 @@ impl KdlSchema for u16 {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -790,6 +1287,7 @@ impl KdlSchema for i128 {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -805,6 +1303,7 @@ impl KdlSchema for i32 {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -820,6 +1319,7 @@ impl KdlSchema for u64 {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -835,6 +1335,7 @@ impl KdlSchema for u32 {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -850,6 +1351,7 @@ impl KdlSchema for usize {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -865,6 +1367,7 @@ impl KdlSchema for f64 {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -880,6 +1383,7 @@ impl KdlSchema for f32 {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })
@@ -895,6 +1399,7 @@ impl KdlSchema for bool {
                 required: true,
                 description: None,
                 enum_values: None,
+                validations: vec![],
             }],
             ..Default::default()
         })

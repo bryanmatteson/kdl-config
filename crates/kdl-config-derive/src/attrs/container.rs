@@ -2,6 +2,7 @@
 
 use super::types::{
     BoolMode, ConflictPolicy, DefaultPlacement, FlagStyle, RenameStrategy, SelectorAst,
+    ValidationRule,
 };
 
 /// Schema overrides for struct-level attributes.
@@ -17,6 +18,8 @@ pub struct StructSchemaOverride {
     pub deny_unknown: Option<bool>,
     /// Inverse of deny_unknown.
     pub allow_unknown: Option<bool>,
+    /// Validation rules parsed from `#[kdl(validate(...))]` or `#[kdl(validate = "...")]`.
+    pub validations: Vec<ValidationRule>,
 }
 
 impl StructSchemaOverride {
@@ -62,6 +65,8 @@ pub struct StructAttrs {
     pub deny_unknown: Option<bool>,
     /// Schema overrides.
     pub schema: StructSchemaOverride,
+    /// Validation rules parsed from `#[kdl(validate(...))]` or `#[kdl(validate = "...")]`.
+    pub validations: Vec<ValidationRule>,
 }
 
 impl StructAttrs {
