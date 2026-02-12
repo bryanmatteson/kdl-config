@@ -16,7 +16,7 @@ struct Config {
 }
 
 #[allow(dead_code)]
-#[derive(KdlNode, KdlSchema)]
+#[derive(KdlNode)]
 struct Setting {
     #[kdl(attr)]
     enabled: bool,

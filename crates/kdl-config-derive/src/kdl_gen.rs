@@ -44,18 +44,15 @@ pub fn generate_kdl_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
     match mode {
         DeriveMode::Node => {
             tokens.extend(super::derive_kdl_node_impl(input)?);
-            if config.schema {
-                tokens.extend(schema_gen::generate_schema_impl(input)?);
-            }
+            // Always generate KdlSchema so nested types satisfy trait bounds
+            tokens.extend(schema_gen::generate_schema_impl(input)?);
         }
         DeriveMode::Choice => {
             tokens.extend(choice_gen::generate_kdl_choice_impl(input, config.schema)?);
         }
         DeriveMode::Value => {
             tokens.extend(value_gen::generate_kdl_value_impl(input)?);
-            if config.schema {
-                tokens.extend(generate_value_schema_impl(input)?);
-            }
+            tokens.extend(generate_value_schema_impl(input)?);
         }
     }
 
@@ -175,7 +172,7 @@ fn set_mode(
     Ok(())
 }
 
-fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
+pub fn generate_value_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
     let enum_name = &input.ident;
 
     match &input.data {

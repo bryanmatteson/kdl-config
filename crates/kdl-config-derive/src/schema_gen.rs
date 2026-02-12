@@ -1268,14 +1268,17 @@ fn variant_tag_literal_expr(tag: &VariantTag) -> TokenStream {
 
 fn selector_key_schema_expr(selector: &SelectorAst) -> Option<TokenStream> {
     match selector {
-        SelectorAst::Arg(index) => Some(quote! {
-            ::kdl_config::schema::RegistryKeySchema {
-                source: ::kdl_config::schema::RegistryKeySource::Arg,
-                arg_index: Some(#index),
-                attr: None,
-                func: None,
-            }
-        }),
+        SelectorAst::Arg(index) => {
+            let index = *index as usize;
+            Some(quote! {
+                ::kdl_config::schema::RegistryKeySchema {
+                    source: ::kdl_config::schema::RegistryKeySource::Arg,
+                    arg_index: Some(#index),
+                    attr: None,
+                    func: None,
+                }
+            })
+        }
         SelectorAst::Attr(name) => Some(quote! {
             ::kdl_config::schema::RegistryKeySchema {
                 source: ::kdl_config::schema::RegistryKeySource::Attr,

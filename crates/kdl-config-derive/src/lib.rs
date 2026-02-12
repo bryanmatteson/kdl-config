@@ -19,7 +19,14 @@ use render_gen::{FieldAccessor, generate_render_impl, render_body_with_accessor}
 pub fn derive_kdl_node(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match derive_kdl_node_impl(&input) {
-        Ok(tokens) => tokens.into(),
+        Ok(mut tokens) => {
+            // Always generate KdlSchema so nested types satisfy trait bounds
+            match schema_gen::generate_schema_impl(&input) {
+                Ok(schema_tokens) => tokens.extend(schema_tokens),
+                Err(err) => return err.to_compile_error().into(),
+            }
+            tokens.into()
+        }
         Err(err) => err.to_compile_error().into(),
     }
 }
@@ -330,7 +337,14 @@ pub fn derive_kdl_value(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     match value_gen::generate_kdl_value_impl(&input) {
-        Ok(tokens) => tokens.into(),
+        Ok(mut tokens) => {
+            // Always generate KdlSchema so nested types satisfy trait bounds
+            match kdl_gen::generate_value_schema_impl(&input) {
+                Ok(schema_tokens) => tokens.extend(schema_tokens),
+                Err(err) => return err.to_compile_error().into(),
+            }
+            tokens.into()
+        }
         Err(err) => err.to_compile_error().into(),
     }
 }

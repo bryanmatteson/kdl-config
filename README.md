@@ -278,7 +278,7 @@ Derive `KdlSchema` (or use `#[derive(Kdl)]` with `#[kdl(schema)]`) to register s
 use kdl_config::{KdlNode, KdlSchema};
 use kdl_config::schema::SchemaRegistry;
 
-#[derive(KdlNode, KdlSchema)]
+#[derive(KdlNode)]
 #[kdl(node = "config")]
 struct Config {
     #[kdl(attr)]

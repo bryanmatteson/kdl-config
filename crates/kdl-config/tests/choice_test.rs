@@ -1,13 +1,13 @@
 use kdl_config::parse_str;
-use kdl_config_derive::{KdlChoice, KdlNode, KdlSchema};
+use kdl_config_derive::{KdlChoice, KdlNode};
 
-#[derive(Debug, PartialEq, KdlNode, KdlSchema)]
+#[derive(Debug, PartialEq, KdlNode)]
 struct PrefixFilter {
     #[kdl(attr, positional = 0)]
     pattern: String,
 }
 
-#[derive(Debug, PartialEq, KdlNode, KdlSchema)]
+#[derive(Debug, PartialEq, KdlNode)]
 struct RegexFilter {
     #[kdl(attr, positional = 0)]
     pattern: String,
