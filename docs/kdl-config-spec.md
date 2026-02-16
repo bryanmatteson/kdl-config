@@ -875,7 +875,7 @@ Multiple `validate(...)` attributes on the same field are merged.
 | EqualTo | `equal_to = "field"` (`eq`) | this = other |
 | NotEqualTo | `not_equal_to = "field"` (`neq`) | this ≠ other |
 
-Cross-field rules run after all fields are decoded. Referencing a nonexistent field is a compile-time error.
+Cross-field rules run after all fields are decoded. Referencing a nonexistent field is a compile-time error. If either field is `Option<T>` and is `None`, the cross-field check is skipped.
 
 **Struct-level validation**:
 - `#[kdl(validate(func = "path"))]` on a struct: calls `fn(&Self) -> Result<(), String>` after the struct is fully constructed. Useful for invariants that span multiple fields.

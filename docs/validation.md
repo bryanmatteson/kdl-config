@@ -143,7 +143,7 @@ range start=10.0 end=10.0  // ✗ "must be less than 'end'"
 range start=20.0 end=10.0  // ✗ "must be less than 'end'"
 ```
 
-Referencing a field that doesn't exist is a **compile-time error**. Both fields must be numeric types.
+Referencing a field that doesn't exist is a **compile-time error**. Both fields must be numeric types. If either field is `Option<T>` and is `None`, the cross-field check is skipped.
 
 ## Struct-Level Validation
 
