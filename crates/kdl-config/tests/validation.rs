@@ -189,6 +189,50 @@ fn optional_some_invalid_fails() {
     assert!(msg.contains("exceeds maximum"), "got: {msg}");
 }
 
+// --- Cross-field with Option ---
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "opt_limits")]
+struct OptionalLimits {
+    #[kdl(validate(less_than = "max_val"))]
+    min_val: Option<f64>,
+    max_val: Option<f64>,
+}
+
+#[test]
+fn cross_field_both_none_skips() {
+    let cfg: OptionalLimits = parse_str("opt_limits").unwrap();
+    assert_eq!(cfg.min_val, None);
+    assert_eq!(cfg.max_val, None);
+}
+
+#[test]
+fn cross_field_this_none_skips() {
+    let cfg: OptionalLimits = parse_str("opt_limits max_val=10.0").unwrap();
+    assert_eq!(cfg.min_val, None);
+    assert_eq!(cfg.max_val, Some(10.0));
+}
+
+#[test]
+fn cross_field_other_none_skips() {
+    let cfg: OptionalLimits = parse_str("opt_limits min_val=5.0").unwrap();
+    assert_eq!(cfg.min_val, Some(5.0));
+    assert_eq!(cfg.max_val, None);
+}
+
+#[test]
+fn cross_field_both_some_valid() {
+    let cfg: OptionalLimits = parse_str("opt_limits min_val=1.0 max_val=10.0").unwrap();
+    assert_eq!(cfg.min_val, Some(1.0));
+}
+
+#[test]
+fn cross_field_both_some_invalid() {
+    let err = parse_str::<OptionalLimits>("opt_limits min_val=20.0 max_val=10.0").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("must be less than"), "got: {msg}");
+}
+
 // --- Struct-level validation ---
 
 fn check_server_invariants(s: &ValidatedServer) -> Result<(), String> {
