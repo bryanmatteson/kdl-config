@@ -5,6 +5,7 @@ use syn::Ident;
 use crate::attrs::{
     BoolMode, ChildrenMapKind, CollectionMode, ConflictPolicy, DefaultLiteral, DefaultPlacement,
     DefaultSpec, FieldInfo, FieldKind, FlagStyle, InjectOpt, SelectorAst, StructAttrs,
+    ValidationRule,
     extract_children_map_types, extract_hashmap_types, extract_inner_type, field_kind,
     is_bool_type, is_numeric_type, is_string_type,
 };
@@ -81,6 +82,8 @@ pub fn generate_parse_impl(
         .map(|f| f.kdl_key.as_str())
         .collect();
 
+    let cross_field_validations = generate_cross_field_validations(fields, &struct_name_str);
+
     quote! {
         impl ::kdl_config::KdlDecode for #struct_name {
             fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
@@ -97,6 +100,8 @@ pub fn generate_parse_impl(
                     if struct_config.deny_unknown {
                         claims.check_unknowns(node, #struct_name_str, &[#(#valid_attr_keys),*], &[#(#valid_child_names),*])?;
                     }
+
+                    #cross_field_validations
 
                     Ok(Self {
                         #(#field_names,)*
@@ -203,7 +208,7 @@ pub(crate) fn generate_field_parser(field: &FieldInfo, struct_name: &str) -> Tok
         }
     }
 
-    match kind {
+    let parser = match kind {
         FieldKind::Collection => {
             let collection = field
                 .collection
@@ -225,6 +230,12 @@ pub(crate) fn generate_field_parser(field: &FieldInfo, struct_name: &str) -> Tok
             generate_value_scalar_parser(field, struct_name, &field_overrides, mark_usage)
         }
         FieldKind::Modifier => generate_modifier_parser(field),
+    };
+
+    let validation = generate_field_validation(field, struct_name, &kind);
+    quote! {
+        #parser
+        #validation
     }
 }
 
@@ -2939,6 +2950,171 @@ fn generate_literal_default_expr(lit: &DefaultLiteral, ty: &syn::Type) -> TokenS
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Validation codegen
+// ---------------------------------------------------------------------------
+
+/// Generate validation code for a single field (non-cross-field rules).
+/// Cross-field validations are handled separately in `generate_cross_field_validations`.
+fn generate_field_validation(
+    field: &FieldInfo,
+    struct_name: &str,
+    kind: &FieldKind,
+) -> TokenStream {
+    let validations = &field.schema.validations;
+    if validations.is_empty() {
+        return quote! {};
+    }
+
+    // Separate validation rules by category
+    let mut scalar_rules: Vec<&ValidationRule> = Vec::new();
+    let mut count_rules: Vec<&ValidationRule> = Vec::new();
+    let mut func_rules: Vec<&ValidationRule> = Vec::new();
+    // Cross-field rules are skipped here; they run after all fields are decoded.
+
+    for v in validations {
+        match v {
+            ValidationRule::Func(_) => func_rules.push(v),
+            ValidationRule::MinItems(_) | ValidationRule::MaxItems(_) => count_rules.push(v),
+            ValidationRule::LessThan(_)
+            | ValidationRule::LessThanOrEqual(_)
+            | ValidationRule::GreaterThan(_)
+            | ValidationRule::GreaterThanOrEqual(_)
+            | ValidationRule::EqualTo(_)
+            | ValidationRule::NotEqualTo(_) => {
+                // Cross-field — handled in generate_cross_field_validations
+            }
+            _ => scalar_rules.push(v),
+        }
+    }
+
+    let field_ident = &field.ident;
+    let field_name = field.ident.to_string();
+    let kdl_key = &field.kdl_key;
+
+    let mut blocks = Vec::new();
+
+    // Scalar validations (numeric range, string length, etc.)
+    if !scalar_rules.is_empty() {
+        let validation_exprs: Vec<TokenStream> =
+            scalar_rules.iter().map(|v| quote! { #v }).collect();
+        blocks.push(quote! {
+            ::kdl_config::run_field_validations(
+                &#field_ident,
+                &[#(#validation_exprs),*],
+                #struct_name,
+                #field_name,
+                #kdl_key,
+            )?;
+        });
+    }
+
+    // Count validations (MinItems/MaxItems for vecs and collections)
+    if !count_rules.is_empty() {
+        match kind {
+            FieldKind::ValueVec | FieldKind::NodeVec | FieldKind::Collection => {
+                let validation_exprs: Vec<TokenStream> =
+                    count_rules.iter().map(|v| quote! { #v }).collect();
+                blocks.push(quote! {
+                    ::kdl_config::run_count_validations(
+                        &#field_ident,
+                        &[#(#validation_exprs),*],
+                        #struct_name,
+                        #field_name,
+                        #kdl_key,
+                    )?;
+                });
+            }
+            _ => {
+                // MinItems/MaxItems on a scalar field is a compile-time error
+                blocks.push(
+                    quote! { compile_error!("min_items/max_items validation is only valid for Vec/collection fields"); },
+                );
+            }
+        }
+    }
+
+    // Func validations
+    for v in &func_rules {
+        if let ValidationRule::Func(path_str) = v {
+            let func_path: syn::Path = syn::parse_str(path_str)
+                .expect("invalid function path in validate(func(...))");
+            blocks.push(quote! {
+                ::kdl_config::run_func_validation(
+                    &#field_ident,
+                    #func_path,
+                    #struct_name,
+                    #field_name,
+                    #kdl_key,
+                )?;
+            });
+        }
+    }
+
+    if blocks.is_empty() {
+        quote! {}
+    } else {
+        quote! { #(#blocks)* }
+    }
+}
+
+/// Generate cross-field validation code that runs after all fields are decoded.
+fn generate_cross_field_validations(fields: &[FieldInfo], struct_name: &str) -> TokenStream {
+    let mut blocks = Vec::new();
+
+    for field in fields {
+        let validations = &field.schema.validations;
+        let field_ident = &field.ident;
+        let field_name = field.ident.to_string();
+        let kdl_key = &field.kdl_key;
+
+        for v in validations {
+            let other_field_name = match v {
+                ValidationRule::LessThan(f)
+                | ValidationRule::LessThanOrEqual(f)
+                | ValidationRule::GreaterThan(f)
+                | ValidationRule::GreaterThanOrEqual(f)
+                | ValidationRule::EqualTo(f)
+                | ValidationRule::NotEqualTo(f) => f,
+                _ => continue,
+            };
+
+            // Find the other field's ident by matching kdl_key or field ident name
+            let other_ident = fields
+                .iter()
+                .find(|f| f.kdl_key == *other_field_name || f.ident.to_string() == *other_field_name)
+                .map(|f| &f.ident);
+
+            let validation_expr: TokenStream = quote! { #v };
+
+            if let Some(other_ident) = other_ident {
+                blocks.push(quote! {
+                    ::kdl_config::run_cross_field_validation(
+                        ::kdl_config::AsF64::as_f64(&#field_ident),
+                        ::kdl_config::AsF64::as_f64(&#other_ident),
+                        &#validation_expr,
+                        #struct_name,
+                        #field_name,
+                        #kdl_key,
+                    )?;
+                });
+            } else {
+                let msg = format!(
+                    "cross-field validation references unknown field '{}'",
+                    other_field_name
+                );
+                blocks.push(quote! { compile_error!(#msg); });
+            }
+        }
+    }
+
+    if blocks.is_empty() {
+        quote! {}
+    } else {
+        quote! { #(#blocks)* }
     }
 }
 

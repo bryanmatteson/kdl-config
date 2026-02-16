@@ -20,8 +20,10 @@ pub mod round_trip;
 pub mod schema;
 pub mod selector;
 pub mod types;
+pub mod validation;
 
 pub use newtypes::{Duration, PositiveCount, Scalar, Weight};
+pub use validation::{KdlValidate, KdlValidateCount, AsF64, run_field_validations, run_count_validations, run_func_validation, run_cross_field_validation};
 
 pub use config::{
     BoolMode, ConflictPolicy, DefaultPlacement, EffectiveConfig, FieldOverrides, FlagStyle,
