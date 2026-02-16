@@ -332,21 +332,19 @@ impl quote::ToTokens for ValidationRule {
             ValidationRule::LessThan(f) => {
                 tokens.extend(quote! { ::kdl_config::schema::Validation::LessThan(#f.to_string()) })
             }
-            ValidationRule::LessThanOrEqual(f) => {
-                tokens.extend(quote! { ::kdl_config::schema::Validation::LessThanOrEqual(#f.to_string()) })
-            }
-            ValidationRule::GreaterThan(f) => {
-                tokens.extend(quote! { ::kdl_config::schema::Validation::GreaterThan(#f.to_string()) })
-            }
-            ValidationRule::GreaterThanOrEqual(f) => {
-                tokens.extend(quote! { ::kdl_config::schema::Validation::GreaterThanOrEqual(#f.to_string()) })
-            }
+            ValidationRule::LessThanOrEqual(f) => tokens.extend(
+                quote! { ::kdl_config::schema::Validation::LessThanOrEqual(#f.to_string()) },
+            ),
+            ValidationRule::GreaterThan(f) => tokens
+                .extend(quote! { ::kdl_config::schema::Validation::GreaterThan(#f.to_string()) }),
+            ValidationRule::GreaterThanOrEqual(f) => tokens.extend(
+                quote! { ::kdl_config::schema::Validation::GreaterThanOrEqual(#f.to_string()) },
+            ),
             ValidationRule::EqualTo(f) => {
                 tokens.extend(quote! { ::kdl_config::schema::Validation::EqualTo(#f.to_string()) })
             }
-            ValidationRule::NotEqualTo(f) => {
-                tokens.extend(quote! { ::kdl_config::schema::Validation::NotEqualTo(#f.to_string()) })
-            }
+            ValidationRule::NotEqualTo(f) => tokens
+                .extend(quote! { ::kdl_config::schema::Validation::NotEqualTo(#f.to_string()) }),
         }
     }
 }

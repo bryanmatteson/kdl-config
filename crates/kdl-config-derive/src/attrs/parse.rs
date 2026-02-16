@@ -1555,7 +1555,10 @@ fn parse_validation_dsl_str(
     let mut chars = input.chars().peekable();
 
     while chars.peek().is_some() {
-        while chars.peek().map_or(false, |c| c.is_whitespace() || *c == ',') {
+        while chars
+            .peek()
+            .map_or(false, |c| c.is_whitespace() || *c == ',')
+        {
             chars.next();
         }
         if chars.peek().is_none() {
@@ -1573,10 +1576,7 @@ fn parse_validation_dsl_str(
         if ident.is_empty() {
             return Err(syn::Error::new(
                 span,
-                format!(
-                    "unexpected character in validation DSL: {:?}",
-                    chars.peek()
-                ),
+                format!("unexpected character in validation DSL: {:?}", chars.peek()),
             ));
         }
 
@@ -1687,17 +1687,19 @@ fn parse_validation_rule_with_args(
         )?)),
         "func" => Ok(ValidationRule::Func(parse_validation_string_arg(args))),
         "less_than" | "lt" => Ok(ValidationRule::LessThan(parse_validation_string_arg(args))),
-        "less_than_or_equal" | "lte" => {
-            Ok(ValidationRule::LessThanOrEqual(parse_validation_string_arg(args)))
-        }
-        "greater_than" | "gt" => Ok(ValidationRule::GreaterThan(parse_validation_string_arg(args))),
-        "greater_than_or_equal" | "gte" => {
-            Ok(ValidationRule::GreaterThanOrEqual(parse_validation_string_arg(args)))
-        }
+        "less_than_or_equal" | "lte" => Ok(ValidationRule::LessThanOrEqual(
+            parse_validation_string_arg(args),
+        )),
+        "greater_than" | "gt" => Ok(ValidationRule::GreaterThan(parse_validation_string_arg(
+            args,
+        ))),
+        "greater_than_or_equal" | "gte" => Ok(ValidationRule::GreaterThanOrEqual(
+            parse_validation_string_arg(args),
+        )),
         "equal_to" | "eq" => Ok(ValidationRule::EqualTo(parse_validation_string_arg(args))),
-        "not_equal_to" | "neq" => {
-            Ok(ValidationRule::NotEqualTo(parse_validation_string_arg(args)))
-        }
+        "not_equal_to" | "neq" => Ok(ValidationRule::NotEqualTo(parse_validation_string_arg(
+            args,
+        ))),
         _ => Err(syn::Error::new(
             span,
             format!("unknown validation rule: {}", name),
@@ -1720,10 +1722,7 @@ fn parse_validation_rule_bare(
         "alphanumeric" => Ok(ValidationRule::Alphanumeric),
         _ => Err(syn::Error::new(
             span,
-            format!(
-                "unknown validation rule or missing arguments: {}",
-                name
-            ),
+            format!("unknown validation rule or missing arguments: {}", name),
         )),
     }
 }
@@ -1793,46 +1792,82 @@ fn parse_validation_rule_meta(
                     ));
                 }
                 "less_than" | "lt" => {
-                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = value
+                    {
                         return Ok(ValidationRule::LessThan(s.value()));
                     }
-                    return Err(syn::Error::new(meta.path.span(), "less_than requires a string field name"));
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "less_than requires a string field name",
+                    ));
                 }
                 "less_than_or_equal" | "lte" => {
-                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = value
+                    {
                         return Ok(ValidationRule::LessThanOrEqual(s.value()));
                     }
-                    return Err(syn::Error::new(meta.path.span(), "less_than_or_equal requires a string field name"));
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "less_than_or_equal requires a string field name",
+                    ));
                 }
                 "greater_than" | "gt" => {
-                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = value
+                    {
                         return Ok(ValidationRule::GreaterThan(s.value()));
                     }
-                    return Err(syn::Error::new(meta.path.span(), "greater_than requires a string field name"));
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "greater_than requires a string field name",
+                    ));
                 }
                 "greater_than_or_equal" | "gte" => {
-                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = value
+                    {
                         return Ok(ValidationRule::GreaterThanOrEqual(s.value()));
                     }
-                    return Err(syn::Error::new(meta.path.span(), "greater_than_or_equal requires a string field name"));
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "greater_than_or_equal requires a string field name",
+                    ));
                 }
                 "equal_to" | "eq" => {
-                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = value
+                    {
                         return Ok(ValidationRule::EqualTo(s.value()));
                     }
-                    return Err(syn::Error::new(meta.path.span(), "equal_to requires a string field name"));
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "equal_to requires a string field name",
+                    ));
                 }
                 "not_equal_to" | "neq" => {
-                    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = value {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = value
+                    {
                         return Ok(ValidationRule::NotEqualTo(s.value()));
                     }
-                    return Err(syn::Error::new(meta.path.span(), "not_equal_to requires a string field name"));
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "not_equal_to requires a string field name",
+                    ));
                 }
                 _ => {
                     return Err(syn::Error::new(
                         meta.path.span(),
                         format!("unknown validation rule: {}", ident),
-                    ))
+                    ));
                 }
             }
         }
@@ -1968,47 +2003,110 @@ fn parse_validation_rule_from_exprs(
             {
                 Ok(ValidationRule::Func(s.value()))
             } else {
-                Err(syn::Error::new(
-                    span,
-                    "func() requires a string argument",
-                ))
+                Err(syn::Error::new(span, "func() requires a string argument"))
             }
         }
         "less_than" | "lt" => {
-            if args.len() != 1 { return Err(syn::Error::new(span, "less_than() takes 1 argument")); }
-            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "less_than() takes 1 argument"));
+            }
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &args[0]
+            {
                 Ok(ValidationRule::LessThan(s.value()))
-            } else { Err(syn::Error::new(span, "less_than() requires a string field name")) }
+            } else {
+                Err(syn::Error::new(
+                    span,
+                    "less_than() requires a string field name",
+                ))
+            }
         }
         "less_than_or_equal" | "lte" => {
-            if args.len() != 1 { return Err(syn::Error::new(span, "less_than_or_equal() takes 1 argument")); }
-            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+            if args.len() != 1 {
+                return Err(syn::Error::new(
+                    span,
+                    "less_than_or_equal() takes 1 argument",
+                ));
+            }
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &args[0]
+            {
                 Ok(ValidationRule::LessThanOrEqual(s.value()))
-            } else { Err(syn::Error::new(span, "less_than_or_equal() requires a string field name")) }
+            } else {
+                Err(syn::Error::new(
+                    span,
+                    "less_than_or_equal() requires a string field name",
+                ))
+            }
         }
         "greater_than" | "gt" => {
-            if args.len() != 1 { return Err(syn::Error::new(span, "greater_than() takes 1 argument")); }
-            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "greater_than() takes 1 argument"));
+            }
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &args[0]
+            {
                 Ok(ValidationRule::GreaterThan(s.value()))
-            } else { Err(syn::Error::new(span, "greater_than() requires a string field name")) }
+            } else {
+                Err(syn::Error::new(
+                    span,
+                    "greater_than() requires a string field name",
+                ))
+            }
         }
         "greater_than_or_equal" | "gte" => {
-            if args.len() != 1 { return Err(syn::Error::new(span, "greater_than_or_equal() takes 1 argument")); }
-            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+            if args.len() != 1 {
+                return Err(syn::Error::new(
+                    span,
+                    "greater_than_or_equal() takes 1 argument",
+                ));
+            }
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &args[0]
+            {
                 Ok(ValidationRule::GreaterThanOrEqual(s.value()))
-            } else { Err(syn::Error::new(span, "greater_than_or_equal() requires a string field name")) }
+            } else {
+                Err(syn::Error::new(
+                    span,
+                    "greater_than_or_equal() requires a string field name",
+                ))
+            }
         }
         "equal_to" | "eq" => {
-            if args.len() != 1 { return Err(syn::Error::new(span, "equal_to() takes 1 argument")); }
-            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "equal_to() takes 1 argument"));
+            }
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &args[0]
+            {
                 Ok(ValidationRule::EqualTo(s.value()))
-            } else { Err(syn::Error::new(span, "equal_to() requires a string field name")) }
+            } else {
+                Err(syn::Error::new(
+                    span,
+                    "equal_to() requires a string field name",
+                ))
+            }
         }
         "not_equal_to" | "neq" => {
-            if args.len() != 1 { return Err(syn::Error::new(span, "not_equal_to() takes 1 argument")); }
-            if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &args[0] {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "not_equal_to() takes 1 argument"));
+            }
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &args[0]
+            {
                 Ok(ValidationRule::NotEqualTo(s.value()))
-            } else { Err(syn::Error::new(span, "not_equal_to() requires a string field name")) }
+            } else {
+                Err(syn::Error::new(
+                    span,
+                    "not_equal_to() requires a string field name",
+                ))
+            }
         }
         _ => Err(syn::Error::new(
             span,

@@ -434,7 +434,11 @@ config {
         .find(|node| node.base_name() == "source")
         .expect("source node");
     let source_children = source.children().map(|doc| doc.nodes()).unwrap_or(&[]);
-    assert!(source_children.iter().any(|node| node.base_name() == "with"));
+    assert!(
+        source_children
+            .iter()
+            .any(|node| node.base_name() == "with")
+    );
     assert!(
         source_children
             .iter()

@@ -5,9 +5,8 @@ use syn::Ident;
 use crate::attrs::{
     BoolMode, ChildrenMapKind, CollectionMode, ConflictPolicy, DefaultLiteral, DefaultPlacement,
     DefaultSpec, FieldInfo, FieldKind, FlagStyle, InjectOpt, SelectorAst, StructAttrs,
-    ValidationRule,
-    extract_children_map_types, extract_hashmap_types, extract_inner_type, field_kind,
-    is_bool_type, is_numeric_type, is_string_type,
+    ValidationRule, extract_children_map_types, extract_hashmap_types, extract_inner_type,
+    field_kind, is_bool_type, is_numeric_type, is_string_type,
 };
 
 pub fn generate_parse_impl(
@@ -83,6 +82,7 @@ pub fn generate_parse_impl(
         .collect();
 
     let cross_field_validations = generate_cross_field_validations(fields, &struct_name_str);
+    let struct_validations = generate_struct_validations(struct_attrs, &struct_name_str);
 
     quote! {
         impl ::kdl_config::KdlDecode for #struct_name {
@@ -103,10 +103,14 @@ pub fn generate_parse_impl(
 
                     #cross_field_validations
 
-                    Ok(Self {
+                    let __kdl_value = Self {
                         #(#field_names,)*
                         #(#skipped_fields: ::std::default::Default::default(),)*
-                    })
+                    };
+
+                    #struct_validations
+
+                    Ok(__kdl_value)
                 })();
 
                 result.map_err(|err| {
@@ -3040,8 +3044,8 @@ fn generate_field_validation(
     // Func validations
     for v in &func_rules {
         if let ValidationRule::Func(path_str) = v {
-            let func_path: syn::Path = syn::parse_str(path_str)
-                .expect("invalid function path in validate(func(...))");
+            let func_path: syn::Path =
+                syn::parse_str(path_str).expect("invalid function path in validate(func(...))");
             blocks.push(quote! {
                 ::kdl_config::run_func_validation(
                     &#field_ident,
@@ -3050,6 +3054,29 @@ fn generate_field_validation(
                     #field_name,
                     #kdl_key,
                 )?;
+            });
+        }
+    }
+
+    if blocks.is_empty() {
+        quote! {}
+    } else {
+        quote! { #(#blocks)* }
+    }
+}
+
+/// Generate struct-level validation calls (func validators on the fully constructed value).
+fn generate_struct_validations(struct_attrs: &StructAttrs, struct_name: &str) -> TokenStream {
+    let mut blocks = Vec::new();
+
+    for v in &struct_attrs.validations {
+        if let ValidationRule::Func(path_str) = v {
+            let func_path: syn::Path =
+                syn::parse_str(path_str).expect("invalid function path in struct-level validate");
+            blocks.push(quote! {
+                if let Err(msg) = #func_path(&__kdl_value) {
+                    return Err(::kdl_config::KdlConfigError::custom(#struct_name, msg));
+                }
             });
         }
     }
@@ -3085,7 +3112,9 @@ fn generate_cross_field_validations(fields: &[FieldInfo], struct_name: &str) -> 
             // Find the other field's ident by matching kdl_key or field ident name
             let other_ident = fields
                 .iter()
-                .find(|f| f.kdl_key == *other_field_name || f.ident.to_string() == *other_field_name)
+                .find(|f| {
+                    f.kdl_key == *other_field_name || f.ident.to_string() == *other_field_name
+                })
                 .map(|f| &f.ident);
 
             let validation_expr: TokenStream = quote! { #v };

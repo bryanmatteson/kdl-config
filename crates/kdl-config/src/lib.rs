@@ -1,4 +1,5 @@
 #![allow(clippy::result_large_err)]
+extern crate self as kdl_config;
 
 pub mod config;
 pub mod context;
@@ -16,6 +17,7 @@ pub mod node_path;
 pub mod parse;
 mod primitive_decode;
 pub mod render;
+pub mod resolve;
 pub mod round_trip;
 pub mod schema;
 pub mod selector;
@@ -23,7 +25,10 @@ pub mod types;
 pub mod validation;
 
 pub use newtypes::{Duration, PositiveCount, Scalar, Weight};
-pub use validation::{KdlValidate, KdlValidateCount, AsF64, run_field_validations, run_count_validations, run_func_validation, run_cross_field_validation};
+pub use validation::{
+    AsF64, KdlValidate, KdlValidateCount, run_count_validations, run_cross_field_validation,
+    run_field_validations, run_func_validation,
+};
 
 pub use config::{
     BoolMode, ConflictPolicy, DefaultPlacement, EffectiveConfig, FieldOverrides, FlagStyle,
@@ -51,6 +56,7 @@ pub use render::{
     render_value_node_scalar, render_value_with_repr, value_node, value_to_kdl,
     value_to_kdl_values, write_indent,
 };
+pub use resolve::{decode_at, decode_at_with_config, node_at};
 pub use round_trip::{RoundTripAst, parse_str_roundtrip};
 pub use selector::{CollectMode, CollectionSpec, InjectOpt, SelectOpts, SelectSpec, SelectorAst};
 pub use types::{MergeModifierPolicy, Modifier, Node, NodeLocation as NodeLocationLegacy, Value};

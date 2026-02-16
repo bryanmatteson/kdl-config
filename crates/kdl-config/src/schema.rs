@@ -730,7 +730,6 @@ pub enum Validation {
     Func(String),
 
     // === Cross-field reference validators ===
-
     /// This field's value must be less than the named field's value.
     LessThan(String),
     /// This field's value must be less than or equal to the named field's value.
@@ -796,20 +795,13 @@ impl Validation {
             }
             Self::MaxLen(max) => {
                 if value.len() > *max {
-                    return Err(format!(
-                        "length {} exceeds maximum {}",
-                        value.len(),
-                        max
-                    ));
+                    return Err(format!("length {} exceeds maximum {}", value.len(), max));
                 }
             }
             Self::Len(min, max) => {
                 let len = value.len();
                 if len < *min || len > *max {
-                    return Err(format!(
-                        "length {} is not in range [{}, {}]",
-                        len, min, max
-                    ));
+                    return Err(format!("length {} is not in range [{}, {}]", len, min, max));
                 }
             }
             Self::Pattern(pattern) => {
@@ -885,10 +877,7 @@ impl Validation {
         match self {
             Self::MinItems(min) => {
                 if count < *min {
-                    return Err(format!(
-                        "item count {} is less than minimum {}",
-                        count, min
-                    ));
+                    return Err(format!("item count {} is less than minimum {}", count, min));
                 }
             }
             Self::MaxItems(max) => {
@@ -1003,7 +992,10 @@ pub fn parse_validation_dsl(input: &str) -> Result<Vec<Validation>, String> {
     let mut chars = input.chars().peekable();
 
     while chars.peek().is_some() {
-        while chars.peek().map_or(false, |c| c.is_whitespace() || *c == ',') {
+        while chars
+            .peek()
+            .map_or(false, |c| c.is_whitespace() || *c == ',')
+        {
             chars.next();
         }
         if chars.peek().is_none() {
@@ -1112,9 +1104,7 @@ fn parse_dsl_rule_with_args(name: &str, args: &str) -> Result<Validation, String
         "max_items" => Ok(Validation::MaxItems(parse_dsl_usize(args)?)),
         "func" => Ok(Validation::Func(parse_dsl_string_arg(args))),
         "less_than" | "lt" => Ok(Validation::LessThan(parse_dsl_string_arg(args))),
-        "less_than_or_equal" | "lte" => {
-            Ok(Validation::LessThanOrEqual(parse_dsl_string_arg(args)))
-        }
+        "less_than_or_equal" | "lte" => Ok(Validation::LessThanOrEqual(parse_dsl_string_arg(args))),
         "greater_than" | "gt" => Ok(Validation::GreaterThan(parse_dsl_string_arg(args))),
         "greater_than_or_equal" | "gte" => {
             Ok(Validation::GreaterThanOrEqual(parse_dsl_string_arg(args)))

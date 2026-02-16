@@ -44,6 +44,13 @@ impl KdlValidate for &str {
     }
 }
 
+impl KdlValidate for std::path::PathBuf {
+    #[inline]
+    fn kdl_validate(&self, validation: &Validation) -> Result<(), String> {
+        validation.validate_str(self.to_string_lossy().as_ref())
+    }
+}
+
 // --- Bool (no-op) ---
 
 impl KdlValidate for bool {

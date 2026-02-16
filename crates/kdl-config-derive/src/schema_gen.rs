@@ -257,7 +257,8 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                        description: TokenStream,
                        validations: &[super::attrs::ValidationRule]|
      -> TokenStream {
-        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
+        let validation_exprs: Vec<TokenStream> =
+            validations.iter().map(|v| quote! { #v }).collect();
         quote! {
             let type_spec = #type_expr;
             let type_spec = if #variadic {
@@ -282,7 +283,8 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                         description: TokenStream,
                         validations: &[super::attrs::ValidationRule]|
      -> TokenStream {
-        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
+        let validation_exprs: Vec<TokenStream> =
+            validations.iter().map(|v| quote! { #v }).collect();
         quote! {
             let type_spec = #type_expr;
             schema.values.push(::kdl_config::schema::SchemaValue {
@@ -303,7 +305,8 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                               description: TokenStream,
                               validations: &[super::attrs::ValidationRule]|
      -> TokenStream {
-        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
+        let validation_exprs: Vec<TokenStream> =
+            validations.iter().map(|v| quote! { #v }).collect();
         quote! {
             let type_spec = #type_expr;
             let type_spec = if #variadic {
@@ -337,45 +340,46 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
     };
 
     let node_child_insert = |ty: &Type,
-                              kdl_key: &str,
-                              required: bool,
-                              description: TokenStream,
-                              validations: &[super::attrs::ValidationRule]|
+                             kdl_key: &str,
+                             required: bool,
+                             description: TokenStream,
+                             validations: &[super::attrs::ValidationRule]|
      -> TokenStream {
-        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
+        let validation_exprs: Vec<TokenStream> =
+            validations.iter().map(|v| quote! { #v }).collect();
         quote! {
-                let schema_ref = <#ty as ::kdl_config::schema::KdlSchema>::schema_ref();
-                let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
-                node_schema.name = Some(#kdl_key.to_string());
-                node_schema.description = #description;
-                node_schema.required = Some(#required);
-                node_schema.validations = vec![#(#validation_exprs),*];
-                match schema_ref {
-                    ::kdl_config::schema::SchemaRef::Ref(r) => {
-                        node_schema.ref_type = Some(r);
-                    }
-                    ::kdl_config::schema::SchemaRef::Inline(s) => {
-                        node_schema.props = s.props;
-                        node_schema.values = s.values;
-                        node_schema.children = s.children;
-                    }
-                    ::kdl_config::schema::SchemaRef::Choice(choices) => {
-                        node_schema.children = Some(::std::boxed::Box::new(
-                            ::kdl_config::schema::ChildrenSchema {
-                                nodes: vec![::kdl_config::schema::SchemaRef::Choice(choices)],
-                            },
-                        ));
-                    }
+            let schema_ref = <#ty as ::kdl_config::schema::KdlSchema>::schema_ref();
+            let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
+            node_schema.name = Some(#kdl_key.to_string());
+            node_schema.description = #description;
+            node_schema.required = Some(#required);
+            node_schema.validations = vec![#(#validation_exprs),*];
+            match schema_ref {
+                ::kdl_config::schema::SchemaRef::Ref(r) => {
+                    node_schema.ref_type = Some(r);
                 }
-
-                if children_nodes.is_none() {
-                    children_nodes = Some(::kdl_config::schema::ChildrenSchema { nodes: vec![] });
+                ::kdl_config::schema::SchemaRef::Inline(s) => {
+                    node_schema.props = s.props;
+                    node_schema.values = s.values;
+                    node_schema.children = s.children;
                 }
-                if let Some(c) = &mut children_nodes {
-                    c.nodes.push(::kdl_config::schema::SchemaRef::Inline(node_schema));
+                ::kdl_config::schema::SchemaRef::Choice(choices) => {
+                    node_schema.children = Some(::std::boxed::Box::new(
+                        ::kdl_config::schema::ChildrenSchema {
+                            nodes: vec![::kdl_config::schema::SchemaRef::Choice(choices)],
+                        },
+                    ));
                 }
             }
-        };
+
+            if children_nodes.is_none() {
+                children_nodes = Some(::kdl_config::schema::ChildrenSchema { nodes: vec![] });
+            }
+            if let Some(c) = &mut children_nodes {
+                c.nodes.push(::kdl_config::schema::SchemaRef::Inline(node_schema));
+            }
+        }
+    };
 
     let registry_child_insert = |val_ty: &Type,
                                  container: &str,
@@ -388,7 +392,8 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             Some(ks) => quote! { node_schema.registry_key = Some(#ks); },
             None => quote! {},
         };
-        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
+        let validation_exprs: Vec<TokenStream> =
+            validations.iter().map(|v| quote! { #v }).collect();
         quote! {
             let schema_ref = <#val_ty as ::kdl_config::schema::KdlSchema>::schema_ref();
             let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
@@ -455,7 +460,8 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             Some(rk) => quote! { node_schema.registry_key = Some(#rk); },
             None => quote! {},
         };
-        let validation_exprs: Vec<TokenStream> = validations.iter().map(|v| quote! { #v }).collect();
+        let validation_exprs: Vec<TokenStream> =
+            validations.iter().map(|v| quote! { #v }).collect();
         quote! {
             let schema_ref = <#val_ty as ::kdl_config::schema::KdlSchema>::schema_ref();
             let mut node_schema = ::kdl_config::schema::KdlNodeSchema::default();
@@ -730,13 +736,23 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             if let Some(index) = field.placement.positional {
                 value_entries_target.push((
                     index,
-                    value_insert(type_expr.clone(), required, desc_expr.clone(), &field.schema.validations),
+                    value_insert(
+                        type_expr.clone(),
+                        required,
+                        desc_expr.clone(),
+                        &field.schema.validations,
+                    ),
                 ));
             }
             if field.placement.positional_list {
                 value_entries_target.push((
                     0,
-                    value_insert(type_expr.clone(), required, desc_expr.clone(), &field.schema.validations),
+                    value_insert(
+                        type_expr.clone(),
+                        required,
+                        desc_expr.clone(),
+                        &field.schema.validations,
+                    ),
                 ));
             }
             if field.placement.value {

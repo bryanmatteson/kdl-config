@@ -27,6 +27,7 @@ In child form, `attr1` and `attr2` are child node names. A child “value node�
 - `#[kdl(default_flag_style = "both" | "value|no" | "with|without")]`: default flag aliases.
 - `#[kdl(default_conflict = "error" | "first" | "last" | "append")]`: conflict policy for multiple candidates.
 - `#[kdl(deny_unknown)]`: error on unknown attributes or children.
+- `#[kdl(validate(func = "path"))]`: struct-level validation. Called with `fn(&Self) -> Result<(), String>` after all fields are decoded and field-level validations pass. See [Validation](#validation).
 
 **Field-Level Placement**
 - `#[kdl(attr)]`: allow attribute placement. For non-bool fields, this means keyed `key=value`. For bool fields, this means keyed values plus flag tokens.
@@ -64,6 +65,7 @@ If `keyed` is explicitly set, flags are not considered unless `flag` is also set
 - `#[kdl(skip_serializing_if = "path")]`: rendering-only skip predicate.
 - `#[kdl(scalar)]` (aliases: `#[kdl(value_type)]`, `#[kdl(value_like)]`, `#[kdl(kdl_value)]`): treat custom type as scalar for attr/positional/value placements (requires `FromKdlValue` implementation).
 - `#[kdl(modifier)]`: capture the node's signal modifier (`+`, `-`, `!`) into a `Modifier` or `Option<Modifier>` field.
+- `#[kdl(validate(...))]`: decode-time validation rules. Multiple rules may be combined in a single `validate(...)` or across repeated attributes. See [Validation](#validation).
 
 Note: `#[kdl(modifier)]` cannot be combined with other placements and only one modifier field is allowed per struct or enum variant.
 
@@ -812,6 +814,83 @@ Notes:
   - allow both insert nodes and `~` patch nodes as children,
   - validate patch nodes against the referenced target schema, and
   - support context-aware validation for `with "<name>"` within a target node.
+
+## Validation
+
+Validation rules are specified with `#[kdl(validate(...))]` and are enforced during `KdlDecode`. Rules are checked **after** a field is fully decoded. Validation failures produce a `KdlConfigError` with `ErrorKind::InvalidValue`.
+
+**Attribute syntax**
+
+Rules can be specified as nested meta or as a DSL string:
+- Nested meta: `#[kdl(validate(min = 1, max = 100, non_empty))]`
+- DSL string: `#[kdl(validate = "min(1) max(100) non_empty")]`
+
+Multiple `validate(...)` attributes on the same field are merged.
+
+**Numeric rules** (applied to `i8`–`i64`, `u8`–`u64`, `f32`, `f64`, `isize`, `usize`):
+
+| Rule | Syntax | Condition |
+| --- | --- | --- |
+| Min | `min = N` | value ≥ N |
+| Max | `max = N` | value ≤ N |
+| Range | `range(MIN, MAX)` | MIN ≤ value ≤ MAX |
+| MultipleOf | `multiple_of = N` | value % N ≈ 0 |
+| Positive | `positive` | value > 0 |
+| Negative | `negative` | value < 0 |
+| NonNegative | `non_negative` | value ≥ 0 |
+| NonPositive | `non_positive` | value ≤ 0 |
+
+**String rules** (applied to `String`):
+
+| Rule | Syntax | Condition |
+| --- | --- | --- |
+| NonEmpty | `non_empty` | length > 0 |
+| MinLen | `min_len = N` | length ≥ N |
+| MaxLen | `max_len = N` | length ≤ N |
+| Len | `len(MIN, MAX)` | MIN ≤ length ≤ MAX |
+| Pattern | `pattern = "regex"` | schema-only (no runtime regex check) |
+| Ascii | `ascii` | all chars are ASCII |
+| Alphanumeric | `alphanumeric` | all chars are alphanumeric |
+
+**Collection rules** (applied to `Vec<T>`, `Option<Vec<T>>`, `HashMap<K, V>`):
+
+| Rule | Syntax | Condition |
+| --- | --- | --- |
+| MinItems | `min_items = N` | item count ≥ N |
+| MaxItems | `max_items = N` | item count ≤ N |
+
+`min_items`/`max_items` on a non-collection field is a compile-time error.
+
+**Custom function**:
+- `func = "path::to::fn"`: calls `fn(&T) -> Result<(), String>`. An `Err` message becomes the validation error.
+
+**Cross-field rules** (reference another field by name or KDL key; both fields must be numeric):
+
+| Rule | Syntax (aliases) | Condition |
+| --- | --- | --- |
+| LessThan | `less_than = "field"` (`lt`) | this < other |
+| LessThanOrEqual | `less_than_or_equal = "field"` (`lte`) | this ≤ other |
+| GreaterThan | `greater_than = "field"` (`gt`) | this > other |
+| GreaterThanOrEqual | `greater_than_or_equal = "field"` (`gte`) | this ≥ other |
+| EqualTo | `equal_to = "field"` (`eq`) | this = other |
+| NotEqualTo | `not_equal_to = "field"` (`neq`) | this ≠ other |
+
+Cross-field rules run after all fields are decoded. Referencing a nonexistent field is a compile-time error.
+
+**Struct-level validation**:
+- `#[kdl(validate(func = "path"))]` on a struct: calls `fn(&Self) -> Result<(), String>` after the struct is fully constructed. Useful for invariants that span multiple fields.
+- Multiple struct-level `func` validators are allowed and run in order.
+
+**`Option<T>` handling**: when the field value is `None`, all validation rules are skipped.
+
+**Execution order**:
+1. Per-field scalar/string rules run immediately after each field is decoded.
+2. Per-field collection count rules run immediately after each field is decoded.
+3. Per-field `func` rules run immediately after each field is decoded.
+4. Cross-field rules run after all fields are decoded.
+5. Struct-level `func` validators run last, after the struct is constructed.
+
+**Runtime traits**: the `KdlValidate` trait bridges typed values to the `Validation` enum's `validate_number` / `validate_str` methods. The `KdlValidateCount` trait provides `.count()` for collection types. The `AsF64` trait converts numeric types for cross-field comparisons. These traits are implemented for all primitive numeric types, `String`, `bool`, and their `Option<T>` wrappers.
 
 ## Rust Traits
 

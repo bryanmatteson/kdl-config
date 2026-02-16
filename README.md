@@ -74,6 +74,7 @@ Users only need to depend on `kdl-config`; derive macros are re-exported automat
 - **Declarative Mapping**: Use derive macros to map KDL nodes to Rust structs and enums.
 - **Attributes & Arguments**: Map KDL keyed attributes, positional arguments, and flags to struct fields.
 - **Children**: Collect child nodes into `Vec`, `HashMap`, or nested structs — including `registry` and `children_map` patterns.
+- **Validation**: Declare constraints on fields and structs — numeric ranges, string rules, collection sizes, cross-field comparisons, and custom functions — enforced at decode time.
 - **Selectors**: Advanced key/discriminator extraction with `select(...)` (supports `arg(N)`, `attr("name")`, `name`, `func("path")`, and `any(...)`).
 - **Fragments**: Reusable configuration templates with insert nodes and `~` merge patches, expanded before parsing.
 - **Layered Configs**: Load and merge multiple KDL files with `KdlLoader`, using modifier signals (`+`, `-`, `!`) for merge control.
@@ -312,6 +313,50 @@ struct Config {
     ignored: String,
 }
 ```
+
+## Validation
+
+Add `#[kdl(validate(...))]` to fields or structs to enforce constraints at decode time:
+
+```rust
+use kdl_config::KdlNode;
+
+#[derive(KdlNode)]
+#[kdl(node = "server", validate(func = "check_server"))]
+struct ServerConfig {
+    #[kdl(validate(non_empty, max_len = 255))]
+    host: String,
+
+    #[kdl(validate(min = 1, max = 65535))]
+    port: i64,
+
+    #[kdl(validate(positive))]
+    workers: i64,
+
+    #[kdl(validate(less_than = "max_conns"))]
+    min_conns: i64,
+    max_conns: i64,
+}
+
+fn check_server(s: &ServerConfig) -> Result<(), String> {
+    if s.host == "localhost" && s.workers > 4 {
+        return Err("localhost limited to 4 workers".into());
+    }
+    Ok(())
+}
+```
+
+**Supported rules:**
+
+| Category | Rules |
+| --- | --- |
+| Numeric | `min`, `max`, `range(a,b)`, `multiple_of`, `positive`, `negative`, `non_negative`, `non_positive` |
+| String | `non_empty`, `min_len`, `max_len`, `len(a,b)`, `ascii`, `alphanumeric`, `pattern` |
+| Collection | `min_items`, `max_items` |
+| Cross-field | `less_than`, `lte`, `greater_than`, `gte`, `equal_to`, `not_equal_to` |
+| Custom | `func = "path::to::fn"` (field-level: `fn(&T) -> Result<(), String>`, struct-level: `fn(&Self) -> Result<(), String>`) |
+
+`Option<T>` fields skip validation when `None`. See [docs/validation.md](docs/validation.md) for full details.
 
 ### Custom Scalar Types
 

@@ -20,16 +20,15 @@ fn valid_values_pass_validation() {
 
 #[test]
 fn port_zero_fails_min_validation() {
-    let err = parse_str::<ServerConfig>("server host=\"localhost\" port=0 name=\"ok\"")
-        .unwrap_err();
+    let err =
+        parse_str::<ServerConfig>("server host=\"localhost\" port=0 name=\"ok\"").unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("less than minimum"), "got: {msg}");
 }
 
 #[test]
 fn empty_name_fails_non_empty_validation() {
-    let err = parse_str::<ServerConfig>("server host=\"localhost\" port=80 name=\"\"")
-        .unwrap_err();
+    let err = parse_str::<ServerConfig>("server host=\"localhost\" port=80 name=\"\"").unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("must not be empty"), "got: {msg}");
 }
@@ -60,7 +59,12 @@ fn positive_validation_rejects_negative() {
 #[derive(Debug, PartialEq, kdl_config::KdlNode)]
 #[kdl(node = "items")]
 struct ItemsConfig {
-    #[kdl(name = "entry", children, optional, validate(min_items = 1, max_items = 5))]
+    #[kdl(
+        name = "entry",
+        children,
+        optional,
+        validate(min_items = 1, max_items = 5)
+    )]
     entries: Vec<Entry>,
 }
 
@@ -121,20 +125,14 @@ fn cross_field_less_than_passes() {
 fn cross_field_less_than_fails_when_equal() {
     let err = parse_str::<LimitsConfig>("limits min_val=10.0 max_val=10.0").unwrap_err();
     let msg = err.to_string();
-    assert!(
-        msg.contains("must be less than"),
-        "got: {msg}"
-    );
+    assert!(msg.contains("must be less than"), "got: {msg}");
 }
 
 #[test]
 fn cross_field_less_than_fails_when_greater() {
     let err = parse_str::<LimitsConfig>("limits min_val=20.0 max_val=10.0").unwrap_err();
     let msg = err.to_string();
-    assert!(
-        msg.contains("must be less than"),
-        "got: {msg}"
-    );
+    assert!(msg.contains("must be less than"), "got: {msg}");
 }
 
 fn validate_even(val: &i32) -> Result<(), String> {
@@ -189,4 +187,39 @@ fn optional_some_invalid_fails() {
     let err = parse_str::<OptionalValidation>("optional_test score=200").unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("exceeds maximum"), "got: {msg}");
+}
+
+// --- Struct-level validation ---
+
+fn check_server_invariants(s: &ValidatedServer) -> Result<(), String> {
+    if s.host == "localhost" && s.port > 1024 {
+        return Err("localhost must use a privileged port".to_string());
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "server", validate(func = "check_server_invariants"))]
+struct ValidatedServer {
+    host: String,
+    port: i64,
+}
+
+#[test]
+fn struct_level_validation_passes() {
+    let cfg: ValidatedServer = parse_str("server host=\"example.com\" port=8080").unwrap();
+    assert_eq!(cfg.host, "example.com");
+}
+
+#[test]
+fn struct_level_validation_fails() {
+    let err = parse_str::<ValidatedServer>("server host=\"localhost\" port=8080").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("privileged port"), "got: {msg}");
+}
+
+#[test]
+fn struct_level_validation_localhost_privileged_passes() {
+    let cfg: ValidatedServer = parse_str("server host=\"localhost\" port=80").unwrap();
+    assert_eq!(cfg.port, 80);
 }
