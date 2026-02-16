@@ -129,14 +129,6 @@ macro_rules! impl_as_f64 {
 
 impl_as_f64!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, isize, usize);
 
-impl<T: AsF64> AsF64 for Option<T> {
-    #[inline]
-    fn as_f64(&self) -> f64 {
-        self.as_ref()
-            .expect("cross-field validation called on None value")
-            .as_f64()
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Helper: run per-field (non-cross-field, non-Func) validations

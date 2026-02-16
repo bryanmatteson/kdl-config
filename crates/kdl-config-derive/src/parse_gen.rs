@@ -3109,27 +3109,56 @@ fn generate_cross_field_validations(fields: &[FieldInfo], struct_name: &str) -> 
                 _ => continue,
             };
 
-            // Find the other field's ident by matching kdl_key or field ident name
-            let other_ident = fields
+            // Find the other field by matching kdl_key or field ident name
+            let other_ident_field = fields
                 .iter()
                 .find(|f| {
                     f.kdl_key == *other_field_name || f.ident.to_string() == *other_field_name
-                })
-                .map(|f| &f.ident);
+                });
 
             let validation_expr: TokenStream = quote! { #v };
 
-            if let Some(other_ident) = other_ident {
-                blocks.push(quote! {
+            if let Some(other_field) = other_ident_field {
+                let other_ident = &other_field.ident;
+                let this_optional = field.is_optional;
+                let other_optional = other_field.is_optional;
+
+                let call = quote! {
                     ::kdl_config::run_cross_field_validation(
-                        ::kdl_config::AsF64::as_f64(&#field_ident),
-                        ::kdl_config::AsF64::as_f64(&#other_ident),
+                        ::kdl_config::AsF64::as_f64(&__kdl_cross_this),
+                        ::kdl_config::AsF64::as_f64(&__kdl_cross_other),
                         &#validation_expr,
                         #struct_name,
                         #field_name,
                         #kdl_key,
                     )?;
-                });
+                };
+
+                let block = match (this_optional, other_optional) {
+                    (false, false) => quote! {
+                        let __kdl_cross_this = #field_ident;
+                        let __kdl_cross_other = #other_ident;
+                        #call
+                    },
+                    (true, false) => quote! {
+                        if let Some(__kdl_cross_this) = #field_ident {
+                            let __kdl_cross_other = #other_ident;
+                            #call
+                        }
+                    },
+                    (false, true) => quote! {
+                        if let Some(__kdl_cross_other) = #other_ident {
+                            let __kdl_cross_this = #field_ident;
+                            #call
+                        }
+                    },
+                    (true, true) => quote! {
+                        if let (Some(__kdl_cross_this), Some(__kdl_cross_other)) = (#field_ident, #other_ident) {
+                            #call
+                        }
+                    },
+                };
+                blocks.push(block);
             } else {
                 let msg = format!(
                     "cross-field validation references unknown field '{}'",
