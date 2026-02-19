@@ -37,6 +37,38 @@ fn main() {
 }
 ```
 
+## Parse Config and Root Wrapping
+
+`parse_str_with_config` accepts a `ParseConfig` with `root_mode`:
+
+- `RootMode::Strict` (default): input must contain exactly one top-level node.
+- `RootMode::WrapExpectedNode { name }`: if parsing fails due to multiple top-level nodes or root name mismatch, input is retried as `name { ... }`.
+
+```rust
+use kdl_config::{ParseConfig, RootMode, parse_str_with_config};
+
+#[derive(kdl_config::KdlNode)]
+#[kdl(node = "config")]
+struct EmbeddedConfig {
+    name: String,
+    count: i32,
+}
+
+let cfg: EmbeddedConfig = parse_str_with_config(
+    r#"
+name "demo"
+count 10
+"#,
+    &ParseConfig {
+        root_mode: RootMode::WrapExpectedNode {
+            name: "config".to_string(),
+        },
+        ..ParseConfig::default()
+    },
+)
+.unwrap();
+```
+
 ## Crate Architecture
 
 The workspace contains two crates:
@@ -44,7 +76,7 @@ The workspace contains two crates:
 | Crate | Purpose |
 | --- | --- |
 | `kdl-config` | Runtime library with traits, parsing, rendering, round-trip, schema, fragments, and layered config loading. Re-exports derive macros. |
-| `kdl-config-derive` | Proc-macro crate providing `#[derive(KdlNode)]`, `#[derive(KdlValue)]`, `#[derive(KdlChoice)]`, `#[derive(KdlSchema)]`, and the unified `#[derive(Kdl)]`. |
+| `kdl-config-derive` | Proc-macro crate providing `#[derive(KdlNode)]`, `#[derive(KdlValue)]`, `#[derive(KdlChoice)]`, `#[derive(KdlSchema)]`, `#[derive(KdlMerge)]`, `#[derive(KdlPartial)]`, and the unified `#[derive(Kdl)]`. |
 
 Users only need to depend on `kdl-config`; derive macros are re-exported automatically.
 
@@ -56,6 +88,8 @@ Users only need to depend on `kdl-config`; derive macros are re-exported automat
 | `KdlValue` | Unit enums and newtype structs: maps KDL scalar values to Rust types via `FromKdlValue`. |
 | `KdlChoice` | Choice enums: selects variant by node name. |
 | `KdlSchema` | Schema generation: registers schema definitions for types. |
+| `KdlMerge` | Generates `DeepMerge` impls for typed overlay merging with per-field merge policy. |
+| `KdlPartial` | Generates `PartialConfig<T>` impls for `Option`-wrapped partial structs. |
 | `Kdl` | Unified macro: dispatches to the above based on `#[kdl(choice)]`, `#[kdl(value)]`, or `#[kdl(schema)]` attributes. |
 
 ## Core Traits
@@ -68,6 +102,8 @@ Users only need to depend on `kdl-config`; derive macros are re-exported automat
 | `KdlEncode` | Encode a value into a new `KdlNode`. |
 | `KdlSchema` | Describe the KDL schema for a type. |
 | `FromKdlValue` | Convert a KDL scalar value to a Rust type. |
+| `DeepMerge` | Merge one typed value onto another (`self.deep_merge(other)`). |
+| `PartialConfig<T>` | Apply an optional overlay shape to a complete base config (`apply_to`). |
 
 ## Features
 
@@ -75,9 +111,11 @@ Users only need to depend on `kdl-config`; derive macros are re-exported automat
 - **Attributes & Arguments**: Map KDL keyed attributes, positional arguments, and flags to struct fields.
 - **Children**: Collect child nodes into `Vec`, `HashMap`, or nested structs — including `registry` and `children_map` patterns.
 - **Validation**: Declare constraints on fields and structs — numeric ranges, string rules, collection sizes, cross-field comparisons, and custom functions — enforced at decode time.
+- **Post-Decode Hooks**: Normalize or reject fully-decoded structs with `#[kdl(post_decode = "path")]`.
 - **Selectors**: Advanced key/discriminator extraction with `select(...)` (supports `arg(N)`, `attr("name")`, `name`, `func("path")`, and `any(...)`).
 - **Fragments**: Reusable configuration templates with insert nodes and `~` merge patches, expanded before parsing.
 - **Layered Configs**: Load and merge multiple KDL files with `KdlLoader`, using modifier signals (`+`, `-`, `!`) for merge control.
+- **Typed Overlay Merging**: Derive `KdlMerge` and `KdlPartial` to remove manual merge boilerplate.
 - **Round-trip Rendering**: Parse, modify, and re-serialize KDL while preserving original formatting via `RoundTripAst`.
 - **Schema Generation**: Generate KDL schema metadata for your types with `KdlSchema`.
 - **Built-in Newtypes**: `Duration`, `Weight`, `PositiveCount`, and `Scalar<T>` for common config value patterns.
@@ -353,10 +391,70 @@ fn check_server(s: &ServerConfig) -> Result<(), String> {
 | Numeric | `min`, `max`, `range(a,b)`, `multiple_of`, `positive`, `negative`, `non_negative`, `non_positive` |
 | String | `non_empty`, `min_len`, `max_len`, `len(a,b)`, `ascii`, `alphanumeric`, `pattern` |
 | Collection | `min_items`, `max_items` |
-| Cross-field | `less_than`, `lte`, `greater_than`, `gte`, `equal_to`, `not_equal_to` |
+| Cross-field (numeric) | `less_than`, `lte`, `greater_than`, `gte`, `equal_to`, `not_equal_to` |
+| Cross-field (membership) | `exists_in`, `subset_of` |
 | Custom | `func = "path::to::fn"` (field-level: `fn(&T) -> Result<(), String>`, struct-level: `fn(&Self) -> Result<(), String>`) |
 
 `Option<T>` fields skip validation when `None`. See [docs/validation.md](docs/validation.md) for full details.
+
+### Post-Decode Hooks
+
+Use `#[kdl(post_decode = "path")]` (or `#[kdl(post_decode(func = "path"))]`) to run a hook right after struct construction and before struct-level `validate(func = ...)` checks.
+
+Hook signature:
+- `fn(&mut Self) -> Result<(), String>`
+
+```rust
+fn normalize(cfg: &mut AppConfig) -> Result<(), String> {
+    cfg.name = cfg.name.trim().to_string();
+    if cfg.name.is_empty() {
+        return Err("name must not be empty".to_string());
+    }
+    Ok(())
+}
+
+#[derive(KdlNode)]
+#[kdl(node = "app", post_decode(func = "normalize"))]
+struct AppConfig {
+    #[kdl(attr)]
+    name: String,
+}
+```
+
+### Typed Overlay Merging
+
+`KdlMerge` generates a `DeepMerge` implementation for structs and supports per-field policy:
+- `#[kdl(merge = "deep")]` (default)
+- `#[kdl(merge = "keep")]`
+- `#[kdl(merge = "replace")]`
+- `#[kdl(merge = "append")]`
+- `#[kdl(merge(func = "path"))]`
+
+`KdlPartial` generates `PartialConfig<T>` for partial (usually `Option`-wrapped) overlay structs:
+
+```rust
+use kdl_config::merge::PartialConfig;
+use kdl_config::{KdlMerge, KdlPartial};
+
+#[derive(Clone, KdlMerge)]
+struct AppConfig {
+    name: String,
+    retries: u32,
+}
+
+#[derive(KdlPartial)]
+#[kdl(partial_for = "AppConfig")]
+struct AppConfigPartial {
+    name: Option<String>,
+    retries: Option<u32>,
+}
+
+let merged = AppConfigPartial { name: None, retries: Some(5) }.apply_to(AppConfig {
+    name: "stag".to_string(),
+    retries: 1,
+});
+assert_eq!(merged.retries, 5);
+```
 
 ### Custom Scalar Types
 

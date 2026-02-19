@@ -2,7 +2,9 @@ mod attrs;
 mod choice_gen;
 mod enum_gen;
 mod kdl_gen;
+mod merge_gen;
 mod parse_gen;
+mod partial_gen;
 mod render_gen;
 mod schema_gen;
 mod update_gen;
@@ -371,6 +373,24 @@ pub fn derive_kdl(input: TokenStream) -> TokenStream {
 pub fn derive_kdl_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match schema_gen::generate_schema_impl(&input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(KdlMerge, attributes(kdl))]
+pub fn derive_kdl_merge(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match merge_gen::generate_kdl_merge_impl(&input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(KdlPartial, attributes(kdl))]
+pub fn derive_kdl_partial(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match partial_gen::generate_kdl_partial_impl(&input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }

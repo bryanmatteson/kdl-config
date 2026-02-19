@@ -28,13 +28,26 @@ pub enum ConflictPolicy {
     Append,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootMode {
+    Strict,
+    WrapExpectedNode { name: String },
+}
+
+impl Default for RootMode {
+    fn default() -> Self {
+        Self::Strict
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ParseConfig {
     pub default_placement: DefaultPlacement,
     pub default_bool: BoolMode,
     pub default_flag_style: FlagStyle,
     pub default_conflict: ConflictPolicy,
     pub deny_unknown: bool,
+    pub root_mode: RootMode,
 }
 
 impl Default for ParseConfig {
@@ -45,6 +58,7 @@ impl Default for ParseConfig {
             default_flag_style: FlagStyle::Both,
             default_conflict: ConflictPolicy::Error,
             deny_unknown: false,
+            root_mode: RootMode::Strict,
         }
     }
 }

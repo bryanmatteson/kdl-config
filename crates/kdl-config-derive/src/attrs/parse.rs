@@ -226,6 +226,30 @@ fn parse_struct_meta(
                 })?;
             }
         }
+        Some("post_decode") => {
+            if meta.input.peek(syn::Token![=]) {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }) = value
+                {
+                    result.post_decode = Some(s.value());
+                }
+            } else if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
+                meta.parse_nested_meta(|nested| {
+                    if nested.path.is_ident("func") {
+                        let value: Expr = nested.value()?.parse()?;
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(s), ..
+                        }) = value
+                        {
+                            result.post_decode = Some(s.value());
+                        }
+                    }
+                    Ok(())
+                })?;
+            }
+        }
         Some("schema") => {
             if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
                 meta.parse_nested_meta(|nested| {
@@ -1700,6 +1724,8 @@ fn parse_validation_rule_with_args(
         "not_equal_to" | "neq" => Ok(ValidationRule::NotEqualTo(parse_validation_string_arg(
             args,
         ))),
+        "exists_in" => Ok(ValidationRule::ExistsIn(parse_validation_string_arg(args))),
+        "subset_of" => Ok(ValidationRule::SubsetOf(parse_validation_string_arg(args))),
         _ => Err(syn::Error::new(
             span,
             format!("unknown validation rule: {}", name),
@@ -1861,6 +1887,30 @@ fn parse_validation_rule_meta(
                     return Err(syn::Error::new(
                         meta.path.span(),
                         "not_equal_to requires a string field name",
+                    ));
+                }
+                "exists_in" => {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = value
+                    {
+                        return Ok(ValidationRule::ExistsIn(s.value()));
+                    }
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "exists_in requires a string field name",
+                    ));
+                }
+                "subset_of" => {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = value
+                    {
+                        return Ok(ValidationRule::SubsetOf(s.value()));
+                    }
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "subset_of requires a string field name",
                     ));
                 }
                 _ => {
@@ -2105,6 +2155,38 @@ fn parse_validation_rule_from_exprs(
                 Err(syn::Error::new(
                     span,
                     "not_equal_to() requires a string field name",
+                ))
+            }
+        }
+        "exists_in" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "exists_in() takes 1 argument"));
+            }
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &args[0]
+            {
+                Ok(ValidationRule::ExistsIn(s.value()))
+            } else {
+                Err(syn::Error::new(
+                    span,
+                    "exists_in() requires a string field name",
+                ))
+            }
+        }
+        "subset_of" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "subset_of() takes 1 argument"));
+            }
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &args[0]
+            {
+                Ok(ValidationRule::SubsetOf(s.value()))
+            } else {
+                Err(syn::Error::new(
+                    span,
+                    "subset_of() requires a string field name",
                 ))
             }
         }

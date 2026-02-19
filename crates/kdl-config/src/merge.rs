@@ -1,4 +1,8 @@
 use std::path::PathBuf;
+use std::{
+    collections::{BTreeMap, HashMap},
+    hash::Hash,
+};
 
 use crate::newtypes::{Duration, Weight};
 
@@ -92,6 +96,13 @@ impl DeepMerge for PathBuf {
     }
 }
 
+impl<T: DeepMerge> DeepMerge for Box<T> {
+    #[inline]
+    fn deep_merge(self, other: Self) -> Self {
+        Box::new((*self).deep_merge(*other))
+    }
+}
+
 // ============================================================================
 // Newtype implementations
 // ============================================================================
@@ -137,6 +148,85 @@ impl<T> DeepMerge for Vec<T> {
     #[inline]
     fn deep_merge(self, other: Self) -> Self {
         if other.is_empty() { self } else { other }
+    }
+}
+
+impl<K, V> DeepMerge for HashMap<K, V>
+where
+    K: Eq + Hash,
+    V: DeepMerge,
+{
+    #[inline]
+    fn deep_merge(self, other: Self) -> Self {
+        let mut merged = self;
+        for (key, value) in other {
+            match merged.remove(&key) {
+                Some(existing) => {
+                    merged.insert(key, existing.deep_merge(value));
+                }
+                None => {
+                    merged.insert(key, value);
+                }
+            }
+        }
+        merged
+    }
+}
+
+impl<K, V> DeepMerge for BTreeMap<K, V>
+where
+    K: Ord,
+    V: DeepMerge,
+{
+    #[inline]
+    fn deep_merge(self, other: Self) -> Self {
+        let mut merged = self;
+        for (key, value) in other {
+            match merged.remove(&key) {
+                Some(existing) => {
+                    merged.insert(key, existing.deep_merge(value));
+                }
+                None => {
+                    merged.insert(key, value);
+                }
+            }
+        }
+        merged
+    }
+}
+
+/// Explicit append semantics for ordered/map collections.
+pub trait MergeAppend {
+    fn merge_append(self, other: Self) -> Self;
+}
+
+impl<T> MergeAppend for Vec<T> {
+    #[inline]
+    fn merge_append(mut self, mut other: Self) -> Self {
+        self.append(&mut other);
+        self
+    }
+}
+
+impl<K, V> MergeAppend for HashMap<K, V>
+where
+    K: Eq + Hash,
+{
+    #[inline]
+    fn merge_append(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
+    }
+}
+
+impl<K, V> MergeAppend for BTreeMap<K, V>
+where
+    K: Ord,
+{
+    #[inline]
+    fn merge_append(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
     }
 }
 

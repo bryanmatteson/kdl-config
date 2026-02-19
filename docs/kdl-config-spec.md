@@ -27,7 +27,9 @@ In child form, `attr1` and `attr2` are child node names. A child “value node�
 - `#[kdl(default_flag_style = "both" | "value|no" | "with|without")]`: default flag aliases.
 - `#[kdl(default_conflict = "error" | "first" | "last" | "append")]`: conflict policy for multiple candidates.
 - `#[kdl(deny_unknown)]`: error on unknown attributes or children.
+- `#[kdl(post_decode = "path")]` or `#[kdl(post_decode(func = "path"))]`: struct post-processing hook. Called with `fn(&mut Self) -> Result<(), String>` after decode and cross-field checks, before struct-level `validate(func = ...)`.
 - `#[kdl(validate(func = "path"))]`: struct-level validation. Called with `fn(&Self) -> Result<(), String>` after all fields are decoded and field-level validations pass. See [Validation](#validation).
+- `#[kdl(partial_for = "TypePath")]`: only for `#[derive(KdlPartial)]`; declares the target type for `PartialConfig<T>::apply_to`.
 
 **Field-Level Placement**
 - `#[kdl(attr)]`: allow attribute placement. For non-bool fields, this means keyed `key=value`. For bool fields, this means keyed values plus flag tokens.
@@ -66,8 +68,45 @@ If `keyed` is explicitly set, flags are not considered unless `flag` is also set
 - `#[kdl(scalar)]` (aliases: `#[kdl(value_type)]`, `#[kdl(value_like)]`, `#[kdl(kdl_value)]`): treat custom type as scalar for attr/positional/value placements (requires `FromKdlValue` implementation).
 - `#[kdl(modifier)]`: capture the node's signal modifier (`+`, `-`, `!`) into a `Modifier` or `Option<Modifier>` field.
 - `#[kdl(validate(...))]`: decode-time validation rules. Multiple rules may be combined in a single `validate(...)` or across repeated attributes. See [Validation](#validation).
+- `#[kdl(merge = "deep" | "keep" | "replace" | "append")]`: only for `#[derive(KdlMerge)]`; controls field merge policy.
+- `#[kdl(merge(mode = "..."))]`, `#[kdl(merge(func = "path"))]`: explicit merge policy or custom merge function for `KdlMerge`.
 
 Note: `#[kdl(modifier)]` cannot be combined with other placements and only one modifier field is allowed per struct or enum variant.
+
+## Parse Configuration
+
+`parse_str_with_config` accepts `ParseConfig`, which controls global defaults and root behavior:
+
+- `default_placement`, `default_bool`, `default_flag_style`, `default_conflict`, `deny_unknown`: baseline decode behavior.
+- `root_mode`:
+  - `RootMode::Strict` (default): requires exactly one top-level node.
+  - `RootMode::WrapExpectedNode { name }`: on top-level shape errors (`expected a single top-level node`) or root node name mismatch, retries decode by wrapping input as:
+    - `name { ...original contents... }`
+    - retried parse always uses `RootMode::Strict` to avoid recursive wrapping.
+
+This enables parsing embedded KDL snippets as if they were under a known root node.
+
+## Overlay Derives
+
+### `KdlMerge`
+
+`#[derive(KdlMerge)]` generates `DeepMerge` for structs.
+
+Per-field merge policy:
+- `deep` (default): `DeepMerge::deep_merge(left, right)`
+- `keep`: keep left/base value
+- `replace`: take right/overlay value
+- `append`: `MergeAppend::merge_append(left, right)` (supported for `Vec<T>`, `HashMap<K, V>`, `BTreeMap<K, V>`)
+- `func`: call custom function `fn(FieldType, FieldType) -> FieldType`
+
+### `KdlPartial`
+
+`#[derive(KdlPartial)]` generates `PartialConfig<T>` for named-field structs and requires:
+- `#[kdl(partial_for = "TypePath")]`
+
+Generated behavior:
+- For each field: `base.field = MergeOption::merge_with(base.field, partial.field)`.
+- Designed for partial overlay types with `Option<...>` fields, but works with any field type compatible with `MergeOption`.
 
 ## Registry / Keyed Nodes
 
@@ -864,7 +903,7 @@ Multiple `validate(...)` attributes on the same field are merged.
 **Custom function**:
 - `func = "path::to::fn"`: calls `fn(&T) -> Result<(), String>`. An `Err` message becomes the validation error.
 
-**Cross-field rules** (reference another field by name or KDL key; both fields must be numeric):
+**Cross-field rules** (reference another field by name or KDL key):
 
 | Rule | Syntax (aliases) | Condition |
 | --- | --- | --- |
@@ -874,12 +913,22 @@ Multiple `validate(...)` attributes on the same field are merged.
 | GreaterThanOrEqual | `greater_than_or_equal = "field"` (`gte`) | this ≥ other |
 | EqualTo | `equal_to = "field"` (`eq`) | this = other |
 | NotEqualTo | `not_equal_to = "field"` (`neq`) | this ≠ other |
+| ExistsIn | `exists_in = "field"` | this scalar exists in other collection |
+| SubsetOf | `subset_of = "field"` | this collection is a subset of other collection |
 
-Cross-field rules run after all fields are decoded. Referencing a nonexistent field is a compile-time error. If either field is `Option<T>` and is `None`, the cross-field check is skipped.
+Supported runtime collection shapes:
+- `exists_in`: `Vec<T>`, `HashSet<T>`, `HashMap<K, V>` (checks keys)
+- `subset_of`: `Vec<T>` ⊆ `Vec<T>`, `HashSet<T>` ⊆ `HashSet<T>`, `Vec<K>` ⊆ `HashMap<K, V>`, `HashMap<K, _>` ⊆ `HashMap<K, _>` (by keys)
+
+Cross-field rules run after all fields are decoded. Referencing a nonexistent field is a compile-time error. Numeric comparisons require numeric operands. If either field is `Option<T>` and is `None`, that cross-field check is skipped.
 
 **Struct-level validation**:
 - `#[kdl(validate(func = "path"))]` on a struct: calls `fn(&Self) -> Result<(), String>` after the struct is fully constructed. Useful for invariants that span multiple fields.
 - Multiple struct-level `func` validators are allowed and run in order.
+
+**Post-decode hooks**:
+- `#[kdl(post_decode = "path")]` or `#[kdl(post_decode(func = "path"))]` on a struct: calls `fn(&mut Self) -> Result<(), String>` after struct construction and before struct-level validators.
+- A failing hook aborts decode with `KdlConfigError::custom`.
 
 **`Option<T>` handling**: when the field value is `None`, all validation rules are skipped.
 
@@ -888,9 +937,11 @@ Cross-field rules run after all fields are decoded. Referencing a nonexistent fi
 2. Per-field collection count rules run immediately after each field is decoded.
 3. Per-field `func` rules run immediately after each field is decoded.
 4. Cross-field rules run after all fields are decoded.
-5. Struct-level `func` validators run last, after the struct is constructed.
+5. The struct is constructed.
+6. `post_decode` hooks run.
+7. Struct-level `func` validators run last.
 
-**Runtime traits**: the `KdlValidate` trait bridges typed values to the `Validation` enum's `validate_number` / `validate_str` methods. The `KdlValidateCount` trait provides `.count()` for collection types. The `AsF64` trait converts numeric types for cross-field comparisons. These traits are implemented for all primitive numeric types, `String`, `bool`, and their `Option<T>` wrappers.
+**Runtime traits**: the `KdlValidate` trait bridges typed values to the `Validation` enum's `validate_number` / `validate_str` methods. The `KdlValidateCount` trait provides `.count()` for collection types. The `AsF64` trait converts numeric types for numeric cross-field comparisons. `KdlContains` and `KdlSubsetOf` power `exists_in` and `subset_of`. These traits are implemented for primitive numeric types, `String`, `bool`, `Option<T>`, and common collection shapes (`Vec`, `HashMap`, `HashSet`).
 
 ## Rust Traits
 
@@ -904,8 +955,12 @@ The runtime crate defines these core traits:
 | `KdlEncode` | Encode a value into a new `KdlNode`. |
 | `KdlSchema` | Describe the KDL schema for a type. |
 | `FromKdlValue` | Convert a KDL scalar value to a Rust type. |
+| `DeepMerge` | Merge overlay values into base values. |
+| `MergeAppend` | Append-oriented merge behavior for supported collections. |
+| `MergeOption` | Apply `Option<T>` overlays onto `T`. |
+| `PartialConfig<T>` | Apply a partial typed overlay onto a concrete base config. |
 
-Derive macros generate `KdlDecode`, `KdlRender`, `KdlUpdate`, and `KdlEncode` implementations. `KdlSchema` is generated separately.
+Derive macros generate `KdlDecode`, `KdlRender`, `KdlUpdate`, and `KdlEncode` implementations. `KdlSchema`, `KdlMerge`, and `KdlPartial` are generated when those derives are used.
 
 ## Built-in Newtypes
 

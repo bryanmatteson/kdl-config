@@ -282,6 +282,7 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
                     default_flag_style: struct_config.flag_style,
                     default_conflict: struct_config.conflict,
                     deny_unknown: struct_config.deny_unknown,
+                    ..::kdl_config::ParseConfig::default()
                 };
                 let (discr, variant_node, discr_key, discr_placement) = { #discr_extract };
                 let discr_display = match &discr {

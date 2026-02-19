@@ -270,6 +270,8 @@ pub enum ValidationRule {
     GreaterThanOrEqual(String),
     EqualTo(String),
     NotEqualTo(String),
+    ExistsIn(String),
+    SubsetOf(String),
 }
 
 impl quote::ToTokens for ValidationRule {
@@ -345,6 +347,12 @@ impl quote::ToTokens for ValidationRule {
             }
             ValidationRule::NotEqualTo(f) => tokens
                 .extend(quote! { ::kdl_config::schema::Validation::NotEqualTo(#f.to_string()) }),
+            ValidationRule::ExistsIn(f) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::ExistsIn(#f.to_string()) })
+            }
+            ValidationRule::SubsetOf(f) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::SubsetOf(#f.to_string()) })
+            }
         }
     }
 }

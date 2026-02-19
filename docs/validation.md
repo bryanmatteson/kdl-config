@@ -116,7 +116,9 @@ The function path can be a module-qualified path like `"crate::validators::check
 
 ### Cross-Field
 
-Compare two numeric fields. The referenced field is identified by its Rust name or KDL key.
+Cross-field rules reference another field by Rust field name or KDL key.
+
+Numeric comparison rules:
 
 | Rule | Aliases | Meaning |
 | --- | --- | --- |
@@ -126,6 +128,17 @@ Compare two numeric fields. The referenced field is identified by its Rust name 
 | `greater_than_or_equal = "other"` | `gte` | this ≥ other |
 | `equal_to = "other"` | `eq` | this = other |
 | `not_equal_to = "other"` | `neq` | this ≠ other |
+
+Membership rules:
+
+| Rule | Meaning |
+| --- | --- |
+| `exists_in = "other"` | this scalar value must exist in the other collection |
+| `subset_of = "other"` | this collection must be a subset of the other collection |
+
+Supported runtime collection shapes:
+- `exists_in`: `Vec<T>`, `HashSet<T>`, `HashMap<K, V>` (checks keys)
+- `subset_of`: `Vec<T>` ⊆ `Vec<T>`, `HashSet<T>` ⊆ `HashSet<T>`, `Vec<K>` ⊆ `HashMap<K, V>`, `HashMap<K, _>` ⊆ `HashMap<K, _>` (by keys)
 
 ```rust
 #[derive(KdlNode)]
@@ -143,7 +156,34 @@ range start=10.0 end=10.0  // ✗ "must be less than 'end'"
 range start=20.0 end=10.0  // ✗ "must be less than 'end'"
 ```
 
-Referencing a field that doesn't exist is a **compile-time error**. Both fields must be numeric types. If either field is `Option<T>` and is `None`, the cross-field check is skipped.
+Membership examples:
+
+```rust
+#[derive(KdlNode)]
+#[kdl(node = "membership")]
+struct Membership {
+    #[kdl(attr, validate(exists_in = "allowed"))]
+    item: String,
+    #[kdl(attr, value, conflict = "append")]
+    allowed: Vec<String>,
+}
+
+#[derive(KdlNode)]
+#[kdl(node = "subset")]
+struct SubsetConfig {
+    #[kdl(attr, value, conflict = "append", validate(subset_of = "allowed"))]
+    selected: Vec<String>,
+    #[kdl(attr, value, conflict = "append")]
+    allowed: Vec<String>,
+}
+```
+
+```kdl
+membership item="beta" allowed="alpha" allowed="beta"  // ✓ item exists in allowed
+membership item="gamma" allowed="alpha" allowed="beta" // ✗ item missing
+```
+
+Referencing a field that doesn't exist is a **compile-time error**. Numeric comparisons require numeric fields. If either side of a cross-field rule is `Option<T>` and is `None`, that rule is skipped.
 
 ## Struct-Level Validation
 
@@ -171,6 +211,30 @@ struct AppConfig {
 
 This is the right place for invariants that involve multiple fields, conditional logic, or anything beyond what cross-field comparison rules can express. Multiple `func` validators on the same struct are allowed and run in declaration order.
 
+## Post-Decode Hooks
+
+Use `#[kdl(post_decode = "path")]` or `#[kdl(post_decode(func = "path"))]` to mutate or reject the decoded struct before struct-level `validate(func = ...)` runs.
+
+Hook signature:
+- `fn(&mut Self) -> Result<(), String>`
+
+```rust
+fn normalize_name(cfg: &mut AppConfig) -> Result<(), String> {
+    cfg.name = cfg.name.trim().to_string();
+    if cfg.name.is_empty() {
+        return Err("name must not be empty".to_string());
+    }
+    Ok(())
+}
+
+#[derive(KdlNode)]
+#[kdl(node = "app", post_decode(func = "normalize_name"))]
+struct AppConfig {
+    #[kdl(attr)]
+    name: String,
+}
+```
+
 ## Optional Fields
 
 When a field is `Option<T>` and the value is `None`, all validation rules are skipped:
@@ -196,8 +260,9 @@ Validation runs in a deterministic order during `KdlDecode`:
 
 1. Each field is decoded, then its **scalar/string**, **count**, and **func** rules run immediately.
 2. After all fields are decoded, **cross-field** rules run.
-3. The struct is constructed, then **struct-level** `func` validators run.
-4. If any rule fails, decoding short-circuits and returns a `KdlConfigError`.
+3. The struct is constructed, then optional **post_decode** hooks run.
+4. **Struct-level** `func` validators run.
+5. If any rule fails, decoding short-circuits and returns a `KdlConfigError`.
 
 ## Error Messages
 

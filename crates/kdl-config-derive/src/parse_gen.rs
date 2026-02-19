@@ -83,6 +83,7 @@ pub fn generate_parse_impl(
 
     let cross_field_validations = generate_cross_field_validations(fields, &struct_name_str);
     let struct_validations = generate_struct_validations(struct_attrs, &struct_name_str);
+    let post_decode = generate_post_decode_hook(struct_attrs, &struct_name_str);
 
     quote! {
         impl ::kdl_config::KdlDecode for #struct_name {
@@ -103,11 +104,12 @@ pub fn generate_parse_impl(
 
                     #cross_field_validations
 
-                    let __kdl_value = Self {
+                    let mut __kdl_value = Self {
                         #(#field_names,)*
                         #(#skipped_fields: ::std::default::Default::default(),)*
                     };
 
+                    #post_decode
                     #struct_validations
 
                     Ok(__kdl_value)
@@ -2988,7 +2990,9 @@ fn generate_field_validation(
             | ValidationRule::GreaterThan(_)
             | ValidationRule::GreaterThanOrEqual(_)
             | ValidationRule::EqualTo(_)
-            | ValidationRule::NotEqualTo(_) => {
+            | ValidationRule::NotEqualTo(_)
+            | ValidationRule::ExistsIn(_)
+            | ValidationRule::SubsetOf(_) => {
                 // Cross-field — handled in generate_cross_field_validations
             }
             _ => scalar_rules.push(v),
@@ -3088,6 +3092,21 @@ fn generate_struct_validations(struct_attrs: &StructAttrs, struct_name: &str) ->
     }
 }
 
+fn generate_post_decode_hook(struct_attrs: &StructAttrs, struct_name: &str) -> TokenStream {
+    let Some(path_str) = struct_attrs.post_decode.as_ref() else {
+        return quote! {};
+    };
+
+    let func_path: syn::Path =
+        syn::parse_str(path_str).expect("invalid function path in post_decode hook");
+
+    quote! {
+        if let Err(msg) = #func_path(&mut __kdl_value) {
+            return Err(::kdl_config::KdlConfigError::custom(#struct_name, msg));
+        }
+    }
+}
+
 /// Generate cross-field validation code that runs after all fields are decoded.
 fn generate_cross_field_validations(fields: &[FieldInfo], struct_name: &str) -> TokenStream {
     let mut blocks = Vec::new();
@@ -3105,16 +3124,16 @@ fn generate_cross_field_validations(fields: &[FieldInfo], struct_name: &str) -> 
                 | ValidationRule::GreaterThan(f)
                 | ValidationRule::GreaterThanOrEqual(f)
                 | ValidationRule::EqualTo(f)
-                | ValidationRule::NotEqualTo(f) => f,
+                | ValidationRule::NotEqualTo(f)
+                | ValidationRule::ExistsIn(f)
+                | ValidationRule::SubsetOf(f) => f,
                 _ => continue,
             };
 
             // Find the other field by matching kdl_key or field ident name
-            let other_ident_field = fields
-                .iter()
-                .find(|f| {
-                    f.kdl_key == *other_field_name || f.ident.to_string() == *other_field_name
-                });
+            let other_ident_field = fields.iter().find(|f| {
+                f.kdl_key == *other_field_name || f.ident.to_string() == *other_field_name
+            });
 
             let validation_expr: TokenStream = quote! { #v };
 
@@ -3123,37 +3142,65 @@ fn generate_cross_field_validations(fields: &[FieldInfo], struct_name: &str) -> 
                 let this_optional = field.is_optional;
                 let other_optional = other_field.is_optional;
 
-                let call = quote! {
-                    ::kdl_config::run_cross_field_validation(
-                        ::kdl_config::AsF64::as_f64(&__kdl_cross_this),
-                        ::kdl_config::AsF64::as_f64(&__kdl_cross_other),
-                        &#validation_expr,
-                        #struct_name,
-                        #field_name,
-                        #kdl_key,
-                    )?;
+                let call = match v {
+                    ValidationRule::ExistsIn(_) => {
+                        quote! {
+                            ::kdl_config::run_exists_in_validation(
+                                __kdl_cross_this,
+                                __kdl_cross_other,
+                                #other_field_name,
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                            )?;
+                        }
+                    }
+                    ValidationRule::SubsetOf(_) => {
+                        quote! {
+                            ::kdl_config::run_subset_of_validation(
+                                __kdl_cross_this,
+                                __kdl_cross_other,
+                                #other_field_name,
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                            )?;
+                        }
+                    }
+                    _ => {
+                        quote! {
+                            ::kdl_config::run_cross_field_validation(
+                                ::kdl_config::AsF64::as_f64(__kdl_cross_this),
+                                ::kdl_config::AsF64::as_f64(__kdl_cross_other),
+                                &#validation_expr,
+                                #struct_name,
+                                #field_name,
+                                #kdl_key,
+                            )?;
+                        }
+                    }
                 };
 
                 let block = match (this_optional, other_optional) {
                     (false, false) => quote! {
-                        let __kdl_cross_this = #field_ident;
-                        let __kdl_cross_other = #other_ident;
+                        let __kdl_cross_this = &#field_ident;
+                        let __kdl_cross_other = &#other_ident;
                         #call
                     },
                     (true, false) => quote! {
-                        if let Some(__kdl_cross_this) = #field_ident {
-                            let __kdl_cross_other = #other_ident;
+                        if let Some(__kdl_cross_this) = &#field_ident {
+                            let __kdl_cross_other = &#other_ident;
                             #call
                         }
                     },
                     (false, true) => quote! {
-                        if let Some(__kdl_cross_other) = #other_ident {
-                            let __kdl_cross_this = #field_ident;
+                        if let Some(__kdl_cross_other) = &#other_ident {
+                            let __kdl_cross_this = &#field_ident;
                             #call
                         }
                     },
                     (true, true) => quote! {
-                        if let (Some(__kdl_cross_this), Some(__kdl_cross_other)) = (#field_ident, #other_ident) {
+                        if let (Some(__kdl_cross_this), Some(__kdl_cross_other)) = (&#field_ident, &#other_ident) {
                             #call
                         }
                     },

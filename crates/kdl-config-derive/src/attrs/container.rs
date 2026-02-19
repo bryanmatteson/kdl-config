@@ -67,6 +67,8 @@ pub struct StructAttrs {
     pub schema: StructSchemaOverride,
     /// Validation rules parsed from `#[kdl(validate(...))]` or `#[kdl(validate = "...")]`.
     pub validations: Vec<ValidationRule>,
+    /// Optional post-decode hook path, called as `fn(&mut Self) -> Result<(), String>`.
+    pub post_decode: Option<String>,
 }
 
 impl StructAttrs {

@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 use crate::error::{KdlConfigError, Placement};
 use crate::schema::Validation;
@@ -129,6 +130,109 @@ macro_rules! impl_as_f64 {
 
 impl_as_f64!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, isize, usize);
 
+// ---------------------------------------------------------------------------
+// Relational cross-field helpers (exists_in / subset_of)
+// ---------------------------------------------------------------------------
+
+pub trait KdlContains<T> {
+    fn kdl_contains(&self, value: &T) -> bool;
+}
+
+impl<T: PartialEq> KdlContains<T> for Vec<T> {
+    #[inline]
+    fn kdl_contains(&self, value: &T) -> bool {
+        self.iter().any(|candidate| candidate == value)
+    }
+}
+
+impl<T: Eq + Hash> KdlContains<T> for HashSet<T> {
+    #[inline]
+    fn kdl_contains(&self, value: &T) -> bool {
+        self.contains(value)
+    }
+}
+
+impl<K: Eq + Hash, V> KdlContains<K> for HashMap<K, V> {
+    #[inline]
+    fn kdl_contains(&self, value: &K) -> bool {
+        self.contains_key(value)
+    }
+}
+
+pub trait KdlSubsetOf<Rhs = Self> {
+    fn kdl_subset_of(&self, other: &Rhs) -> bool;
+}
+
+impl<T: PartialEq> KdlSubsetOf<Vec<T>> for Vec<T> {
+    #[inline]
+    fn kdl_subset_of(&self, other: &Vec<T>) -> bool {
+        self.iter()
+            .all(|item| other.iter().any(|candidate| candidate == item))
+    }
+}
+
+impl<T: Eq + Hash> KdlSubsetOf<HashSet<T>> for HashSet<T> {
+    #[inline]
+    fn kdl_subset_of(&self, other: &HashSet<T>) -> bool {
+        self.is_subset(other)
+    }
+}
+
+impl<K: Eq + Hash, V> KdlSubsetOf<HashMap<K, V>> for Vec<K> {
+    #[inline]
+    fn kdl_subset_of(&self, other: &HashMap<K, V>) -> bool {
+        self.iter().all(|item| other.contains_key(item))
+    }
+}
+
+impl<K: Eq + Hash, V1, V2> KdlSubsetOf<HashMap<K, V2>> for HashMap<K, V1> {
+    #[inline]
+    fn kdl_subset_of(&self, other: &HashMap<K, V2>) -> bool {
+        self.keys().all(|key| other.contains_key(key))
+    }
+}
+
+pub fn run_exists_in_validation<T, C: KdlContains<T>>(
+    value: &T,
+    collection: &C,
+    other_field: &str,
+    struct_name: &str,
+    field_name: &str,
+    kdl_key: &str,
+) -> Result<(), KdlConfigError> {
+    if !collection.kdl_contains(value) {
+        return Err(KdlConfigError::invalid_value(
+            struct_name,
+            field_name,
+            kdl_key,
+            Placement::Unknown,
+            "(value)",
+            format!("value must exist in '{}'", other_field),
+        ));
+    }
+    Ok(())
+}
+
+pub fn run_subset_of_validation<T, U: KdlSubsetOf<T>>(
+    value: &U,
+    other: &T,
+    other_field: &str,
+    struct_name: &str,
+    field_name: &str,
+    kdl_key: &str,
+) -> Result<(), KdlConfigError> {
+    if !value.kdl_subset_of(other) {
+        return Err(KdlConfigError::invalid_value(
+            struct_name,
+            field_name,
+            kdl_key,
+            Placement::Unknown,
+            "(collection)",
+            format!("value must be a subset of '{}'", other_field),
+        ));
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Helper: run per-field (non-cross-field, non-Func) validations

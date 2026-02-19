@@ -26,13 +26,14 @@ pub mod validation;
 
 pub use newtypes::{Duration, PositiveCount, Scalar, Weight};
 pub use validation::{
-    AsF64, KdlValidate, KdlValidateCount, run_count_validations, run_cross_field_validation,
-    run_field_validations, run_func_validation,
+    AsF64, KdlContains, KdlSubsetOf, KdlValidate, KdlValidateCount, run_count_validations,
+    run_cross_field_validation, run_exists_in_validation, run_field_validations,
+    run_func_validation, run_subset_of_validation,
 };
 
 pub use config::{
     BoolMode, ConflictPolicy, DefaultPlacement, EffectiveConfig, FieldOverrides, FlagStyle,
-    ParseConfig, StructOverrides, resolve_field, resolve_struct,
+    ParseConfig, RootMode, StructOverrides, resolve_field, resolve_struct,
 };
 pub use context::{DecodeContext, Source, UpdateContext};
 pub use convert::{
@@ -117,7 +118,7 @@ pub fn parse_str_with_config<T: KdlDecode>(
     crate::fragments::expand_fragments(&mut doc, Some(&source))?;
     let ctx = DecodeContext::new(config, Some(&source));
     let nodes = doc.nodes();
-    match nodes.len() {
+    let decoded = match nodes.len() {
         0 => Err(KdlConfigError::custom(
             "KDL Document",
             "expected a single top-level node, found none",
@@ -127,8 +128,28 @@ pub fn parse_str_with_config<T: KdlDecode>(
             "KDL Document",
             format!("expected a single top-level node, found {count}"),
         )),
+    };
+
+    match decoded {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            let should_wrap = matches!(
+                &err.kind,
+                ErrorKind::Custom(message)
+                    if message.starts_with("expected a single top-level node")
+            ) || matches!(&err.kind, ErrorKind::NodeNameMismatch { .. });
+
+            if should_wrap && let RootMode::WrapExpectedNode { name } = &config.root_mode {
+                let wrapped = format!("{name} {{\n{contents}\n}}\n");
+                let mut strict = config.clone();
+                strict.root_mode = RootMode::Strict;
+                parse_str_with_config(&wrapped, &strict)
+            } else {
+                Err(err)
+            }
+        }
     }
 }
 
 // Re-export derive macros so users only need to depend on `kdl-config`
-pub use kdl_config_derive::{Kdl, KdlChoice, KdlNode, KdlSchema, KdlValue};
+pub use kdl_config_derive::{Kdl, KdlChoice, KdlMerge, KdlNode, KdlPartial, KdlSchema, KdlValue};

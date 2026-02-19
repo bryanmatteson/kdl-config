@@ -116,7 +116,7 @@ pub fn parse_str_roundtrip_with_config<T: KdlDecode + KdlUpdate>(
         root_index,
         original: contents.to_string(),
         dirty: false,
-        config: *config,
+        config: config.clone(),
     })
 }
 

@@ -267,3 +267,59 @@ fn struct_level_validation_localhost_privileged_passes() {
     let cfg: ValidatedServer = parse_str("server host=\"localhost\" port=80").unwrap();
     assert_eq!(cfg.port, 80);
 }
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "membership")]
+struct MembershipConfig {
+    #[kdl(attr, validate(exists_in = "allowed"))]
+    item: String,
+    #[kdl(attr, value, conflict = "append")]
+    allowed: Vec<String>,
+}
+
+#[test]
+fn exists_in_validation_passes_when_value_is_present() {
+    let cfg: MembershipConfig =
+        parse_str(r#"membership item="beta" allowed="alpha" allowed="beta""#).unwrap();
+    assert_eq!(cfg.item, "beta");
+}
+
+#[test]
+fn exists_in_validation_fails_when_value_is_missing() {
+    let err =
+        parse_str::<MembershipConfig>(r#"membership item="gamma" allowed="alpha" allowed="beta""#)
+            .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("must exist in"), "got: {msg}");
+}
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "subset")]
+struct SubsetValidationConfig {
+    #[kdl(attr, value, conflict = "append", validate(subset_of = "allowed"))]
+    selected: Vec<String>,
+    #[kdl(attr, value, conflict = "append")]
+    allowed: Vec<String>,
+}
+
+#[test]
+fn subset_of_validation_passes_when_subset_matches() {
+    let input = r#"subset selected="alpha" allowed="alpha" {
+        selected "beta"
+        allowed "beta"
+        allowed "gamma"
+    }"#;
+    let cfg: SubsetValidationConfig = parse_str(input).unwrap();
+    assert_eq!(cfg.selected, vec!["alpha".to_string(), "beta".to_string()]);
+}
+
+#[test]
+fn subset_of_validation_fails_when_values_escape_allowed_set() {
+    let input = r#"subset selected="alpha" allowed="alpha" {
+        selected "delta"
+        allowed "beta"
+    }"#;
+    let err = parse_str::<SubsetValidationConfig>(input).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("subset"), "got: {msg}");
+}

@@ -742,6 +742,10 @@ pub enum Validation {
     EqualTo(String),
     /// This field's value must not equal the named field's value.
     NotEqualTo(String),
+    /// This field's scalar value must exist in the named collection field.
+    ExistsIn(String),
+    /// This field's collection value must be a subset of the named collection field.
+    SubsetOf(String),
 }
 
 impl Validation {
@@ -773,6 +777,8 @@ impl Validation {
             Self::GreaterThanOrEqual(f) => write!(w, "greater_than_or_equal({:?})", f),
             Self::EqualTo(f) => write!(w, "equal_to({:?})", f),
             Self::NotEqualTo(f) => write!(w, "not_equal_to({:?})", f),
+            Self::ExistsIn(f) => write!(w, "exists_in({:?})", f),
+            Self::SubsetOf(f) => write!(w, "subset_of({:?})", f),
         }
     }
 
@@ -960,7 +966,9 @@ impl Validation {
             | Self::GreaterThan(f)
             | Self::GreaterThanOrEqual(f)
             | Self::EqualTo(f)
-            | Self::NotEqualTo(f) => Some(f.as_str()),
+            | Self::NotEqualTo(f)
+            | Self::ExistsIn(f)
+            | Self::SubsetOf(f) => Some(f.as_str()),
             _ => None,
         }
     }
@@ -980,7 +988,7 @@ fn format_f64(v: f64) -> String {
 /// - Numeric: `min(N)`, `max(N)`, `range(MIN, MAX)`, `multiple_of(N)`, `positive`, `negative`, `non_negative`, `non_positive`
 /// - String: `min_len(N)`, `max_len(N)`, `len(MIN, MAX)`, `pattern("REGEX")`, `non_empty`, `ascii`, `alphanumeric`
 /// - Collection: `min_items(N)`, `max_items(N)`
-/// - Cross-field: `less_than("field")`, `lte("field")`, `greater_than("field")`, `gte("field")`, `equal_to("field")`, `not_equal_to("field")`
+/// - Cross-field: `less_than("field")`, `lte("field")`, `greater_than("field")`, `gte("field")`, `equal_to("field")`, `not_equal_to("field")`, `exists_in("field")`, `subset_of("field")`
 /// - Custom: `func("path::to::fn")`
 pub fn parse_validation_dsl(input: &str) -> Result<Vec<Validation>, String> {
     let input = input.trim();
@@ -1111,6 +1119,8 @@ fn parse_dsl_rule_with_args(name: &str, args: &str) -> Result<Validation, String
         }
         "equal_to" | "eq" => Ok(Validation::EqualTo(parse_dsl_string_arg(args))),
         "not_equal_to" | "neq" => Ok(Validation::NotEqualTo(parse_dsl_string_arg(args))),
+        "exists_in" => Ok(Validation::ExistsIn(parse_dsl_string_arg(args))),
+        "subset_of" => Ok(Validation::SubsetOf(parse_dsl_string_arg(args))),
         _ => Err(format!("unknown validation rule: {}", name)),
     }
 }
