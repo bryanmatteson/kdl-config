@@ -81,6 +81,7 @@ pub struct FieldAttrs {
     pub select: Option<SelectSpec>,
     pub default: Option<DefaultSpec>,
     pub skip: bool,
+    pub no_skip_serialize: bool,
     pub skip_serializing_if: Option<String>,
     pub bool_mode: Option<BoolMode>,
     pub flag_style: Option<FlagStyle>,
@@ -167,6 +168,7 @@ pub struct RawFieldAttrs {
 
     // === Skip ===
     pub skip: bool,
+    pub no_skip_serialize: bool,
     pub skip_serializing_if: Option<String>,
 
     // === Mode overrides ===
@@ -416,6 +418,7 @@ impl RawFieldAttrs {
             select,
             default,
             skip: self.skip,
+            no_skip_serialize: self.no_skip_serialize,
             skip_serializing_if: self.skip_serializing_if,
             bool_mode: self.bool_mode,
             flag_style: self.flag_style,

@@ -408,9 +408,28 @@ fn render_condition(field: &FieldInfo, accessor: &FieldAccessor) -> TokenStream 
             quote! { #ident }
         });
         let reference = &accessor.reference;
-        quote! { !(#path(#reference)) }
-    } else {
+        return quote! { !(#path(#reference)) };
+    }
+
+    let reference = &accessor.reference;
+    let mut checks = Vec::<TokenStream>::new();
+
+    if field.skip_serialize_none {
+        checks.push(quote! { (#reference).is_some() });
+    }
+
+    if field.skip_serialize_empty_collections {
+        if field.is_option_vec {
+            checks.push(quote! { (#reference).as_ref().map_or(true, |values| !values.is_empty()) });
+        } else if field.is_vec || field.is_hashmap {
+            checks.push(quote! { !(#reference).is_empty() });
+        }
+    }
+
+    if checks.is_empty() {
         quote! { true }
+    } else {
+        quote! { #(#checks)&&* }
     }
 }
 

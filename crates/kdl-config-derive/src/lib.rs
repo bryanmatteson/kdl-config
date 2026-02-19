@@ -61,6 +61,10 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                         }
                     }
 
+                    for info in &mut field_infos {
+                        info.apply_struct_skip_policies(&struct_attrs);
+                    }
+
                     if field_infos.iter().filter(|info| info.is_modifier).count() > 1 {
                         return Err(syn::Error::new_spanned(
                             struct_name,
@@ -111,6 +115,10 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                             }
                             None => {}
                         }
+                    }
+
+                    for info in &mut field_infos {
+                        info.apply_struct_skip_policies(&struct_attrs);
                     }
 
                     let struct_name_str = struct_name.to_string();

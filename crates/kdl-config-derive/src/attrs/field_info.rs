@@ -3,6 +3,7 @@
 use proc_macro2::Span;
 use syn::{Field, Ident, Type, spanned::Spanned};
 
+use super::container::StructAttrs;
 use super::field::{FieldAttrs, FieldPlacement, FieldSchemaOverride};
 use super::parse::parse_field_attrs;
 use super::type_utils::*;
@@ -33,6 +34,9 @@ pub struct FieldInfo {
     pub children_map_kind: Option<ChildrenMapKind>,
     pub collection: Option<CollectionSpec>,
     pub default: Option<DefaultSpec>,
+    pub no_skip_serialize: bool,
+    pub skip_serialize_none: bool,
+    pub skip_serialize_empty_collections: bool,
     pub skip_serializing_if: Option<String>,
     pub bool_mode: Option<BoolMode>,
     pub flag_style: Option<FlagStyle>,
@@ -208,6 +212,9 @@ impl FieldInfo {
             children_map_kind: None,
             collection: None,
             default: attrs.default,
+            no_skip_serialize: attrs.no_skip_serialize,
+            skip_serialize_none: false,
+            skip_serialize_empty_collections: false,
             skip_serializing_if: attrs.skip_serializing_if,
             bool_mode: attrs.bool_mode,
             flag_style: attrs.flag_style,
@@ -308,6 +315,9 @@ impl FieldInfo {
             children_map_kind: extract_children_map_types(&ty).map(|(kind, _, _)| kind),
             collection,
             default: attrs.default,
+            no_skip_serialize: attrs.no_skip_serialize,
+            skip_serialize_none: false,
+            skip_serialize_empty_collections: false,
             skip_serializing_if: attrs.skip_serializing_if,
             bool_mode: attrs.bool_mode,
             flag_style: attrs.flag_style,
@@ -544,6 +554,23 @@ impl FieldInfo {
         }
 
         Ok(())
+    }
+
+    pub fn apply_struct_skip_policies(&mut self, struct_attrs: &StructAttrs) {
+        if self.no_skip_serialize || self.skip_serializing_if.is_some() {
+            self.skip_serialize_none = false;
+            self.skip_serialize_empty_collections = false;
+            return;
+        }
+
+        self.skip_serialize_none =
+            struct_attrs.skip_serialize_none.unwrap_or(false) && self.is_optional;
+
+        let supports_empty_check = self.is_vec || self.is_option_vec || self.is_hashmap;
+        self.skip_serialize_empty_collections = struct_attrs
+            .skip_serialize_empty_collections
+            .unwrap_or(false)
+            && supports_empty_check;
     }
 }
 

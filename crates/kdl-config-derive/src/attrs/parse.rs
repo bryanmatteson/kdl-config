@@ -160,6 +160,22 @@ fn parse_struct_meta(
                 };
             }
         }
+        Some("skip_serialize_none") => {
+            result.skip_serialize_none = Some(if meta.input.peek(syn::Token![=]) {
+                let lit: syn::LitBool = meta.value()?.parse()?;
+                lit.value()
+            } else {
+                true
+            });
+        }
+        Some("skip_serialize_empty_collections") => {
+            result.skip_serialize_empty_collections = Some(if meta.input.peek(syn::Token![=]) {
+                let lit: syn::LitBool = meta.value()?.parse()?;
+                lit.value()
+            } else {
+                true
+            });
+        }
         Some("selector") => {
             let value: syn::Meta = meta.value()?.parse()?;
             let selector = parse_selector_meta(&value)?;
@@ -627,6 +643,14 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
 
         // Skip
         Some("skip") => raw.skip = true,
+        Some("no_skip_serialize") => {
+            raw.no_skip_serialize = if meta.input.peek(syn::Token![=]) {
+                let lit: syn::LitBool = meta.value()?.parse()?;
+                lit.value()
+            } else {
+                true
+            };
+        }
         Some("skip_serializing_if") => {
             if meta.input.peek(syn::Token![=]) {
                 let value: Expr = meta.value()?.parse()?;

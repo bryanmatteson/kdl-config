@@ -26,6 +26,8 @@ In child form, `attr1` and `attr2` are child node names. A child â€œvalue nodeâ€
 - `#[kdl(default_bool = "presence+value" | "value-only" | "presence-only")]`: default boolean behavior.
 - `#[kdl(default_flag_style = "both" | "value|no" | "with|without")]`: default flag aliases.
 - `#[kdl(default_conflict = "error" | "first" | "last" | "append")]`: conflict policy for multiple candidates.
+- `#[kdl(skip_serialize_none)]` (or `= true/false`): default rendering/update skip policy for `Option<T>` fields.
+- `#[kdl(skip_serialize_empty_collections)]` (or `= true/false`): default rendering/update skip policy for empty collection fields (`Vec`, `Option<Vec<_>>`, and `HashMap`-backed collection fields).
 - `#[kdl(deny_unknown)]`: error on unknown attributes or children.
 - `#[kdl(post_decode = "path")]` or `#[kdl(post_decode(func = "path"))]`: struct post-processing hook. Called with `fn(&mut Self) -> Result<(), String>` after decode and cross-field checks, before struct-level `validate(func = ...)`.
 - `#[kdl(validate(func = "path"))]`: struct-level validation. Called with `fn(&Self) -> Result<(), String>` after all fields are decoded and field-level validations pass. See [Validation](#validation).
@@ -64,6 +66,7 @@ If `keyed` is explicitly set, flags are not considered unless `flag` is also set
 - `#[kdl(conflict = "error" | "first" | "last" | "append")]`: override conflict policy for this field.
 - `#[kdl(render = "attr" | "value" | "child" | "children" | "registry")]`: canonical render target.
 - `#[kdl(skip)]`: skip both parsing and rendering; the field is set to `Default::default()` when parsing.
+- `#[kdl(no_skip_serialize)]`: opt out of struct-level `skip_serialize_none` / `skip_serialize_empty_collections` defaults for this field.
 - `#[kdl(skip_serializing_if = "path")]`: rendering-only skip predicate.
 - `#[kdl(scalar)]` (aliases: `#[kdl(value_type)]`, `#[kdl(value_like)]`, `#[kdl(kdl_value)]`): treat custom type as scalar for attr/positional/value placements (requires `FromKdlValue` implementation).
 - `#[kdl(modifier)]`: capture the node's signal modifier (`+`, `-`, `!`) into a `Modifier` or `Option<Modifier>` field.

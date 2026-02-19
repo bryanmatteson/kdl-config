@@ -1,6 +1,6 @@
 use crate::error::{KdlConfigError, Placement};
 use kdl::KdlValue;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub trait FromKdlValue: Sized {
     const TYPE_NAME: &'static str;

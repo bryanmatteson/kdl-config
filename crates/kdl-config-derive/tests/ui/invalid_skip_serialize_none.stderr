@@ -1,0 +1,5 @@
+error: expected boolean literal
+ --> tests/ui/invalid_skip_serialize_none.rs:4:29
+  |
+4 | #[kdl(skip_serialize_none = "yes")]
+  |                             ^^^^^

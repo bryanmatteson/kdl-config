@@ -55,6 +55,10 @@ pub struct StructAttrs {
     pub default_flag_style: Option<FlagStyle>,
     /// Default conflict resolution policy.
     pub default_conflict: Option<ConflictPolicy>,
+    /// Skip serializing `Option<T>` fields when `None` by default.
+    pub skip_serialize_none: Option<bool>,
+    /// Skip serializing collection fields when empty by default.
+    pub skip_serialize_empty_collections: Option<bool>,
     /// Selector for enum discriminators (tagged enums).
     pub selector: Option<SelectorAst>,
     /// Selector options for enum discriminators (tagged enums).
