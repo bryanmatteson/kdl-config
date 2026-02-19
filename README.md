@@ -274,40 +274,29 @@ enum Choice {
 
 ## Fragments
 
-Fragments provide reusable, optionally typed configuration templates that are expanded before parsing. They support two kinds of entries:
-
-- **Insert nodes** — normal KDL nodes copied as children into the target.
-- **Merge patches** (`~`) — nodes that flatten into the target using deep-merge semantics.
+Fragments provide reusable, type-scoped templates that are expanded before parsing.
 
 ```kdl
-fragment "local-defaults" {
-    ~source local {
-        chunking { max-size 1500; overlap 200 }
-        enrichment { symbols; hover; definitions }
-        embed "code-model"
-    }
-    language "rust" { server "rust-analyzer" }
-}
-
-source "app" local "." {
-    with "local-defaults"
-    include "src/**"
-}
-```
-
-After expansion:
-
-```kdl
-source "app" local "." {
-    language "rust" { server "rust-analyzer" }
+fragment "code" source local {
     chunking { max-size 1500; overlap 200 }
-    enrichment { symbols; hover; definitions }
-    embed "code-model"
     include "src/**"
 }
+
+source "app" {
+    with "code"
+    include "app/**"
+}
+
+from "code" source "docs"
 ```
 
-Fragments are fully expanded before `#[derive(Kdl)]` parsing runs – the application never sees `fragment` or `with` nodes.
+Rules:
+- `fragment "<key>" <type> ...` registers template defaults for `(type, key)`.
+- `with "<key>"` applies a template inside an existing parent node.
+- `from "<key>" <type> ...` materializes a new node from a template (top-level or sibling context).
+- Names are scoped by type, so the same key can be reused for different node types.
+
+Fragments are fully expanded before `#[derive(Kdl)]` parsing runs – the application never sees `fragment`, `with`, or `from` nodes.
 
 ## Schema Generation
 

@@ -368,289 +368,100 @@ Rules:
 
 ## Fragment Mechanics (kdl_config layer)
 
-Fragments are a kdl_config–level primitive resolved before application parsing. They provide reusable, optionally typed configuration templates that may either:
-- insert nodes into a target block, or
-- merge/flatten into the target node itself.
+Fragments are a kdl_config-level primitive resolved before application parsing. They provide reusable, type-scoped configuration templates.
 
 Fragments are expanded away entirely before `#[derive(Kdl)]` parsing.
-The application never sees `fragment`, `with`, or patch nodes.
+The application never sees `fragment`, `with`, or `from` nodes.
 
-**Overview**
+**Preferred syntax**
 
 ```
-fragment "name" {
-  <insert-node>*
-  <merge-patch>*
+fragment "<name>" <type> [<default-args...>] [<default-attrs...>] {
+  <default-children...>
 }
 
-<target-node> {
-  with "name"
+<type> ... {
+  with "<name>"
   ...
 }
+
+from "<name>" <type> [<callsite-args...>] [<callsite-attrs...>] {
+  <callsite-children...>
+}
 ```
 
-- Insert nodes are normal KDL nodes and are inserted as children.
-- Merge patches are nodes whose names begin with `~` and are flattened into the target node using deep-merge semantics.
-- Insert and merge may coexist in the same fragment.
-- Overrides at the with site always win.
+- Names are scoped by type (`(<type>, <name>)`), so the same fragment name can be reused for different node types.
+- `with` applies a fragment into an existing parent node.
+- `from` materializes a new node from a fragment in sibling/top-level context.
+- Callsite values override fragment defaults.
 
 **Fragment Definition**
 
 ```
-fragment "<fragment-name>" {
-  <fragment-entry>*
+fragment "<fragment-name>" <type> [<default-args...>] [<default-attrs...>] {
+  <default-children...>
 }
 ```
 
 - `<fragment-name>` must be a string.
-- Type annotations on fragment nodes are optional:
-  - `(source)fragment "code"` explicitly types the fragment and validates `with` invocations against that type.
-  - `fragment "code"` is implicitly typed on first `with` invocation and must match subsequent invocations.
-- Fragments may appear at top-level or inside other nodes (lexical scoping optional).
+- `<type>` must be a string and is required.
+- Type annotations on `fragment` nodes are not supported.
+- Fragment body children must be unmodified nodes (no `+`, `-`, `!`, `~`).
+- Fragments may appear at top-level or inside other nodes (lexical scope).
 - Fragments are removed from the document after expansion.
 
-**Fragment Entries**
+**Name Scoping**
 
-A fragment may contain two kinds of entries:
-- Insert nodes — normal nodes (no modifier)
-- Merge patches — nodes whose name begins with `~`
+- Fragment lookup key is `(type, fragment-name)`.
+- The same fragment name can exist for different types.
 
-**Insert Nodes (no flatten)**
-
-Insert nodes are copied verbatim into the target node’s body.
+**Applying with `with`**
 
 ```
-fragment "qdrant-hnsw" {
-  hnsw {
-    ef 128
-    m 16
-    ef-search 128
-  }
-}
-
-vectors "production" qdrant {
-  with "qdrant-hnsw"
-}
-```
-
-Expansion result:
-```
-vectors "production" qdrant {
-  hnsw {
-    ef 128
-    m 16
-    ef-search 128
+<type> ... {
+  with "<fragment-name>" [<override-tokens...>] [<override-attrs...>] {
+    <override-children...>
   }
 }
 ```
 
-Rules:
-- Insert nodes are appended as children in the order they appear.
-- Insert nodes must be valid children under the target node’s schema.
-- Invalid insertions are a schema error.
-- Insert nodes do not merge with existing children unless the application’s schema allows it later.
+- `with` is valid only inside a parent node.
+- Parent node type selects the fragment scope.
+- Fragment defaults are deep-merged into the parent.
+- Parent-provided values win over fragment defaults unless explicit overrides are provided at `with`.
 
-Insert nodes are ideal for:
-- `hnsw { ... }`
-- `language "rust" { ... }`
-- `crawler { ... }`
-- any block that naturally belongs inside the target.
-
-**Merge Patches (`~` — flatten semantics)**
-
-Merge patches are nodes whose name begins with `~`. They do not insert a child node. Instead, they merge into the target node itself.
+**Applying with `from`**
 
 ```
-fragment "local-defaults" {
-  ~source local {
-    chunking { max-size 1500; overlap 200 }
-    enrichment { symbols; hover; definitions }
-    embed "code-model"
-  }
+from "<fragment-name>" <type> [<callsite-args...>] [<callsite-attrs...>] {
+  <callsite-children...>
 }
 ```
 
-Applied to:
-```
-source "app" local "." {
-  with "local-defaults"
-}
-```
+- `from` materializes a new `<type>` node and then applies the fragment as if via `with`.
+- `from` is valid where a normal node is valid (top-level or sibling contexts).
+- Callsite values are treated as explicit overrides.
 
-Expansion result:
-```
-source "app" local "." {
-  chunking { max-size 1500; overlap 200 }
-  enrichment { symbols; hover; definitions }
-  embed "code-model"
-}
-```
+**Overrides**
 
-**Patch Syntax**
+`with` (and materialized `from`) supports:
+- string override tokens (`with "name" no-feature`),
+- attribute overrides (`chunking.max-size=500`),
+- child overrides (`with "name" { exclude \"**/tests/**\" }`).
 
-```
-~<target-node> [<discriminator>] [<attrs...>] { <children...> }
-```
+Attribute path overrides use dotted keys and are expanded to nested child nodes.
+Overrides win over fragment defaults.
 
-- `<target-node>`: base node name (e.g. `source`, `embed`, `vectors`)
-- `<discriminator>` (optional): matched against the target’s discriminator
-- Patch attrs and children describe what to merge
+**Errors**
 
-Examples:
-```
-~source local { ... }
-~source git { ... }
-~vectors qdrant { ... }
-~embed onnx { ... }
-~search { limit 20 }
-```
-
-**Patch Matching Rules**
-
-When expanding `with "<fragment>"` inside a target node `N`:
-1. Collect merge patches where:
-   - `patch.target_node == N.name`
-2. Among those:
-   - Prefer an exact discriminator match
-
-```
-~source local  // matches source ... local ...
-```
-
-   - Otherwise allow a fallback patch with no discriminator:
-
-```
-~source { ... }
-```
-
-3. Errors:
-   - More than one equally-specific match → error
-   - No matching patch → no merge occurs (insert nodes may still apply)
-
-This allows fragments like:
-```
-fragment "code" {
-  ~source local { ... }
-  ~source git { ... }
-  language "rust" { server "rust-analyzer" }
-}
-```
-
-**Merge Semantics (`~`)**
-
-Merge patches flatten into the target node using deep merge rules equivalent to Layer:
-
-Header:
-- Patch attributes merge into target attributes (last-wins).
-- Patch positional args:
-  - Not allowed by default (too ambiguous).
-  - If enabled later, must use explicit selector rules.
-
-Children are merged recursively:
-
-| Type | Behavior |
-| --- | --- |
-| Scalar | Last wins |
-| Vec&lt;T&gt; | Append if conflict = append, else last |
-| Struct | Recursive merge |
-| Registry | Merge by key, last wins |
-
-Order of application within a target node:
-1. Apply merge patch (`~`)
-2. Insert insert-nodes
-3. Apply with-site overrides (attrs + children)
-4. Existing node content remains; later content wins
-
-This preserves read-as-written semantics.
-
-**Overrides at the with Site**
-
-`with` may carry overrides in both attribute and child forms.
-
-```
-source "generated" local "./generated" {
-  with "local-defaults" no-enrichment chunking.max-size=500
-}
-```
-
-Attribute expansion:
-- `chunking.max-size=500` → `chunking { max-size 500 }`
-- `embed="prose-model"` → `embed "prose-model"`
-- `no-enrichment` → child flag node
-
-Overrides are expanded before merging and always win over fragment content.
-
-**Combined Example (Insert + Merge)**
-
-```
-fragment "code" {
-  // Insert
-  language "rust" { server "rust-analyzer" }
-
-  // Merge
-  ~source local {
-    chunking { max-size 1500; overlap 200 }
-    enrichment { symbols; hover; definitions }
-    embed "code-model"
-  }
-
-  ~source git {
-    chunking { max-size 1500; overlap 200 }
-    enrichment { symbols; hover; definitions }
-    embed "code-model"
-  }
-}
-
-source "app" local "." {
-  with "code"
-  include "src/**"
-}
-```
-
-Result:
-```
-source "app" local "." {
-  language "rust" { server "rust-analyzer" }
-  chunking { max-size 1500; overlap 200 }
-  enrichment { symbols; hover; definitions }
-  embed "code-model"
-  include "src/**"
-}
-```
-
-**IDE & Schema Integration**
-
-Because merge patches are typed nodes (`~source local { ... }`), IDEs can:
-- Validate children against the correct schema
-- Offer autocomplete inside fragment bodies
-- Reject invalid insertions early
-
-Suggested schema model:
-- fragment children:
-  - normal nodes allowed under any target
-  - patch nodes `~<node>` validated as `<node>` schema
-- `with "<name>"`:
-  - context-aware suggestions based on available fragments
-  - error if no matching patch or valid insert applies
-
-**Error Cases**
-
-Errors must include both definition and with locations.
+Errors include definition and use locations when available.
 
 | Error | Description |
 | --- | --- |
-| Unknown fragment | `with "missing"` |
-| Duplicate patch | Two `~source local` patches |
-| Invalid insert | Insert node not allowed under target schema |
+| Missing fragment type | `fragment "name"` |
+| Annotation style fragment | `(type)fragment "name"` |
+| Unknown fragment for type | `with "name"` under a different type |
 | Circular fragment | Fragments reference each other |
-
-**Summary**
-- Insert nodes = structural reuse
-- `~` merge patches = flatten + override
-- Typed, schema-aware, IDE-friendly
-- No new KDL syntax
-- No runtime indirection
-- Aligns with Layer semantics
 
 ## Signals / Modifiers
 

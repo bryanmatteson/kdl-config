@@ -5,8 +5,7 @@ use kdl::{KdlDocument, KdlEntry, KdlNode, KdlValue};
 use crate::context::{LineIndex, Source};
 use crate::error::{KdlConfigError, suggest_similar};
 use crate::node_ext::{
-    KdlNodeExt, remove_attr_entries, remove_positional_entry, update_or_insert_attr,
-    update_or_insert_positional,
+    KdlNodeExt, remove_attr_entries, update_or_insert_attr, update_or_insert_positional,
 };
 use crate::types::{Modifier, NodeLocation};
 
@@ -42,6 +41,70 @@ struct InferredFragmentType {
 }
 
 type InferredTypeMap = HashMap<String, InferredFragmentType>;
+
+fn is_definition_node_name(name: &str) -> bool {
+    name == "fragment"
+}
+
+fn is_definition_node(node: &KdlNode) -> bool {
+    is_definition_node_name(node.base_name())
+}
+
+fn is_with_node(node: &KdlNode) -> bool {
+    node.base_name() == "with"
+}
+
+fn is_from_node(node: &KdlNode) -> bool {
+    node.base_name() == "from"
+}
+
+fn reference_label(node: &KdlNode) -> &'static str {
+    if node.base_name() == "from" {
+        "from"
+    } else {
+        "with"
+    }
+}
+
+fn typed_fragment_key(ty: &str, name: &str) -> String {
+    format!("{ty}::{name}")
+}
+
+fn fragment_storage_key(fragment: &FragmentDef) -> String {
+    let schema_type = fragment
+        .schema_type
+        .as_deref()
+        .expect("fragment definitions always carry a target type");
+    typed_fragment_key(schema_type, &fragment.name)
+}
+
+fn fragment_candidates<'a>(fragments: &'a HashMap<String, FragmentDef>, ty: &str) -> Vec<&'a str> {
+    let mut names: Vec<&str> = fragments
+        .values()
+        .filter_map(|fragment| {
+            let schema_type = fragment.schema_type.as_deref()?;
+            if schema_type == ty {
+                Some(fragment.name.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+fn find_fragment_by_type<'a>(
+    fragments: &'a HashMap<String, FragmentDef>,
+    ty: &str,
+    name: &str,
+) -> Option<(String, &'a FragmentDef)> {
+    let typed_key = typed_fragment_key(ty, name);
+    fragments
+        .get(&typed_key)
+        .map(|fragment| (typed_key, fragment))
+}
 
 #[derive(Debug, Clone)]
 struct ParentInfo {
@@ -215,7 +278,7 @@ fn collect_fragments_in_nodes(
 ) -> Result<(), KdlConfigError> {
     let mut kept = Vec::with_capacity(nodes.len());
     for mut node in nodes.drain(..) {
-        if node.base_name() == "fragment" {
+        if is_definition_node(&node) {
             if node.modifier() != Modifier::Inherit {
                 return Err(fragment_error(
                     "modifiers are not allowed on fragment nodes",
@@ -224,15 +287,16 @@ fn collect_fragments_in_nodes(
                 ));
             }
             *had_fragments = true;
-            let fragment = parse_fragment(&node, location)?;
-            if let Some(existing) = fragments.get(&fragment.name) {
+            let fragment = parse_definition(&node, location)?;
+            let fragment_key = fragment_storage_key(&fragment);
+            if let Some(existing) = fragments.get(&fragment_key) {
                 let mut message = format!("duplicate fragment name {:?}", fragment.name);
                 if let Some(loc) = format_location(existing.defined_at) {
                     message.push_str(&format!(" (first defined at {loc})"));
                 }
                 return Err(fragment_error(message, Some(&node), location));
             }
-            fragments.insert(fragment.name.clone(), fragment);
+            fragments.insert(fragment_key, fragment);
         } else {
             if let Some(children) = node.children_mut().as_mut() {
                 collect_fragments_in_nodes(
@@ -259,7 +323,7 @@ fn collect_fragments_in_nodes_with_map(
 ) -> Result<(), KdlConfigError> {
     let mut kept = Vec::with_capacity(nodes.len());
     for mut node in nodes.drain(..) {
-        if node.base_name() == "fragment" {
+        if is_definition_node(&node) {
             if node.modifier() != Modifier::Inherit {
                 return Err(fragment_error(
                     "modifiers are not allowed on fragment nodes",
@@ -268,16 +332,17 @@ fn collect_fragments_in_nodes_with_map(
                 ));
             }
             *had_fragments = true;
-            let fragment = parse_fragment(&node, location)?;
-            if let Some(existing) = fragments.get(&fragment.name) {
+            let fragment = parse_definition(&node, location)?;
+            let fragment_key = fragment_storage_key(&fragment);
+            if let Some(existing) = fragments.get(&fragment_key) {
                 let mut message = format!("duplicate fragment name {:?}", fragment.name);
                 if let Some(loc) = format_location(existing.defined_at) {
                     message.push_str(&format!(" (first defined at {loc})"));
                 }
                 return Err(fragment_error(message, Some(&node), location));
             }
-            let fragment_name = fragment.name.clone();
-            fragments.insert(fragment_name.clone(), fragment);
+            let fragment_name = fragment_storage_key(&fragment);
+            fragments.insert(fragment_key, fragment);
             map.fragments.push(FragmentPlacement {
                 fragment_name,
                 parent_path: parent_path.clone(),
@@ -306,11 +371,17 @@ fn collect_fragments_in_nodes_with_map(
     Ok(())
 }
 
-fn parse_fragment(
+fn parse_definition(
     node: &KdlNode,
     location: Option<&dyn LocationProvider>,
 ) -> Result<FragmentDef, KdlConfigError> {
-    let fragment_type = node.ty().map(|ident| ident.value().to_string());
+    if node.ty().is_some() {
+        return Err(fragment_error(
+            "fragment type annotations are not supported; use fragment \"name\" <type> ...",
+            Some(node),
+            location,
+        ));
+    }
 
     let name_value = node.arg(0).ok_or_else(|| {
         fragment_error(
@@ -334,52 +405,78 @@ fn parse_fragment(
         }
     };
 
-    if node.args().len() > 1 {
+    if node.args().len() < 2 {
         return Err(fragment_error(
-            "fragment nodes accept only a single name argument",
+            "fragment nodes must declare a target type as the second argument",
             Some(node),
             location,
         ));
     }
 
-    if !node.attrs().is_empty() {
-        return Err(fragment_error(
-            "fragment nodes do not accept attributes",
+    let ty_value = node.arg(1).ok_or_else(|| {
+        fragment_error(
+            "fragment nodes must declare a target type as the second argument",
             Some(node),
             location,
-        ));
+        )
+    })?;
+    let target_type = match ty_value {
+        KdlValue::String(value) => value.clone(),
+        other => {
+            return Err(fragment_error(
+                format!(
+                    "fragment target type must be a string, found {}",
+                    kdl_value_type(other)
+                ),
+                Some(node),
+                location,
+            ));
+        }
+    };
+
+    let mut patch_node = KdlNode::new(target_type.clone());
+    let mut positional_seen = 0usize;
+    for entry in node.entries() {
+        if entry.name().is_none() {
+            if positional_seen < 2 {
+                positional_seen += 1;
+                continue;
+            }
+        }
+        patch_node.entries_mut().push(entry.clone());
     }
 
-    let children = node
+    let body_children = node
         .children()
         .map(|doc| doc.nodes().to_vec())
         .unwrap_or_default();
-    let mut inserts = Vec::new();
-    let mut patches = Vec::new();
-    for child in children {
-        match child.modifier() {
-            Modifier::Inherit => {
-                inserts.push(child);
-            }
-            Modifier::Flatten => {
-                patches.push(parse_fragment_patch(&child, location)?);
-            }
-            _ => {
-                return Err(fragment_error(
-                    "fragment entries only support ~ merge patches or unmodified nodes",
-                    Some(&child),
-                    location,
-                ));
-            }
-        }
+    if body_children
+        .iter()
+        .any(|child| child.modifier() != Modifier::Inherit)
+    {
+        return Err(fragment_error(
+            "fragment typed bodies only support unmodified child nodes",
+            Some(node),
+            location,
+        ));
+    }
+    if !body_children.is_empty() {
+        let mut child_doc = KdlDocument::new();
+        child_doc.nodes_mut().extend(body_children);
+        patch_node.set_children(child_doc);
     }
 
     Ok(FragmentDef {
         name,
-        schema_type: fragment_type,
+        schema_type: Some(target_type.clone()),
         defined_at: node_location(node, location),
-        inserts,
-        patches,
+        inserts: Vec::new(),
+        patches: vec![FragmentPatch {
+            target: target_type,
+            discriminator: None,
+            defined_at: node_location(node, location),
+            node: patch_node,
+        }],
     })
 }
 
@@ -639,15 +736,17 @@ where
         None => return Ok(0),
     };
 
-    if !patch.node.args().is_empty() {
-        return Err(fragment_error(
-            "fragment patch nodes do not accept positional arguments",
-            Some(parent),
-            location,
-        ));
-    }
-
     merge_patch_attrs_if_missing(parent, &patch.node);
+    let positional_base = if parent.args().is_empty() { 0 } else { 1 };
+    let mut positional_index = positional_base;
+    for entry in patch.node.entries() {
+        if entry.name().is_none() {
+            if parent.arg(positional_index).is_none() {
+                update_or_insert_positional(parent, positional_index, entry.value().clone());
+            }
+            positional_index += 1;
+        }
+    }
 
     let patch_children = patch
         .node
@@ -714,6 +813,31 @@ fn apply_fragment_patch_with_map(
     })
 }
 
+fn materialize_from_node(
+    node: &KdlNode,
+    location: Option<&dyn LocationProvider>,
+) -> Result<KdlNode, KdlConfigError> {
+    let parsed = parse_from(node, location)?;
+    let mut materialized = KdlNode::new(parsed.ty);
+    materialized.entries_mut().extend(parsed.header_entries);
+
+    let mut with_node = KdlNode::new("with");
+    with_node
+        .entries_mut()
+        .push(KdlEntry::new(KdlValue::String(parsed.name)));
+
+    let mut children = Vec::new();
+    children.push(with_node);
+    children.extend(parsed.child_overrides);
+    if !children.is_empty() {
+        let mut child_doc = KdlDocument::new();
+        child_doc.nodes_mut().extend(children);
+        materialized.set_children(child_doc);
+    }
+
+    Ok(materialized)
+}
+
 fn expand_document_nodes(
     nodes: &mut Vec<KdlNode>,
     fragments: &HashMap<String, FragmentDef>,
@@ -722,15 +846,37 @@ fn expand_document_nodes(
     expansion: &mut FragmentExpansion,
     stack: &mut Vec<String>,
 ) -> Result<(), KdlConfigError> {
-    for node in nodes.iter_mut() {
-        if node.base_name() == "with" {
+    let mut idx = 0usize;
+    while idx < nodes.len() {
+        if is_with_node(&nodes[idx]) {
             return Err(fragment_error(
                 "with nodes must be inside a parent node",
-                Some(node),
+                Some(&nodes[idx]),
                 location,
             ));
         }
-        expand_node(node, fragments, inferred_types, location, expansion, stack)?;
+
+        if is_from_node(&nodes[idx]) {
+            if nodes[idx].modifier() != Modifier::Inherit {
+                return Err(fragment_error(
+                    "modifiers are not allowed on from nodes",
+                    Some(&nodes[idx]),
+                    location,
+                ));
+            }
+            let materialized = materialize_from_node(&nodes[idx], location)?;
+            nodes[idx] = materialized;
+        }
+
+        expand_node(
+            &mut nodes[idx],
+            fragments,
+            inferred_types,
+            location,
+            expansion,
+            stack,
+        )?;
+        idx += 1;
     }
     Ok(())
 }
@@ -818,7 +964,28 @@ fn expand_child_node_at_index(
         return Ok(idx);
     }
 
-    if nodes[idx].base_name() != "with" {
+    if is_from_node(&nodes[idx]) {
+        if nodes[idx].modifier() != Modifier::Inherit {
+            return Err(fragment_error(
+                "modifiers are not allowed on from nodes",
+                Some(&nodes[idx]),
+                location,
+            ));
+        }
+        let materialized = materialize_from_node(&nodes[idx], location)?;
+        nodes[idx] = materialized;
+        expand_node(
+            &mut nodes[idx],
+            fragments,
+            inferred_types,
+            location,
+            expansion,
+            stack,
+        )?;
+        return Ok(idx + 1);
+    }
+
+    if !is_with_node(&nodes[idx]) {
         expand_node(
             &mut nodes[idx],
             fragments,
@@ -840,16 +1007,20 @@ fn expand_child_node_at_index(
 
     let parsed_with = parse_with(&nodes[idx], location)?;
     let fragment_name = parsed_with.name.clone();
-    let fragment = fragments.get(&fragment_name).ok_or_else(|| {
-        let candidates: Vec<&str> = fragments.keys().map(|key| key.as_str()).collect();
-        let mut message = format!("unknown fragment {:?}", fragment_name);
-        if let Some(suggestion) = suggest_similar(&fragment_name, &candidates) {
-            message.push_str(&format!(" (did you mean {:?}?)", suggestion));
-        }
-        fragment_error(message, Some(&nodes[idx]), location)
-    })?;
-
     let expected_type = parent_info.expected_type();
+    let (fragment_key, fragment) = find_fragment_by_type(fragments, expected_type, &fragment_name)
+        .ok_or_else(|| {
+            let candidates = fragment_candidates(fragments, expected_type);
+            let mut message = format!(
+                "unknown fragment {:?} for type {:?}",
+                fragment_name, expected_type
+            );
+            if let Some(suggestion) = suggest_similar(&fragment_name, &candidates) {
+                message.push_str(&format!(" (did you mean {:?}?)", suggestion));
+            }
+            fragment_error(message, Some(&nodes[idx]), location)
+        })?;
+
     if let Some(schema_type) = fragment.schema_type.as_deref() {
         if schema_type != expected_type {
             let mut message = format!(
@@ -882,9 +1053,9 @@ fn expand_child_node_at_index(
         );
     }
 
-    if stack.contains(&fragment_name) {
+    if stack.contains(&fragment_key) {
         let mut chain = stack.clone();
-        chain.push(fragment_name.clone());
+        chain.push(fragment_key.clone());
         return Err(fragment_error(
             format!("fragment recursion detected: {}", chain.join(" -> ")),
             Some(&nodes[idx]),
@@ -896,7 +1067,7 @@ fn expand_child_node_at_index(
     nodes.remove(idx);
     let mut insert_at = idx.min(nodes.len());
 
-    stack.push(fragment_name);
+    stack.push(fragment_key.clone());
     let patch_len = apply_fragment_patch(
         parent,
         nodes,
@@ -959,7 +1130,7 @@ fn expand_child_nodes(
     let mut idx = 0usize;
     let mut had_direct_use = false;
     while idx < nodes.len() {
-        if nodes[idx].base_name() == "with" {
+        if is_with_node(&nodes[idx]) {
             had_direct_use = true;
         }
         idx = expand_child_node_at_index(
@@ -990,17 +1161,30 @@ fn expand_document_nodes_with_map(
     stack: &mut Vec<String>,
     map: &mut FragmentMap,
 ) -> Result<(), KdlConfigError> {
-    for (idx, node) in nodes.iter_mut().enumerate() {
-        if node.base_name() == "with" {
+    let mut idx = 0usize;
+    while idx < nodes.len() {
+        if is_with_node(&nodes[idx]) {
             return Err(fragment_error(
                 "with nodes must be inside a parent node",
-                Some(node),
+                Some(&nodes[idx]),
                 location,
             ));
         }
-        let path = NamePath::root(node.base_name(), idx);
+        if is_from_node(&nodes[idx]) {
+            if nodes[idx].modifier() != Modifier::Inherit {
+                return Err(fragment_error(
+                    "modifiers are not allowed on from nodes",
+                    Some(&nodes[idx]),
+                    location,
+                ));
+            }
+            let materialized = materialize_from_node(&nodes[idx], location)?;
+            nodes[idx] = materialized;
+        }
+
+        let path = NamePath::root(nodes[idx].base_name(), idx);
         expand_node_with_map(
-            node,
+            &mut nodes[idx],
             Some(&path),
             fragments,
             inferred_types,
@@ -1009,6 +1193,7 @@ fn expand_document_nodes_with_map(
             stack,
             map,
         )?;
+        idx += 1;
     }
     Ok(())
 }
@@ -1063,7 +1248,31 @@ fn expand_child_node_with_map_at_index(
         return Ok(idx);
     }
 
-    if nodes[idx].base_name() != "with" {
+    if is_from_node(&nodes[idx]) {
+        if nodes[idx].modifier() != Modifier::Inherit {
+            return Err(fragment_error(
+                "modifiers are not allowed on from nodes",
+                Some(&nodes[idx]),
+                location,
+            ));
+        }
+        let materialized = materialize_from_node(&nodes[idx], location)?;
+        nodes[idx] = materialized;
+        let child_path = child_path(parent_path, nodes, idx);
+        expand_node_with_map(
+            &mut nodes[idx],
+            Some(&child_path),
+            fragments,
+            inferred_types,
+            location,
+            expansion,
+            stack,
+            map,
+        )?;
+        return Ok(idx + 1);
+    }
+
+    if !is_with_node(&nodes[idx]) {
         let child_path = child_path(parent_path, nodes, idx);
         expand_node_with_map(
             &mut nodes[idx],
@@ -1088,16 +1297,20 @@ fn expand_child_node_with_map_at_index(
 
     let parsed_with = parse_with(&nodes[idx], location)?;
     let fragment_name = parsed_with.name.clone();
-    let fragment = fragments.get(&fragment_name).ok_or_else(|| {
-        let candidates: Vec<&str> = fragments.keys().map(|key| key.as_str()).collect();
-        let mut message = format!("unknown fragment {:?}", fragment_name);
-        if let Some(suggestion) = suggest_similar(&fragment_name, &candidates) {
-            message.push_str(&format!(" (did you mean {:?}?)", suggestion));
-        }
-        fragment_error(message, Some(&nodes[idx]), location)
-    })?;
-
     let expected_type = parent_info.expected_type();
+    let (fragment_key, fragment) = find_fragment_by_type(fragments, expected_type, &fragment_name)
+        .ok_or_else(|| {
+            let candidates = fragment_candidates(fragments, expected_type);
+            let mut message = format!(
+                "unknown fragment {:?} for type {:?}",
+                fragment_name, expected_type
+            );
+            if let Some(suggestion) = suggest_similar(&fragment_name, &candidates) {
+                message.push_str(&format!(" (did you mean {:?}?)", suggestion));
+            }
+            fragment_error(message, Some(&nodes[idx]), location)
+        })?;
+
     if let Some(schema_type) = fragment.schema_type.as_deref() {
         if schema_type != expected_type {
             let mut message = format!(
@@ -1130,9 +1343,9 @@ fn expand_child_node_with_map_at_index(
         );
     }
 
-    if stack.contains(&fragment_name) {
+    if stack.contains(&fragment_key) {
         let mut chain = stack.clone();
-        chain.push(fragment_name.clone());
+        chain.push(fragment_key.clone());
         return Err(fragment_error(
             format!("fragment recursion detected: {}", chain.join(" -> ")),
             Some(&nodes[idx]),
@@ -1144,7 +1357,7 @@ fn expand_child_node_with_map_at_index(
     let use_node = nodes.remove(idx);
     let mut insert_at = idx.min(nodes.len());
 
-    stack.push(fragment_name.clone());
+    stack.push(fragment_key.clone());
     let patch_len = apply_fragment_patch_with_map(
         parent,
         nodes,
@@ -1200,7 +1413,7 @@ fn expand_child_node_with_map_at_index(
 
     if let Some(parent_path) = parent_path {
         map.uses.push(FragmentUse {
-            fragment_name,
+            fragment_name: fragment_key,
             attr_overrides,
             parent_path: parent_path.clone(),
             insert_start: idx,
@@ -1230,7 +1443,7 @@ fn expand_child_nodes_with_map(
     let mut idx = 0usize;
     let mut had_direct_use = false;
     while idx < nodes.len() {
-        if nodes[idx].base_name() == "with" {
+        if is_with_node(&nodes[idx]) {
             had_direct_use = true;
         }
         idx = expand_child_node_with_map_at_index(
@@ -1613,53 +1826,91 @@ struct ParsedWith {
     child_overrides: Vec<KdlNode>,
 }
 
-fn parse_fragment_patch(
-    node: &KdlNode,
-    location: Option<&dyn LocationProvider>,
-) -> Result<FragmentPatch, KdlConfigError> {
-    let mut patch = strip_modifier(node.clone());
-    let discriminator = match patch.arg(0) {
-        Some(KdlValue::String(value)) => Some(value.clone()),
-        Some(other) => {
-            return Err(fragment_error(
-                format!(
-                    "fragment patch discriminator must be a string, found {}",
-                    kdl_value_type(other)
-                ),
-                Some(node),
-                location,
-            ));
-        }
-        None => None,
-    };
-
-    if patch.args().len() > 1 {
-        return Err(fragment_error(
-            "fragment patch nodes accept at most one discriminator argument",
-            Some(node),
-            location,
-        ));
-    }
-
-    if patch.args().len() == 1 {
-        remove_positional_entry(&mut patch, 0);
-    }
-
-    Ok(FragmentPatch {
-        target: node.base_name().to_string(),
-        discriminator,
-        defined_at: node_location(node, location),
-        node: patch,
-    })
+#[derive(Debug, Clone)]
+struct ParsedFrom {
+    name: String,
+    ty: String,
+    header_entries: Vec<KdlEntry>,
+    child_overrides: Vec<KdlNode>,
 }
 
 fn parse_with(
     node: &KdlNode,
     location: Option<&dyn LocationProvider>,
 ) -> Result<ParsedWith, KdlConfigError> {
+    let reference = reference_label(node);
+    let reference_subject = "fragment name";
     let name_value = node.arg(0).ok_or_else(|| {
         fragment_error(
-            "with nodes must have a fragment name argument",
+            format!("{reference} nodes must have a {reference_subject} argument"),
+            Some(node),
+            location,
+        )
+    })?;
+
+    let name = match name_value {
+        KdlValue::String(value) => value.clone(),
+        other => {
+            return Err(fragment_error(
+                format!(
+                    "{reference_subject} must be a string, found {}",
+                    kdl_value_type(other)
+                ),
+                Some(node),
+                location,
+            ));
+        }
+    };
+
+    let mut token_overrides = Vec::new();
+    for (arg_index, arg) in node.args().into_iter().enumerate().skip(1) {
+        match arg {
+            KdlValue::String(token) => {
+                token_overrides.push(KdlNode::new(token.clone()));
+            }
+            other => {
+                return Err(fragment_error(
+                    format!(
+                        "{reference} override token at arg[{arg_index}] must be a string, found {}",
+                        kdl_value_type(other)
+                    ),
+                    Some(node),
+                    location,
+                ));
+            }
+        }
+    }
+
+    let (attr_overrides, attr_nodes) = parse_attr_overrides(node, location, reference)?;
+    let mut child_overrides = token_overrides;
+    child_overrides.extend(
+        node.children()
+            .map(|doc| doc.nodes().to_vec())
+            .unwrap_or_default(),
+    );
+
+    Ok(ParsedWith {
+        name,
+        attr_overrides,
+        attr_nodes,
+        child_overrides,
+    })
+}
+
+fn parse_from(
+    node: &KdlNode,
+    location: Option<&dyn LocationProvider>,
+) -> Result<ParsedFrom, KdlConfigError> {
+    let name_value = node.arg(0).ok_or_else(|| {
+        fragment_error(
+            "from nodes must have a fragment name argument",
+            Some(node),
+            location,
+        )
+    })?;
+    let ty_value = node.arg(1).ok_or_else(|| {
+        fragment_error(
+            "from nodes must have a target type argument",
             Some(node),
             location,
         )
@@ -1678,38 +1929,41 @@ fn parse_with(
             ));
         }
     };
+    let ty = match ty_value {
+        KdlValue::String(value) => value.clone(),
+        other => {
+            return Err(fragment_error(
+                format!(
+                    "from target type must be a string, found {}",
+                    kdl_value_type(other)
+                ),
+                Some(node),
+                location,
+            ));
+        }
+    };
 
-    let mut token_overrides = Vec::new();
-    for (arg_index, arg) in node.args().into_iter().enumerate().skip(1) {
-        match arg {
-            KdlValue::String(token) => {
-                token_overrides.push(KdlNode::new(token.clone()));
-            }
-            other => {
-                return Err(fragment_error(
-                    format!(
-                        "with override token at arg[{arg_index}] must be a string, found {}",
-                        kdl_value_type(other)
-                    ),
-                    Some(node),
-                    location,
-                ));
+    let mut header_entries = Vec::new();
+    let mut positional_seen = 0usize;
+    for entry in node.entries() {
+        if entry.name().is_none() {
+            if positional_seen < 2 {
+                positional_seen += 1;
+                continue;
             }
         }
+        header_entries.push(entry.clone());
     }
 
-    let (attr_overrides, attr_nodes) = parse_attr_overrides(node, location)?;
-    let mut child_overrides = token_overrides;
-    child_overrides.extend(
-        node.children()
-            .map(|doc| doc.nodes().to_vec())
-            .unwrap_or_default(),
-    );
+    let child_overrides = node
+        .children()
+        .map(|doc| doc.nodes().to_vec())
+        .unwrap_or_default();
 
-    Ok(ParsedWith {
+    Ok(ParsedFrom {
         name,
-        attr_overrides,
-        attr_nodes,
+        ty,
+        header_entries,
         child_overrides,
     })
 }
@@ -1717,6 +1971,7 @@ fn parse_with(
 fn parse_attr_overrides(
     node: &KdlNode,
     location: Option<&dyn LocationProvider>,
+    reference: &str,
 ) -> Result<(Vec<AttrOverride>, Vec<KdlNode>), KdlConfigError> {
     let mut seen = HashSet::new();
     let mut overrides = Vec::new();
@@ -1725,7 +1980,7 @@ fn parse_attr_overrides(
             let key = name.value().to_string();
             if !seen.insert(key.clone()) {
                 return Err(fragment_error(
-                    format!("duplicate with attribute override {:?}", key),
+                    format!("duplicate {reference} attribute override {:?}", key),
                     Some(node),
                     location,
                 ));

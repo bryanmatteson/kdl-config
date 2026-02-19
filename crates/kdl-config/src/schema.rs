@@ -43,31 +43,12 @@ impl SchemaRegistry {
     }
 }
 
-/// Build a schema node for `(type)fragment "name" { ... }`.
+/// Build a schema node for `fragment "name" <type> { ... }`.
 pub fn fragment_node_schema(definitions: &SchemaRegistry) -> KdlNodeSchema {
     let mut names: Vec<String> = definitions.definitions.keys().cloned().collect();
     names.sort();
     let def_refs: Vec<SchemaRef> = names.iter().cloned().map(SchemaRef::Ref).collect();
-    let allowed = SchemaRef::Choice(def_refs.clone());
-    let patch_refs: Vec<SchemaRef> = names
-        .iter()
-        .filter_map(|name| {
-            definitions
-                .definitions
-                .get(name)
-                .map(|schema| (name, schema))
-        })
-        .map(|(name, schema)| {
-            let mut patch_schema = schema.clone();
-            let patch_target = patch_schema
-                .name
-                .clone()
-                .unwrap_or_else(|| name.to_string());
-            patch_schema.name = Some(format!("~{}", patch_target));
-            patch_schema.required = Some(false);
-            SchemaRef::Inline(patch_schema)
-        })
-        .collect();
+    let allowed = SchemaRef::Choice(def_refs);
 
     let mut schema = KdlNodeSchema::default();
     schema.name = Some("fragment".to_string());
@@ -79,19 +60,19 @@ pub fn fragment_node_schema(definitions: &SchemaRegistry) -> KdlNodeSchema {
         enum_values: None,
         validations: vec![],
     });
-    schema.type_annotation = Some(Box::new(TypeAnnotationSchema {
-        required: false,
-        allowed: allowed.clone(),
-    }));
-    if !def_refs.is_empty() || !patch_refs.is_empty() {
-        let mut child_refs = Vec::new();
-        if !def_refs.is_empty() {
-            child_refs.push(allowed);
-        }
-        if !patch_refs.is_empty() {
-            child_refs.push(SchemaRef::Choice(patch_refs));
-        }
-        schema.children = Some(Box::new(ChildrenSchema { nodes: child_refs }));
+    schema.values.push(SchemaValue {
+        ty: SchemaType::String,
+        required: true,
+        description: Some("Fragment target type".to_string()),
+        enum_values: None,
+        validations: vec![],
+    });
+    if let SchemaRef::Choice(choices) = &allowed
+        && !choices.is_empty()
+    {
+        schema.children = Some(Box::new(ChildrenSchema {
+            nodes: vec![allowed],
+        }));
     }
     schema
 }
