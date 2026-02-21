@@ -150,6 +150,13 @@ struct FuncValidation {
     count: i32,
 }
 
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "func_test_call_style")]
+struct FuncValidationCallStyle {
+    #[kdl(validate(func("validate_even")))]
+    count: i32,
+}
+
 #[test]
 fn func_validation_passes_even() {
     let cfg: FuncValidation = parse_str("func_test count=4").unwrap();
@@ -159,6 +166,19 @@ fn func_validation_passes_even() {
 #[test]
 fn func_validation_rejects_odd() {
     let err = parse_str::<FuncValidation>("func_test count=3").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not even"), "got: {msg}");
+}
+
+#[test]
+fn func_validation_call_style_passes_even() {
+    let cfg: FuncValidationCallStyle = parse_str("func_test_call_style count=4").unwrap();
+    assert_eq!(cfg.count, 4);
+}
+
+#[test]
+fn func_validation_call_style_rejects_odd() {
+    let err = parse_str::<FuncValidationCallStyle>("func_test_call_style count=3").unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("not even"), "got: {msg}");
 }
@@ -249,6 +269,20 @@ struct ValidatedServer {
     port: i64,
 }
 
+fn check_server_invariants_call_style(s: &ValidatedServerCallStyle) -> Result<(), String> {
+    if s.host == "localhost" && s.port > 1024 {
+        return Err("localhost must use a privileged port".to_string());
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "server_call_style", validate(func("check_server_invariants_call_style")))]
+struct ValidatedServerCallStyle {
+    host: String,
+    port: i64,
+}
+
 #[test]
 fn struct_level_validation_passes() {
     let cfg: ValidatedServer = parse_str("server host=\"example.com\" port=8080").unwrap();
@@ -266,6 +300,23 @@ fn struct_level_validation_fails() {
 fn struct_level_validation_localhost_privileged_passes() {
     let cfg: ValidatedServer = parse_str("server host=\"localhost\" port=80").unwrap();
     assert_eq!(cfg.port, 80);
+}
+
+#[test]
+fn struct_level_validation_call_style_passes() {
+    let cfg: ValidatedServerCallStyle =
+        parse_str("server_call_style host=\"example.com\" port=8080").unwrap();
+    assert_eq!(cfg.host, "example.com");
+}
+
+#[test]
+fn struct_level_validation_call_style_fails() {
+    let err = parse_str::<ValidatedServerCallStyle>(
+        "server_call_style host=\"localhost\" port=8080",
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("privileged port"), "got: {msg}");
 }
 
 #[derive(Debug, PartialEq, kdl_config::KdlNode)]
