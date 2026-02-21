@@ -63,6 +63,28 @@ fn has_nested_meta(meta: &syn::meta::ParseNestedMeta) -> bool {
     !meta.input.is_empty() && !meta.input.peek(syn::Token![,])
 }
 
+/// Consume arbitrary nested meta for `#[kdl(...)]` items that `Kdl` derive itself
+/// does not interpret. This keeps the pre-pass permissive while allowing
+/// `KdlNode` parsing to handle the real semantics later.
+fn consume_meta(meta: syn::meta::ParseNestedMeta) -> syn::Result<()> {
+    if meta.input.peek(syn::Token![=]) {
+        let _: syn::Expr = meta.value()?.parse()?;
+        return Ok(());
+    }
+
+    if has_nested_meta(&meta) {
+        if meta.input.peek(syn::token::Paren) {
+            let content;
+            syn::parenthesized!(content in meta.input);
+            let _: proc_macro2::TokenStream = content.parse()?;
+        } else {
+            let _: proc_macro2::TokenStream = meta.input.parse()?;
+        }
+    }
+
+    Ok(())
+}
+
 fn default_mode_for(data: &Data) -> DeriveMode {
     match data {
         Data::Struct(_) => DeriveMode::Node,
@@ -100,7 +122,7 @@ fn apply_kdl_derive_meta(
         if meta.input.peek(syn::Token![=]) {
             let _: syn::Expr = meta.value()?.parse()?;
         } else if has_nested_meta(&meta) {
-            meta.parse_nested_meta(|_| Ok(()))?;
+            meta.parse_nested_meta(consume_meta)?;
         } else {
             set_mode(config, DeriveMode::Node, meta.path.span())?;
         }
@@ -112,7 +134,7 @@ fn apply_kdl_derive_meta(
             return Err(meta.error("choice does not accept a value"));
         }
         if has_nested_meta(&meta) {
-            meta.parse_nested_meta(|_| Ok(()))?;
+            meta.parse_nested_meta(consume_meta)?;
         }
         set_mode(config, DeriveMode::Choice, meta.path.span())?;
         return Ok(());
@@ -123,7 +145,7 @@ fn apply_kdl_derive_meta(
             return Err(meta.error("value does not accept a value"));
         }
         if has_nested_meta(&meta) {
-            meta.parse_nested_meta(|_| Ok(()))?;
+            meta.parse_nested_meta(consume_meta)?;
         }
         set_mode(config, DeriveMode::Value, meta.path.span())?;
         return Ok(());
@@ -134,7 +156,7 @@ fn apply_kdl_derive_meta(
             let lit: syn::LitBool = meta.value()?.parse()?;
             config.schema = lit.value;
         } else if has_nested_meta(&meta) {
-            meta.parse_nested_meta(|_| Ok(()))?;
+            meta.parse_nested_meta(consume_meta)?;
             config.schema = true;
         } else {
             config.schema = true;
@@ -142,16 +164,7 @@ fn apply_kdl_derive_meta(
         return Ok(());
     }
 
-    if meta.input.peek(syn::Token![=]) {
-        let _: syn::Expr = meta.value()?.parse()?;
-        return Ok(());
-    }
-
-    if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
-        meta.parse_nested_meta(|_| Ok(()))?;
-    }
-
-    Ok(())
+    consume_meta(meta)
 }
 
 fn set_mode(

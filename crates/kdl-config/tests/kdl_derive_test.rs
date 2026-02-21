@@ -60,3 +60,53 @@ union OnlySchema {
 fn kdl_derive_union_schema_only_compiles() {
     let _ = <OnlySchema as kdl_config::schema::KdlSchema>::schema_ref();
 }
+
+fn ensure_non_empty(value: &String) -> Result<(), String> {
+    if value.trim().is_empty() {
+        Err("value must not be empty".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_eq(cfg: &ValidatedEqStyle) -> Result<(), String> {
+    if cfg.level == "forbidden" {
+        Err("forbidden level".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_call(cfg: &ValidatedCallStyle) -> Result<(), String> {
+    if cfg.level == "forbidden" {
+        Err("forbidden level".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node = "validated-eq", validate(func = "validate_eq"))]
+struct ValidatedEqStyle {
+    #[kdl(attr, validate(func = "ensure_non_empty"))]
+    level: String,
+}
+
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node = "validated-call", validate(func("validate_call")))]
+struct ValidatedCallStyle {
+    #[kdl(attr, validate(func("ensure_non_empty")))]
+    level: String,
+}
+
+#[test]
+fn kdl_derive_node_accepts_validate_eq_style() {
+    let cfg: ValidatedEqStyle = parse_str(r#"validated-eq level="info""#).unwrap();
+    assert_eq!(cfg.level, "info");
+}
+
+#[test]
+fn kdl_derive_node_accepts_validate_call_style() {
+    let cfg: ValidatedCallStyle = parse_str(r#"validated-call level="info""#).unwrap();
+    assert_eq!(cfg.level, "info");
+}
