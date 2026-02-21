@@ -18,6 +18,7 @@ pub struct FieldInfo {
     pub ident: Ident,
     pub ty: Type,
     pub kdl_key: String,
+    pub kdl_aliases: Vec<String>,
     pub placement: FieldPlacement,
     pub required: bool,
     pub is_optional: bool,
@@ -82,6 +83,7 @@ impl FieldInfo {
 
         // Validate tuple field restrictions
         if attrs.name.is_some()
+            || !attrs.aliases.is_empty()
             || attrs.container.is_some()
             || attrs.select.is_some()
             || attrs.path.is_some()
@@ -196,6 +198,7 @@ impl FieldInfo {
             ident,
             ty: field.ty.clone(),
             kdl_key,
+            kdl_aliases: vec![],
             placement,
             required,
             is_optional,
@@ -299,6 +302,7 @@ impl FieldInfo {
             ident,
             ty: ty.clone(),
             kdl_key,
+            kdl_aliases: attrs.aliases,
             placement: attrs.placement,
             required,
             is_optional,

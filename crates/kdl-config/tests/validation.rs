@@ -277,7 +277,10 @@ fn check_server_invariants_call_style(s: &ValidatedServerCallStyle) -> Result<()
 }
 
 #[derive(Debug, PartialEq, kdl_config::KdlNode)]
-#[kdl(node = "server_call_style", validate(func("check_server_invariants_call_style")))]
+#[kdl(
+    node = "server_call_style",
+    validate(func("check_server_invariants_call_style"))
+)]
 struct ValidatedServerCallStyle {
     host: String,
     port: i64,
@@ -311,10 +314,9 @@ fn struct_level_validation_call_style_passes() {
 
 #[test]
 fn struct_level_validation_call_style_fails() {
-    let err = parse_str::<ValidatedServerCallStyle>(
-        "server_call_style host=\"localhost\" port=8080",
-    )
-    .unwrap_err();
+    let err =
+        parse_str::<ValidatedServerCallStyle>("server_call_style host=\"localhost\" port=8080")
+            .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("privileged port"), "got: {msg}");
 }

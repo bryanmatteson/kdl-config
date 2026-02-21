@@ -57,6 +57,8 @@ If `keyed` is explicitly set, flags are not considered unless `flag` is also set
 
 **Field-Level Modifiers**
 - `#[kdl(name = "custom-key")]` or `#[kdl(rename = "custom-key")]`: override KDL key name.
+- `#[kdl(name = any("primary", "legacy", ...))]`: set canonical key plus decode aliases in one place (first name is canonical render name).
+- `#[kdl(alias = "legacy-key")]` or `#[kdl(alias = any("legacy-a", "legacy-b"))]`: add decode-only aliases for a field key.
 - `#[kdl(path = "a.b.c")]`: re-root decoding at the child path (relative by default). Use a leading `/` for absolute paths (e.g., `"/app.http"`). Rendering is unchanged (path is decode-only).
 - `#[kdl(container = "custom-container")]`: override the container node name for `registry` fields (the repeated node name).
 - `#[kdl(required)]` or `#[kdl(optional)]`: override required-ness.

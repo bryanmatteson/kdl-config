@@ -1,5 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
+use std::collections::BTreeMap;
 use syn::Ident;
 
 use crate::attrs::{
@@ -63,13 +64,13 @@ pub fn generate_parse_impl(
 
     let field_names: Vec<&Ident> = fields.iter().map(|f| &f.ident).collect();
 
-    let valid_attr_keys: Vec<&str> = fields
+    let valid_attr_keys: Vec<String> = fields
         .iter()
         .filter(|f| !f.is_skipped)
         .filter(|f| matches!(field_kind(f), FieldKind::ValueScalar | FieldKind::ValueVec))
-        .map(|f| f.kdl_key.as_str())
+        .flat_map(|f| std::iter::once(f.kdl_key.clone()).chain(f.kdl_aliases.iter().cloned()))
         .collect();
-    let valid_child_names: Vec<&str> = fields
+    let valid_child_names: Vec<String> = fields
         .iter()
         .filter(|f| !f.is_skipped)
         .filter(|f| {
@@ -78,8 +79,44 @@ pub fn generate_parse_impl(
                 FieldKind::Node | FieldKind::NodeVec | FieldKind::Flatten | FieldKind::Collection
             )
         })
-        .map(|f| f.kdl_key.as_str())
+        .flat_map(|f| std::iter::once(f.kdl_key.clone()).chain(f.kdl_aliases.iter().cloned()))
         .collect();
+
+    let mut alias_to_key: BTreeMap<String, String> = BTreeMap::new();
+    for field in fields.iter().filter(|f| !f.is_skipped) {
+        for alias in &field.kdl_aliases {
+            if alias == &field.kdl_key {
+                continue;
+            }
+            match alias_to_key.get(alias) {
+                Some(existing) if existing != &field.kdl_key => {
+                    let msg = format!(
+                        "alias '{alias}' is assigned to multiple fields ('{existing}' and '{}')",
+                        field.kdl_key
+                    );
+                    return quote! { compile_error!(#msg); };
+                }
+                _ => {
+                    alias_to_key.insert(alias.clone(), field.kdl_key.clone());
+                }
+            }
+        }
+    }
+    let alias_pairs: Vec<(String, String)> = alias_to_key.into_iter().collect();
+    let alias_node_setup = if alias_pairs.is_empty() {
+        quote! {}
+    } else {
+        let aliases = alias_pairs
+            .iter()
+            .map(|(alias, key)| quote! { (#alias, #key) });
+        quote! {
+            let __kdl_alias_node = ::kdl_config::helpers::canonicalize_node_aliases(
+                node,
+                &[#(#aliases),*],
+            );
+            let node = &__kdl_alias_node;
+        }
+    };
 
     let cross_field_validations = generate_cross_field_validations(fields, &struct_name_str);
     let struct_validations = generate_struct_validations(struct_attrs, &struct_name_str);
@@ -91,6 +128,7 @@ pub fn generate_parse_impl(
                 let result = (|| {
                     use ::kdl_config::KdlNodeExt as _;
                     #validate_name
+                    #alias_node_setup
                     let struct_overrides = #struct_overrides;
                     let struct_config = ::kdl_config::resolve_struct(ctx.config, struct_overrides);
                     let mut claims = ::kdl_config::helpers::Claims::new();

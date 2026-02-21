@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::KdlDecode;
 use crate::config::{ConflictPolicy, FlagStyle};
@@ -529,6 +529,50 @@ pub fn parse_flatten<T: KdlDecode>(
             _ => Err(err),
         },
     }
+}
+
+pub fn canonicalize_node_aliases(node: &KdlNode, aliases: &[(&str, &str)]) -> KdlNode {
+    if aliases.is_empty() {
+        return node.clone();
+    }
+
+    let mut alias_map: HashMap<&str, &str> = HashMap::new();
+    for (alias, canonical) in aliases {
+        if alias != canonical {
+            alias_map.insert(*alias, *canonical);
+        }
+    }
+    if alias_map.is_empty() {
+        return node.clone();
+    }
+
+    let mut clone = node.clone();
+
+    for entry in clone.entries_mut() {
+        if let Some(name) = entry.name() {
+            if let Some(canonical) = alias_map.get(name.value()) {
+                entry.set_name(Some((*canonical).to_string()));
+            }
+        }
+    }
+
+    if let Some(children) = clone.children_mut().as_mut() {
+        for child in children.nodes_mut() {
+            let base_name = child.base_name().to_string();
+            if let Some(canonical) = alias_map.get(base_name.as_str()) {
+                let name = match child.modifier() {
+                    crate::types::Modifier::Append => format!("+{}", canonical),
+                    crate::types::Modifier::Remove => format!("-{}", canonical),
+                    crate::types::Modifier::Replace => format!("!{}", canonical),
+                    crate::types::Modifier::Flatten => format!("~{}", canonical),
+                    crate::types::Modifier::Inherit => canonical.to_string(),
+                };
+                child.set_name(name);
+            }
+        }
+    }
+
+    clone
 }
 
 pub fn expect_arg<'a>(

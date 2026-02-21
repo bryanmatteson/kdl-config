@@ -1,5 +1,7 @@
 //! Field-level attribute definitions.
 
+use std::collections::HashSet;
+
 use proc_macro2::Span;
 
 use super::types::{
@@ -73,6 +75,7 @@ pub struct FieldAttrs {
     pub placement: FieldPlacement,
     pub required: Option<bool>,
     pub name: Option<String>,
+    pub aliases: Vec<String>,
     pub path: Option<FieldPath>,
     pub container: Option<String>,
     pub children_map: bool,
@@ -141,6 +144,7 @@ pub struct RawFieldAttrs {
     // === Configuration ===
     pub name: Option<String>,
     pub rename: Option<String>, // alias for name
+    pub aliases: Vec<String>,
     pub path: Option<FieldPath>,
     pub container: Option<String>,
     pub children_map: bool,
@@ -270,6 +274,12 @@ impl RawFieldAttrs {
 
         // Resolve name
         let name = self.name.or(self.rename);
+        let mut aliases = self.aliases;
+        if let Some(ref primary) = name {
+            aliases.retain(|alias| alias != primary);
+        }
+        let mut seen_aliases: HashSet<String> = HashSet::new();
+        aliases.retain(|alias| seen_aliases.insert(alias.clone()));
         let path = self.path;
 
         // Resolve flatten
@@ -410,6 +420,7 @@ impl RawFieldAttrs {
             placement,
             required,
             name,
+            aliases,
             path,
             container: self.container,
             children_map: self.children_map,

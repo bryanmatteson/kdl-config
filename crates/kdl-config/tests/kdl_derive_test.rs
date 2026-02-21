@@ -110,3 +110,72 @@ fn kdl_derive_node_accepts_validate_call_style() {
     let cfg: ValidatedCallStyle = parse_str(r#"validated-call level="info""#).unwrap();
     assert_eq!(cfg.level, "info");
 }
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "search")]
+struct SearchPoolsAlias {
+    #[kdl(
+        value,
+        name = "vector-pool",
+        alias = "vector-pools",
+        conflict = "append"
+    )]
+    pools: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "search")]
+struct SearchPoolsAny {
+    #[kdl(value, name = any("vector-pool", "vector-pools"), conflict = "append")]
+    pools: Vec<String>,
+}
+
+#[test]
+fn kdl_node_alias_accepts_singular_repeated_children() {
+    let cfg: SearchPoolsAlias = parse_str(
+        r#"
+search {
+    vector-pool "code"
+    vector-pool "prose"
+}
+"#,
+    )
+    .unwrap();
+    assert_eq!(cfg.pools, vec!["code".to_string(), "prose".to_string()]);
+}
+
+#[test]
+fn kdl_node_alias_accepts_plural_compact_child() {
+    let cfg: SearchPoolsAlias = parse_str(
+        r#"
+search {
+    vector-pools "code" "prose"
+}
+"#,
+    )
+    .unwrap();
+    assert_eq!(cfg.pools, vec!["code".to_string(), "prose".to_string()]);
+}
+
+#[test]
+fn kdl_node_name_any_accepts_both_forms() {
+    let singular: SearchPoolsAny = parse_str(
+        r#"
+search {
+    vector-pool "code"
+}
+"#,
+    )
+    .unwrap();
+    let plural: SearchPoolsAny = parse_str(
+        r#"
+search {
+    vector-pools "prose"
+}
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(singular.pools, vec!["code".to_string()]);
+    assert_eq!(plural.pools, vec!["prose".to_string()]);
+}

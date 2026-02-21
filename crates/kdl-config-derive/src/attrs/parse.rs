@@ -497,12 +497,23 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
         // Configuration
         Some("name") | Some("rename") => {
             let value: Expr = meta.value()?.parse()?;
-            if let Expr::Lit(ExprLit {
-                lit: Lit::Str(s), ..
-            }) = value
-            {
-                raw.name = Some(s.value());
+            let names = parse_string_or_any_names_expr(value, meta.path.span(), "name")?;
+            if let Some(first) = names.first() {
+                raw.name = Some(first.clone());
             }
+            if names.len() > 1 {
+                raw.aliases.extend(names.into_iter().skip(1));
+            }
+        }
+        Some("alias") => {
+            let value: Expr = meta.value()?.parse()?;
+            let names = parse_string_or_any_names_expr(value, meta.path.span(), "alias")?;
+            raw.aliases.extend(names);
+        }
+        Some("aliases") => {
+            let value: Expr = meta.value()?.parse()?;
+            let names = parse_string_or_any_names_expr(value, meta.path.span(), "aliases")?;
+            raw.aliases.extend(names);
         }
         Some("container") => {
             let value: Expr = meta.value()?.parse()?;
@@ -799,6 +810,58 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
     }
 
     Ok(())
+}
+
+fn parse_string_or_any_names_expr(
+    value: syn::Expr,
+    span: proc_macro2::Span,
+    label: &str,
+) -> syn::Result<Vec<String>> {
+    use syn::{Expr, ExprCall, ExprLit, ExprPath, Lit};
+
+    match value {
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(s), ..
+        }) => Ok(vec![s.value()]),
+        Expr::Call(ExprCall { func, args, .. }) => {
+            let is_any =
+                matches!(*func, Expr::Path(ExprPath { ref path, .. }) if path.is_ident("any"));
+            if !is_any {
+                return Err(syn::Error::new(
+                    span,
+                    format!("{label} requires a string literal or any(\"a\", \"b\", ...)"),
+                ));
+            }
+
+            if args.is_empty() {
+                return Err(syn::Error::new(
+                    span,
+                    format!("{label} any(...) requires at least one string literal"),
+                ));
+            }
+
+            let mut names = Vec::with_capacity(args.len());
+            for arg in args {
+                match arg {
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) => names.push(s.value()),
+                    _ => {
+                        return Err(syn::Error::new(
+                            span,
+                            format!("{label} any(...) expects only string literals"),
+                        ));
+                    }
+                }
+            }
+
+            Ok(names)
+        }
+        _ => Err(syn::Error::new(
+            span,
+            format!("{label} requires a string literal or any(\"a\", \"b\", ...)"),
+        )),
+    }
 }
 
 /// Parse schema meta items (handles `type` keyword specially).
