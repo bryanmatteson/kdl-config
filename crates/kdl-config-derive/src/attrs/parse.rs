@@ -274,7 +274,12 @@ fn parse_struct_meta(
             }
         }
         // Ignored at struct level
-        Some("choice") | Some("value") | Some("meta") | Some("group") => {
+        Some("choice")
+        | Some("value")
+        | Some("meta")
+        | Some("group")
+        | Some("alias")
+        | Some("aliases") => {
             if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
                 if meta.input.peek(syn::Token![=]) {
                     let _: Expr = meta.value()?.parse()?;
