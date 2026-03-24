@@ -23,6 +23,7 @@ pub mod schema;
 pub mod selector;
 pub mod types;
 pub mod validation;
+pub use kdl;
 
 pub use newtypes::{Duration, PositiveCount, Scalar, Weight};
 pub use validation::{
