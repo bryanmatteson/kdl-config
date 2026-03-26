@@ -15,6 +15,7 @@ kdl-config = "0.1.0"
 
 Optional features:
 
+- `regex` (default) — enables runtime `pattern` validation via the `regex` crate.
 - `serde` — enables `Serialize` and `Deserialize` derives on built-in newtypes (`Duration`, `Weight`, `PositiveCount`, `Scalar`).
 
 ## Quick Start
@@ -109,17 +110,51 @@ Users only need to depend on `kdl-config`; derive macros are re-exported automat
 
 - **Declarative Mapping**: Use derive macros to map KDL nodes to Rust structs and enums.
 - **Attributes & Arguments**: Map KDL keyed attributes, positional arguments, and flags to struct fields.
+- **Naming & Aliasing**: Rename fields with `rename_all`, override names with `name = "..."` or `name = any("a", "b")`, and add aliases with `alias`.
 - **Children**: Collect child nodes into `Vec`, `HashMap`, or nested structs — including `registry` and `children_map` patterns.
-- **Validation**: Declare constraints on fields and structs — numeric ranges, string rules, collection sizes, cross-field comparisons, and custom functions — enforced at decode time.
+- **Flattening**: Inline nested struct fields into the parent node with `flatten`.
+- **Defaults**: Supply defaults with `default`, `default = value`, or `default_fn = "path"`.
+- **Type Conversion**: Decode through intermediate types with `from = "Type"` or `try_from = "Type"` for newtypes, validated wrappers, and domain types.
+- **Validation**: Declare constraints on fields and structs — numeric ranges, string rules (byte length and character count), collection sizes, cross-field comparisons, regex patterns, and custom functions — all enforced at decode time with per-field source locations in error messages.
 - **Post-Decode Hooks**: Normalize or reject fully-decoded structs with `#[kdl(post_decode = "path")]`.
+- **Conflict Resolution**: Control duplicate handling with `conflict = "error" | "first" | "last" | "append"`.
 - **Selectors**: Advanced key/discriminator extraction with `select(...)` (supports `arg(N)`, `attr("name")`, `name`, `func("path")`, and `any(...)`).
 - **Fragments**: Reusable configuration templates with insert nodes and `~` merge patches, expanded before parsing.
 - **Layered Configs**: Load and merge multiple KDL files with `KdlLoader`, using modifier signals (`+`, `-`, `!`) for merge control.
 - **Typed Overlay Merging**: Derive `KdlMerge` and `KdlPartial` to remove manual merge boilerplate.
 - **Round-trip Rendering**: Parse, modify, and re-serialize KDL while preserving original formatting via `RoundTripAst`.
 - **Schema Generation**: Generate KDL schema metadata for your types with `KdlSchema`.
+- **Deny Unknown**: Reject unrecognized attributes and children with `deny_unknown`.
+- **Path Re-rooting**: Decode fields from nested paths with `path = "a.b"` or `path = "/a.b"`.
 - **Built-in Newtypes**: `Duration`, `Weight`, `PositiveCount`, and `Scalar<T>` for common config value patterns.
 - **Serde Integration**: Optional `serde` feature for serialization/deserialization of built-in newtypes.
+
+## Naming and Aliasing
+
+Rename all fields on a struct with `rename_all`, override individual field names, and add aliases:
+
+```rust
+use kdl_config::KdlNode;
+
+#[derive(KdlNode)]
+#[kdl(node = "config", rename_all = "kebab-case")]
+struct Config {
+    // KDL key: "log-level" (from rename_all)
+    log_level: String,
+
+    // KDL key: "output" (explicit override)
+    #[kdl(name = "output")]
+    output_path: String,
+
+    // accepts "mode", "run-mode", or "m" in KDL
+    #[kdl(name = any("mode", "run-mode"), alias = "m")]
+    mode: String,
+}
+```
+
+```kdl
+config log-level="info" output="/var/log" mode="fast"
+```
 
 ## Booleans
 
@@ -332,7 +367,7 @@ struct Config {
     name: String,
 
     #[kdl(positional = 0)]
-    #[kdl(schema(type = "integer", description = "Primary count"))]
+    #[kdl(schema(kind = "integer", description = "Primary count"))]
     count: i64,
 
     #[kdl(attr)]
@@ -343,7 +378,7 @@ struct Config {
 
 ## Validation
 
-Add `#[kdl(validate(...))]` to fields or structs to enforce constraints at decode time:
+Add `#[kdl(validate(...))]` to fields or structs to enforce constraints at decode time. All field-level errors are collected and reported together with per-field source locations.
 
 ```rust
 use kdl_config::KdlNode;
@@ -378,13 +413,14 @@ fn check_server(s: &ServerConfig) -> Result<(), String> {
 | Category | Rules |
 | --- | --- |
 | Numeric | `min`, `max`, `range(a,b)`, `multiple_of`, `positive`, `negative`, `non_negative`, `non_positive` |
-| String | `non_empty`, `min_len`, `max_len`, `len(a,b)`, `ascii`, `alphanumeric`, `pattern` |
+| String (byte length) | `non_empty`, `min_len`, `max_len`, `len(a,b)`, `ascii`, `alphanumeric`, `pattern` |
+| String (char count) | `min_chars`, `max_chars`, `chars(a,b)` |
 | Collection | `min_items`, `max_items` |
-| Cross-field (numeric) | `less_than`, `lte`, `greater_than`, `gte`, `equal_to`, `not_equal_to` |
+| Cross-field (numeric) | `less_than`/`lt`, `lte`, `greater_than`/`gt`, `gte`, `equal_to`/`eq`, `not_equal_to`/`neq` |
 | Cross-field (membership) | `exists_in`, `subset_of` |
 | Custom | `func = "path::to::fn"` (field-level: `fn(&T) -> Result<(), String>`, struct-level: `fn(&Self) -> Result<(), String>`) |
 
-`Option<T>` fields skip validation when `None`. See [docs/validation.md](docs/validation.md) for full details.
+`Option<T>` fields skip validation when `None`. `pattern` requires the `regex` feature (enabled by default).
 
 ### Post-Decode Hooks
 
@@ -407,6 +443,33 @@ fn normalize(cfg: &mut AppConfig) -> Result<(), String> {
 struct AppConfig {
     #[kdl(attr)]
     name: String,
+}
+```
+
+### Type Conversion
+
+Decode through an intermediate type with `from` or `try_from` for newtypes and validated wrappers:
+
+```rust
+use kdl_config::KdlNode;
+
+struct Port(u16);
+
+impl TryFrom<i64> for Port {
+    type Error = String;
+    fn try_from(v: i64) -> Result<Self, String> {
+        u16::try_from(v).map(Port).map_err(|_| format!("{v} is not a valid port"))
+    }
+}
+impl From<Port> for i64 {
+    fn from(p: Port) -> i64 { p.0 as i64 }
+}
+
+#[derive(KdlNode)]
+#[kdl(node = "server")]
+struct Server {
+    #[kdl(try_from = "i64")]
+    port: Port,
 }
 ```
 
