@@ -599,14 +599,15 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             ConflictPolicy::Append => quote! { Some(::kdl_config::ConflictPolicy::Append) },
         };
 
-        let ty = &field.ty;
+        // Use intermediate type for schema when from/try_from is set
+        let ty = field.from_type.as_ref().unwrap_or(&field.ty);
         let resolved_name = field.schema.resolved_name();
         let resolved_kind = field.schema.resolved_kind();
         let kdl_key = resolved_name
             .cloned()
             .unwrap_or_else(|| field.kdl_key.clone());
         let desc_expr = schema_desc_expr(field.schema.resolved_description());
-        let type_expr = if field.is_scalar && resolved_kind.is_none() {
+        let type_expr = if field.is_scalar && resolved_kind.is_none() && field.from_type.is_none() {
             quote! { ::kdl_config::schema::SchemaType::String }
         } else {
             schema_type_expr_with_override(ty, resolved_kind.as_ref())

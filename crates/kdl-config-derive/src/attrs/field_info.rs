@@ -45,6 +45,8 @@ pub struct FieldInfo {
     pub render: Option<RenderPlacement>,
     pub container: Option<String>,
     pub select: Option<SelectSpec>,
+    pub from_type: Option<Type>,
+    pub from_is_try: bool,
     pub schema: FieldSchemaOverride,
 }
 
@@ -225,6 +227,8 @@ impl FieldInfo {
             render: attrs.render,
             container: None,
             select: None,
+            from_type: None,
+            from_is_try: false,
             schema: attrs.schema,
         }))
     }
@@ -329,6 +333,8 @@ impl FieldInfo {
             render: attrs.render,
             container: attrs.container,
             select: attrs.select,
+            from_type: attrs.from.or(attrs.try_from.clone()),
+            from_is_try: attrs.try_from.is_some(),
             schema: attrs.schema,
         }))
     }

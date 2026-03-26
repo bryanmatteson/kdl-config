@@ -376,3 +376,547 @@ fn subset_of_validation_fails_when_values_escape_allowed_set() {
     let msg = err.to_string();
     assert!(msg.contains("subset"), "got: {msg}");
 }
+
+// ==========================================================================
+// Error collection: multiple validation failures are reported together
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "multi")]
+struct MultiValidation {
+    #[kdl(validate(min = 1, max = 100))]
+    a: i32,
+    #[kdl(validate(min = 1, max = 100))]
+    b: i32,
+}
+
+#[test]
+fn multiple_field_failures_collected() {
+    let err = parse_str::<MultiValidation>("multi a=0 b=0").unwrap_err();
+    let msg = err.to_string();
+    // Both fields fail — error should contain both
+    assert!(msg.contains("validation errors"), "expected multiple errors, got: {msg}");
+    assert!(msg.contains("'a'"), "expected field 'a' mentioned, got: {msg}");
+    assert!(msg.contains("'b'"), "expected field 'b' mentioned, got: {msg}");
+}
+
+#[test]
+fn single_failure_no_wrapper() {
+    let err = parse_str::<MultiValidation>("multi a=0 b=50").unwrap_err();
+    let msg = err.to_string();
+    // Only field 'a' fails — should be a direct error, not wrapped
+    assert!(msg.contains("'a'"), "expected field 'a' mentioned, got: {msg}");
+    assert!(
+        !msg.contains("validation errors"),
+        "single error should not be wrapped, got: {msg}"
+    );
+}
+
+// ==========================================================================
+// range() validation
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "rng")]
+struct RangeValidation {
+    #[kdl(validate(range(10, 20)))]
+    val: i32,
+}
+
+#[test]
+fn range_passes_at_lower_bound() {
+    let cfg: RangeValidation = parse_str("rng val=10").unwrap();
+    assert_eq!(cfg.val, 10);
+}
+
+#[test]
+fn range_passes_at_upper_bound() {
+    let cfg: RangeValidation = parse_str("rng val=20").unwrap();
+    assert_eq!(cfg.val, 20);
+}
+
+#[test]
+fn range_passes_in_middle() {
+    let cfg: RangeValidation = parse_str("rng val=15").unwrap();
+    assert_eq!(cfg.val, 15);
+}
+
+#[test]
+fn range_rejects_below() {
+    let err = parse_str::<RangeValidation>("rng val=9").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not in range"), "got: {msg}");
+}
+
+#[test]
+fn range_rejects_above() {
+    let err = parse_str::<RangeValidation>("rng val=21").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not in range"), "got: {msg}");
+}
+
+// ==========================================================================
+// multiple_of validation
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "mul")]
+struct MultipleOfValidation {
+    #[kdl(validate(multiple_of = 5))]
+    val: i32,
+}
+
+#[test]
+fn multiple_of_passes() {
+    let cfg: MultipleOfValidation = parse_str("mul val=15").unwrap();
+    assert_eq!(cfg.val, 15);
+}
+
+#[test]
+fn multiple_of_passes_zero() {
+    let cfg: MultipleOfValidation = parse_str("mul val=0").unwrap();
+    assert_eq!(cfg.val, 0);
+}
+
+#[test]
+fn multiple_of_rejects() {
+    let err = parse_str::<MultipleOfValidation>("mul val=7").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not a multiple"), "got: {msg}");
+}
+
+// ==========================================================================
+// negative / non_negative / non_positive
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "neg")]
+struct NegativeValidation {
+    #[kdl(validate(negative))]
+    val: i32,
+}
+
+#[test]
+fn negative_passes() {
+    let cfg: NegativeValidation = parse_str("neg val=-1").unwrap();
+    assert_eq!(cfg.val, -1);
+}
+
+#[test]
+fn negative_rejects_zero() {
+    let err = parse_str::<NegativeValidation>("neg val=0").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not negative"), "got: {msg}");
+}
+
+#[test]
+fn negative_rejects_positive() {
+    let err = parse_str::<NegativeValidation>("neg val=1").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not negative"), "got: {msg}");
+}
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "nn")]
+struct NonNegativeValidation {
+    #[kdl(validate(non_negative))]
+    val: i32,
+}
+
+#[test]
+fn non_negative_passes_zero() {
+    let cfg: NonNegativeValidation = parse_str("nn val=0").unwrap();
+    assert_eq!(cfg.val, 0);
+}
+
+#[test]
+fn non_negative_passes_positive() {
+    let cfg: NonNegativeValidation = parse_str("nn val=5").unwrap();
+    assert_eq!(cfg.val, 5);
+}
+
+#[test]
+fn non_negative_rejects_negative() {
+    let err = parse_str::<NonNegativeValidation>("nn val=-1").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not non-negative"), "got: {msg}");
+}
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "np")]
+struct NonPositiveValidation {
+    #[kdl(validate(non_positive))]
+    val: i32,
+}
+
+#[test]
+fn non_positive_passes_zero() {
+    let cfg: NonPositiveValidation = parse_str("np val=0").unwrap();
+    assert_eq!(cfg.val, 0);
+}
+
+#[test]
+fn non_positive_passes_negative() {
+    let cfg: NonPositiveValidation = parse_str("np val=-3").unwrap();
+    assert_eq!(cfg.val, -3);
+}
+
+#[test]
+fn non_positive_rejects_positive() {
+    let err = parse_str::<NonPositiveValidation>("np val=1").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not non-positive"), "got: {msg}");
+}
+
+// ==========================================================================
+// len() validation (combined min_len + max_len)
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "ln")]
+struct LenValidation {
+    #[kdl(validate(len(2, 5)))]
+    val: String,
+}
+
+#[test]
+fn len_passes_at_lower_bound() {
+    let cfg: LenValidation = parse_str(r#"ln val="ab""#).unwrap();
+    assert_eq!(cfg.val, "ab");
+}
+
+#[test]
+fn len_passes_at_upper_bound() {
+    let cfg: LenValidation = parse_str(r#"ln val="abcde""#).unwrap();
+    assert_eq!(cfg.val, "abcde");
+}
+
+#[test]
+fn len_rejects_too_short() {
+    let err = parse_str::<LenValidation>(r#"ln val="a""#).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not in range"), "got: {msg}");
+}
+
+#[test]
+fn len_rejects_too_long() {
+    let err = parse_str::<LenValidation>(r#"ln val="abcdef""#).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not in range"), "got: {msg}");
+}
+
+// ==========================================================================
+// min_chars / max_chars / chars validation (character count, not byte length)
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "mc")]
+struct MinCharsValidation {
+    #[kdl(validate(min_chars = 3))]
+    val: String,
+}
+
+#[test]
+fn min_chars_passes_ascii() {
+    let cfg: MinCharsValidation = parse_str(r#"mc val="abc""#).unwrap();
+    assert_eq!(cfg.val, "abc");
+}
+
+#[test]
+fn min_chars_rejects_too_few() {
+    let err = parse_str::<MinCharsValidation>(r#"mc val="ab""#).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("character count"), "got: {msg}");
+}
+
+#[test]
+fn min_chars_counts_unicode_chars_not_bytes() {
+    // "héllo" is 5 chars but 6 bytes (é = 2 bytes in UTF-8)
+    let cfg: MinCharsValidation = parse_str(r#"mc val="héllo""#).unwrap();
+    assert_eq!(cfg.val, "héllo");
+}
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "xc")]
+struct MaxCharsValidation {
+    #[kdl(validate(max_chars = 3))]
+    val: String,
+}
+
+#[test]
+fn max_chars_passes() {
+    let cfg: MaxCharsValidation = parse_str(r#"xc val="abc""#).unwrap();
+    assert_eq!(cfg.val, "abc");
+}
+
+#[test]
+fn max_chars_rejects_too_many() {
+    let err = parse_str::<MaxCharsValidation>(r#"xc val="abcd""#).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("character count"), "got: {msg}");
+}
+
+#[test]
+fn max_chars_counts_unicode_chars_not_bytes() {
+    // "é" is 1 char but 2 bytes — should pass max_chars = 3
+    let cfg: MaxCharsValidation = parse_str(r#"xc val="éàü""#).unwrap();
+    assert_eq!(cfg.val, "éàü");
+}
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "cc")]
+struct CharsRangeValidation {
+    #[kdl(validate(chars(2, 5)))]
+    val: String,
+}
+
+#[test]
+fn chars_range_passes() {
+    let cfg: CharsRangeValidation = parse_str(r#"cc val="abc""#).unwrap();
+    assert_eq!(cfg.val, "abc");
+}
+
+#[test]
+fn chars_range_rejects_below() {
+    let err = parse_str::<CharsRangeValidation>(r#"cc val="a""#).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("character count"), "got: {msg}");
+}
+
+#[test]
+fn chars_range_rejects_above() {
+    let err = parse_str::<CharsRangeValidation>(r#"cc val="abcdef""#).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("character count"), "got: {msg}");
+}
+
+// ==========================================================================
+// ascii validation
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "asc")]
+struct AsciiValidation {
+    #[kdl(validate(ascii))]
+    val: String,
+}
+
+#[test]
+fn ascii_passes() {
+    let cfg: AsciiValidation = parse_str(r#"asc val="hello""#).unwrap();
+    assert_eq!(cfg.val, "hello");
+}
+
+#[test]
+fn ascii_rejects_unicode() {
+    let err = parse_str::<AsciiValidation>(r#"asc val="héllo""#).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("ASCII"), "got: {msg}");
+}
+
+// ==========================================================================
+// alphanumeric validation
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "alnum")]
+struct AlphanumericValidation {
+    #[kdl(validate(alphanumeric))]
+    val: String,
+}
+
+#[test]
+fn alphanumeric_passes() {
+    let cfg: AlphanumericValidation = parse_str(r#"alnum val="abc123""#).unwrap();
+    assert_eq!(cfg.val, "abc123");
+}
+
+#[test]
+fn alphanumeric_rejects_punctuation() {
+    let err = parse_str::<AlphanumericValidation>(r#"alnum val="abc-123""#).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("alphanumeric"), "got: {msg}");
+}
+
+// ==========================================================================
+// Cross-field: lte, gt, gte, eq, neq
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "cflte")]
+struct LteValidation {
+    #[kdl(validate(less_than_or_equal = "b"))]
+    a: f64,
+    b: f64,
+}
+
+#[test]
+fn lte_passes_equal() {
+    let cfg: LteValidation = parse_str("cflte a=5.0 b=5.0").unwrap();
+    assert_eq!(cfg.a, 5.0);
+}
+
+#[test]
+fn lte_passes_less() {
+    let cfg: LteValidation = parse_str("cflte a=3.0 b=5.0").unwrap();
+    assert_eq!(cfg.a, 3.0);
+}
+
+#[test]
+fn lte_rejects_greater() {
+    let err = parse_str::<LteValidation>("cflte a=6.0 b=5.0").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("less than or equal"), "got: {msg}");
+}
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "cfgt")]
+struct GtValidation {
+    #[kdl(validate(greater_than = "b"))]
+    a: f64,
+    b: f64,
+}
+
+#[test]
+fn gt_passes() {
+    let cfg: GtValidation = parse_str("cfgt a=5.0 b=3.0").unwrap();
+    assert_eq!(cfg.a, 5.0);
+}
+
+#[test]
+fn gt_rejects_equal() {
+    let err = parse_str::<GtValidation>("cfgt a=5.0 b=5.0").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("greater than"), "got: {msg}");
+}
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "gte")]
+struct GteValidation {
+    #[kdl(validate(greater_than_or_equal = "b"))]
+    a: f64,
+    b: f64,
+}
+
+#[test]
+fn gte_passes_equal() {
+    let cfg: GteValidation = parse_str("gte a=5.0 b=5.0").unwrap();
+    assert_eq!(cfg.a, 5.0);
+}
+
+#[test]
+fn gte_rejects_less() {
+    let err = parse_str::<GteValidation>("gte a=3.0 b=5.0").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("greater than or equal"), "got: {msg}");
+}
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "eqn")]
+struct EqNeqValidation {
+    #[kdl(validate(equal_to = "b"))]
+    a: f64,
+    #[kdl(validate(not_equal_to = "a"))]
+    c: f64,
+    b: f64,
+}
+
+#[test]
+fn eq_passes() {
+    let cfg: EqNeqValidation = parse_str("eqn a=5.0 b=5.0 c=3.0").unwrap();
+    assert_eq!(cfg.a, 5.0);
+}
+
+#[test]
+fn eq_rejects_different() {
+    let err = parse_str::<EqNeqValidation>("eqn a=5.0 b=6.0 c=3.0").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("must equal"), "got: {msg}");
+}
+
+#[test]
+fn neq_passes() {
+    let cfg: EqNeqValidation = parse_str("eqn a=5.0 b=5.0 c=3.0").unwrap();
+    assert_eq!(cfg.c, 3.0);
+}
+
+#[test]
+fn neq_rejects_equal() {
+    let err = parse_str::<EqNeqValidation>("eqn a=5.0 b=5.0 c=5.0").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("must not equal"), "got: {msg}");
+}
+
+// ==========================================================================
+// pattern validation (runtime with regex feature)
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "pat")]
+struct PatternValidation {
+    #[kdl(validate(pattern = "^[a-z]+$"))]
+    val: String,
+}
+
+#[test]
+fn pattern_passes() {
+    let cfg: PatternValidation = parse_str(r#"pat val="hello""#).unwrap();
+    assert_eq!(cfg.val, "hello");
+}
+
+#[test]
+fn pattern_rejects() {
+    let err = parse_str::<PatternValidation>(r#"pat val="Hello123""#).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("does not match pattern"), "got: {msg}");
+}
+
+// ==========================================================================
+// Boundary value tests
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "bnd")]
+struct BoundaryValidation {
+    #[kdl(validate(min = 5, max = 10))]
+    val: i32,
+}
+
+#[test]
+fn boundary_min_passes() {
+    let cfg: BoundaryValidation = parse_str("bnd val=5").unwrap();
+    assert_eq!(cfg.val, 5);
+}
+
+#[test]
+fn boundary_max_passes() {
+    let cfg: BoundaryValidation = parse_str("bnd val=10").unwrap();
+    assert_eq!(cfg.val, 10);
+}
+
+#[test]
+fn boundary_below_min_fails() {
+    let err = parse_str::<BoundaryValidation>("bnd val=4").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("less than minimum"), "got: {msg}");
+}
+
+#[test]
+fn boundary_above_max_fails() {
+    let err = parse_str::<BoundaryValidation>("bnd val=11").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("exceeds maximum"), "got: {msg}");
+}
+
+// ==========================================================================
+// Improved error message format
+// ==========================================================================
+
+#[test]
+fn error_message_uses_rule_display_not_debug() {
+    let err = parse_str::<BoundaryValidation>("bnd val=4").unwrap_err();
+    let msg = err.to_string();
+    // Should contain the Display form "min(5)", not the Debug form "Min(5.0)"
+    assert!(msg.contains("min(5)"), "expected rule display form, got: {msg}");
+    assert!(!msg.contains("Min(5.0)"), "should not contain Debug form, got: {msg}");
+}

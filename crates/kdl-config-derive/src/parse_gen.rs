@@ -132,6 +132,7 @@ pub fn generate_parse_impl(
                     let struct_overrides = #struct_overrides;
                     let struct_config = ::kdl_config::resolve_struct(ctx.config, struct_overrides);
                     let mut claims = ::kdl_config::helpers::Claims::new();
+                    let mut __kdl_validation_errors: Vec<::kdl_config::KdlConfigError> = Vec::new();
 
                     #(#field_parsers)*
                     #(#skip_marks)*
@@ -141,6 +142,11 @@ pub fn generate_parse_impl(
                     }
 
                     #cross_field_validations
+
+                    // Flush collected validation errors before constructing the struct.
+                    if let Some(err) = ::kdl_config::KdlConfigError::from_validation_errors(#struct_name_str, __kdl_validation_errors) {
+                        return Err(err);
+                    }
 
                     let mut __kdl_value = Self {
                         #(#field_names,)*
@@ -309,6 +315,10 @@ fn generate_field_overrides(field: &FieldInfo) -> TokenStream {
         Some(ConflictPolicy::First) => quote! { Some(::kdl_config::ConflictPolicy::First) },
         Some(ConflictPolicy::Last) => quote! { Some(::kdl_config::ConflictPolicy::Last) },
         Some(ConflictPolicy::Append) => {
+            quote! { Some(::kdl_config::ConflictPolicy::Append) }
+        }
+        None if field.is_vec || field.is_option_vec => {
+            // Vec fields default to append — erroring on multiple sources is rarely useful
             quote! { Some(::kdl_config::ConflictPolicy::Append) }
         }
         None => quote! { None },
@@ -680,6 +690,13 @@ fn generate_value_scalar_parser(
     } else {
         ty
     };
+    // When from/try_from is set, parse as the intermediate type.
+    // Shadow value_ty so all convert_value_checked calls use the intermediate type.
+    let field_value_ty = value_ty;
+    let value_ty: &syn::Type = match &field.from_type {
+        Some(ft) => ft,
+        None => field_value_ty,
+    };
     let attr_values_ident = format_ident!("__kdl_attr_values_{}", field_ident);
     let attr_value_ident = format_ident!("__kdl_attr_value_{}", field_ident);
     let arg_value_ident = format_ident!("__kdl_arg_value_{}", field_ident);
@@ -720,13 +737,29 @@ fn generate_value_scalar_parser(
 
     let default_expr = generate_missing_expr(
         field,
-        value_ty,
+        field_value_ty,
         struct_name,
         &field_name,
         kdl_key,
         false,
         quote! { ::kdl_config::Placement::Unknown },
     );
+    // Generate from/try_from conversion step (intermediate → field type)
+    let from_conversion = if field.from_type.is_some() {
+        if field.from_is_try {
+            quote! {
+                let val = <#field_value_ty>::try_from(val).map_err(|e| {
+                    ::kdl_config::KdlConfigError::custom(#struct_name, ::std::string::ToString::to_string(&e))
+                })?;
+            }
+        } else {
+            quote! {
+                let val = <#field_value_ty>::from(val);
+            }
+        }
+    } else {
+        quote! {}
+    };
     let finalize_value = if is_optional {
         quote! { Some(val) }
     } else {
@@ -1255,6 +1288,7 @@ fn generate_value_scalar_parser(
                         claims.claim_child(idx);
                     }
                 }
+                #from_conversion
                 let val = val;
                 #finalize_value
             } else {
@@ -1279,7 +1313,12 @@ fn generate_value_vec_parser(
     } else {
         field.inner_type().unwrap()
     };
-    let elem_ty = extract_inner_type(inner_vec_ty).unwrap_or(inner_vec_ty);
+    let field_elem_ty = extract_inner_type(inner_vec_ty).unwrap_or(inner_vec_ty);
+    // When from/try_from is set, parse elements as the intermediate type
+    let elem_ty: &syn::Type = match &field.from_type {
+        Some(ft) => ft,
+        None => field_elem_ty,
+    };
     let attr_values_ident = format_ident!("__kdl_attr_values_{}", field_ident);
     let attr_value_ident = format_ident!("__kdl_attr_value_{}", field_ident);
     let arg_value_ident = format_ident!("__kdl_arg_value_{}", field_ident);
@@ -1310,6 +1349,24 @@ fn generate_value_vec_parser(
         quote! { Some(val) }
     } else {
         quote! { val }
+    };
+    // Generate from/try_from conversion step for vec elements
+    let vec_from_conversion = if field.from_type.is_some() {
+        if field.from_is_try {
+            quote! {
+                let val: Vec<#field_elem_ty> = val.into_iter().map(|v| {
+                    <#field_elem_ty>::try_from(v).map_err(|e| {
+                        ::kdl_config::KdlConfigError::custom(#struct_name, ::std::string::ToString::to_string(&e))
+                    })
+                }).collect::<::core::result::Result<Vec<_>, _>>()?;
+            }
+        } else {
+            quote! {
+                let val: Vec<#field_elem_ty> = val.into_iter().map(<#field_elem_ty>::from).collect();
+            }
+        }
+    } else {
+        quote! {}
     };
 
     let parent_claims = path_parent_claims(field);
@@ -1479,6 +1536,7 @@ fn generate_value_vec_parser(
             #scan_block
 
             let #field_ident: #ty = if let Some(val) = #field_ident {
+                #vec_from_conversion
                 #finalize_value
             } else {
                 #default_expr
@@ -3054,7 +3112,8 @@ fn generate_field_validation(
                 #struct_name,
                 #field_name,
                 #kdl_key,
-            )?;
+                &mut __kdl_validation_errors,
+            );
         });
     }
 
@@ -3071,7 +3130,8 @@ fn generate_field_validation(
                         #struct_name,
                         #field_name,
                         #kdl_key,
-                    )?;
+                        &mut __kdl_validation_errors,
+                    );
                 });
             }
             _ => {
@@ -3086,17 +3146,24 @@ fn generate_field_validation(
     // Func validations
     for v in &func_rules {
         if let ValidationRule::Func(path_str) = v {
-            let func_path: syn::Path =
-                syn::parse_str(path_str).expect("invalid function path in validate(func(...))");
-            blocks.push(quote! {
-                ::kdl_config::run_func_validation(
-                    &#field_ident,
-                    #func_path,
-                    #struct_name,
-                    #field_name,
-                    #kdl_key,
-                )?;
-            });
+            match syn::parse_str::<syn::Path>(path_str) {
+                Ok(func_path) => {
+                    blocks.push(quote! {
+                        ::kdl_config::run_func_validation(
+                            &#field_ident,
+                            #func_path,
+                            #struct_name,
+                            #field_name,
+                            #kdl_key,
+                            &mut __kdl_validation_errors,
+                        );
+                    });
+                }
+                Err(e) => {
+                    let msg = format!("invalid function path in validate(func(...)): {e}");
+                    blocks.push(quote! { compile_error!(#msg); });
+                }
+            }
         }
     }
 
@@ -3113,13 +3180,20 @@ fn generate_struct_validations(struct_attrs: &StructAttrs, struct_name: &str) ->
 
     for v in &struct_attrs.validations {
         if let ValidationRule::Func(path_str) = v {
-            let func_path: syn::Path =
-                syn::parse_str(path_str).expect("invalid function path in struct-level validate");
-            blocks.push(quote! {
-                if let Err(msg) = #func_path(&__kdl_value) {
-                    return Err(::kdl_config::KdlConfigError::custom(#struct_name, msg));
+            match syn::parse_str::<syn::Path>(path_str) {
+                Ok(func_path) => {
+                    blocks.push(quote! {
+                        if let Err(msg) = #func_path(&__kdl_value) {
+                            return Err(::kdl_config::KdlConfigError::custom(#struct_name, msg));
+                        }
+                    });
                 }
-            });
+                Err(e) => {
+                    let msg =
+                        format!("invalid function path in struct-level validate(func(...)): {e}");
+                    blocks.push(quote! { compile_error!(#msg); });
+                }
+            }
         }
     }
 
@@ -3135,8 +3209,13 @@ fn generate_post_decode_hook(struct_attrs: &StructAttrs, struct_name: &str) -> T
         return quote! {};
     };
 
-    let func_path: syn::Path =
-        syn::parse_str(path_str).expect("invalid function path in post_decode hook");
+    let func_path: syn::Path = match syn::parse_str(path_str) {
+        Ok(p) => p,
+        Err(e) => {
+            let msg = format!("invalid function path in post_decode hook: {e}");
+            return quote! { compile_error!(#msg); };
+        }
+    };
 
     quote! {
         if let Err(msg) = #func_path(&mut __kdl_value) {
@@ -3190,7 +3269,8 @@ fn generate_cross_field_validations(fields: &[FieldInfo], struct_name: &str) -> 
                                 #struct_name,
                                 #field_name,
                                 #kdl_key,
-                            )?;
+                                &mut __kdl_validation_errors,
+                            );
                         }
                     }
                     ValidationRule::SubsetOf(_) => {
@@ -3202,7 +3282,8 @@ fn generate_cross_field_validations(fields: &[FieldInfo], struct_name: &str) -> 
                                 #struct_name,
                                 #field_name,
                                 #kdl_key,
-                            )?;
+                                &mut __kdl_validation_errors,
+                            );
                         }
                     }
                     _ => {
@@ -3214,7 +3295,8 @@ fn generate_cross_field_validations(fields: &[FieldInfo], struct_name: &str) -> 
                                 #struct_name,
                                 #field_name,
                                 #kdl_key,
-                            )?;
+                                &mut __kdl_validation_errors,
+                            );
                         }
                     }
                 };

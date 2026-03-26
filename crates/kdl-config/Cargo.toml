@@ -8,13 +8,15 @@
     description          = "Runtime library for kdl-config, providing trait definitions and parsing logic."
 
 [features]
-    default = []
+    default = ["regex"]
     serde   = ["dep:serde"]
+    regex   = ["dep:regex"]
 
 [dependencies]
     kdl                         = { workspace = true, features = ["span"] }
     kdl-config-derive.workspace = true
     num-traits                  = "0.2.19"
+    regex                       = { version = "1", optional = true }
     serde                       = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]

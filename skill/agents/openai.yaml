@@ -1,0 +1,4 @@
+interface:
+  display_name: "KDL Config Design"
+  short_description: "First-principles, spec-safe KDL config"
+  default_prompt: "Use $design-kdl-config to design or review KDL configuration using the bundled spec and the first-principles style guide, including canonical node shapes, grouping, selectors, fragments, validation, and rendering."

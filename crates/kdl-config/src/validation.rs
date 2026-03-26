@@ -27,7 +27,7 @@ macro_rules! impl_kdl_validate_numeric {
     };
 }
 
-impl_kdl_validate_numeric!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, isize, usize);
+impl_kdl_validate_numeric!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f32, f64, isize, usize);
 
 // --- String implementations ---
 
@@ -128,7 +128,7 @@ macro_rules! impl_as_f64 {
     };
 }
 
-impl_as_f64!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, isize, usize);
+impl_as_f64!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f32, f64, isize, usize);
 
 // ---------------------------------------------------------------------------
 // Relational cross-field helpers (exists_in / subset_of)
@@ -192,25 +192,25 @@ impl<K: Eq + Hash, V1, V2> KdlSubsetOf<HashMap<K, V2>> for HashMap<K, V1> {
     }
 }
 
-pub fn run_exists_in_validation<T, C: KdlContains<T>>(
+pub fn run_exists_in_validation<T: std::fmt::Display, C: KdlContains<T>>(
     value: &T,
     collection: &C,
     other_field: &str,
     struct_name: &str,
     field_name: &str,
     kdl_key: &str,
-) -> Result<(), KdlConfigError> {
+    errors: &mut Vec<KdlConfigError>,
+) {
     if !collection.kdl_contains(value) {
-        return Err(KdlConfigError::invalid_value(
+        errors.push(KdlConfigError::invalid_value(
             struct_name,
             field_name,
             kdl_key,
             Placement::Unknown,
-            "(value)",
+            format!("{}", value),
             format!("value must exist in '{}'", other_field),
         ));
     }
-    Ok(())
 }
 
 pub fn run_subset_of_validation<T, U: KdlSubsetOf<T>>(
@@ -220,18 +220,18 @@ pub fn run_subset_of_validation<T, U: KdlSubsetOf<T>>(
     struct_name: &str,
     field_name: &str,
     kdl_key: &str,
-) -> Result<(), KdlConfigError> {
+    errors: &mut Vec<KdlConfigError>,
+) {
     if !value.kdl_subset_of(other) {
-        return Err(KdlConfigError::invalid_value(
+        errors.push(KdlConfigError::invalid_value(
             struct_name,
             field_name,
             kdl_key,
             Placement::Unknown,
-            "(collection)",
-            format!("value must be a subset of '{}'", other_field),
+            format!("subset_of(\"{}\")", other_field),
+            format!("collection must be a subset of '{}'", other_field),
         ));
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +244,8 @@ pub fn run_field_validations<T: KdlValidate>(
     struct_name: &str,
     field_name: &str,
     kdl_key: &str,
-) -> Result<(), KdlConfigError> {
+    errors: &mut Vec<KdlConfigError>,
+) {
     for v in validations {
         // Skip cross-field validators — handled separately.
         if v.cross_field_ref().is_some() {
@@ -255,17 +256,16 @@ pub fn run_field_validations<T: KdlValidate>(
             continue;
         }
         if let Err(msg) = value.kdl_validate(v) {
-            return Err(KdlConfigError::invalid_value(
+            errors.push(KdlConfigError::invalid_value(
                 struct_name,
                 field_name,
                 kdl_key,
                 Placement::Unknown,
-                format!("{:?}", v),
+                format!("{}", v),
                 msg,
             ));
         }
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -278,11 +278,12 @@ pub fn run_count_validations<T: KdlValidateCount>(
     struct_name: &str,
     field_name: &str,
     kdl_key: &str,
-) -> Result<(), KdlConfigError> {
+    errors: &mut Vec<KdlConfigError>,
+) {
     let count = value.count();
     for v in validations {
         if let Err(msg) = v.validate_count(count) {
-            return Err(KdlConfigError::invalid_value(
+            errors.push(KdlConfigError::invalid_value(
                 struct_name,
                 field_name,
                 kdl_key,
@@ -292,7 +293,6 @@ pub fn run_count_validations<T: KdlValidateCount>(
             ));
         }
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -305,9 +305,10 @@ pub fn run_func_validation<T, F: Fn(&T) -> Result<(), String>>(
     struct_name: &str,
     field_name: &str,
     kdl_key: &str,
-) -> Result<(), KdlConfigError> {
+    errors: &mut Vec<KdlConfigError>,
+) {
     if let Err(msg) = func(value) {
-        return Err(KdlConfigError::invalid_value(
+        errors.push(KdlConfigError::invalid_value(
             struct_name,
             field_name,
             kdl_key,
@@ -316,7 +317,6 @@ pub fn run_func_validation<T, F: Fn(&T) -> Result<(), String>>(
             msg,
         ));
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -330,13 +330,14 @@ pub fn run_cross_field_validation(
     struct_name: &str,
     field_name: &str,
     kdl_key: &str,
-) -> Result<(), KdlConfigError> {
+    errors: &mut Vec<KdlConfigError>,
+) {
     let other_field = validation
         .cross_field_ref()
         .expect("run_cross_field_validation called with non-cross-field validation");
 
     if let Err(msg) = validation.validate_cross_field(value, other_field, other_value) {
-        return Err(KdlConfigError::invalid_value(
+        errors.push(KdlConfigError::invalid_value(
             struct_name,
             field_name,
             kdl_key,
@@ -345,5 +346,4 @@ pub fn run_cross_field_validation(
             msg,
         ));
     }
-    Ok(())
 }

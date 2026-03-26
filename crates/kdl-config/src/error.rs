@@ -138,6 +138,8 @@ pub enum ErrorKind {
     },
     Custom(String),
     Parse(String),
+    /// Multiple validation errors collected from a single decode.
+    Multiple(Vec<KdlConfigError>),
 }
 
 impl fmt::Display for ErrorKind {
@@ -206,6 +208,13 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::Custom(msg) => write!(f, "{msg}"),
             ErrorKind::Parse(msg) => write!(f, "parse error: {msg}"),
+            ErrorKind::Multiple(errors) => {
+                write!(f, "{} validation errors:", errors.len())?;
+                for (i, e) in errors.iter().enumerate() {
+                    write!(f, "\n  [{}] {}", i + 1, e)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -595,6 +604,29 @@ impl KdlConfigError {
             kind: ErrorKind::Custom(message.into()),
             node_path: None,
             location: None,
+        }
+    }
+
+    /// Wrap multiple validation errors into a single error.
+    /// If there is exactly one error, returns it directly.
+    /// If there are no errors, returns None.
+    pub fn from_validation_errors(
+        struct_name: impl Into<String>,
+        errors: Vec<KdlConfigError>,
+    ) -> Option<Self> {
+        match errors.len() {
+            0 => None,
+            1 => Some(errors.into_iter().next().unwrap()),
+            _ => Some(Self {
+                struct_name: struct_name.into(),
+                field_name: None,
+                kdl_key: None,
+                placement: Placement::Unknown,
+                required: false,
+                kind: ErrorKind::Multiple(errors),
+                node_path: None,
+                location: None,
+            }),
         }
     }
 }

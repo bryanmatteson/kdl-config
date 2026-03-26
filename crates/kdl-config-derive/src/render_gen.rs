@@ -7,6 +7,15 @@ use crate::attrs::{
     StructAttrs, field_kind,
 };
 
+/// Generate a `Value::from(...)` expression, optionally converting through an intermediate type.
+fn value_from_expr(field: &FieldInfo, value_expr: TokenStream) -> TokenStream {
+    if let Some(from_ty) = &field.from_type {
+        quote! { ::kdl_config::Value::from(<#from_ty>::from(#value_expr)) }
+    } else {
+        quote! { ::kdl_config::Value::from(#value_expr) }
+    }
+}
+
 pub(crate) struct FieldAccessor {
     pub(crate) value: TokenStream,
     pub(crate) reference: TokenStream,
@@ -445,15 +454,17 @@ fn render_positional_fields(
 
         let render_body = if field.is_optional {
             let reference = &access.reference;
+            let val_expr = value_from_expr(field, quote! { value.clone() });
             quote! {
                 if let Some(value) = #reference {
-                    renderer.positional_raw(#idx, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
+                    renderer.positional_raw(#idx, ::kdl_config::render_value(&#val_expr));
                 }
             }
         } else {
             let value = &access.value;
+            let val_expr = value_from_expr(field, quote! { #value.clone() });
             quote! {
-                renderer.positional_raw(#idx, ::kdl_config::render_value(&::kdl_config::Value::from(#value.clone())));
+                renderer.positional_raw(#idx, ::kdl_config::render_value(&#val_expr));
             }
         };
 
@@ -477,18 +488,20 @@ fn render_positional_list_fields(
 
         let render_body = if field.is_option_vec {
             let reference = &access.reference;
+            let val_expr = value_from_expr(field, quote! { value.clone() });
             quote! {
                 if let Some(values) = #reference {
                     for (idx, value) in values.iter().enumerate() {
-                        renderer.positional_raw(idx, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
+                        renderer.positional_raw(idx, ::kdl_config::render_value(&#val_expr));
                     }
                 }
             }
         } else {
             let reference = &access.reference;
+            let val_expr = value_from_expr(field, quote! { value.clone() });
             quote! {
                 for (idx, value) in (#reference).iter().enumerate() {
-                    renderer.positional_raw(idx, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
+                    renderer.positional_raw(idx, ::kdl_config::render_value(&#val_expr));
                 }
             }
         };
@@ -512,13 +525,14 @@ fn render_keyed_fields(
         let key = &field.kdl_key;
         let cond = render_condition(field, &access);
 
+        let val_expr = value_from_expr(field, quote! { value.clone() });
         let render_body = if field.is_vec || field.is_option_vec {
             if field.is_option_vec {
                 let reference = &access.reference;
                 quote! {
                     if let Some(values) = #reference {
                         for value in values {
-                            renderer.keyed_raw(#key, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
+                            renderer.keyed_raw(#key, ::kdl_config::render_value(&#val_expr));
                         }
                     }
                 }
@@ -526,7 +540,7 @@ fn render_keyed_fields(
                 let reference = &access.reference;
                 quote! {
                     for value in #reference {
-                        renderer.keyed_raw(#key, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
+                        renderer.keyed_raw(#key, ::kdl_config::render_value(&#val_expr));
                     }
                 }
             }
@@ -534,13 +548,14 @@ fn render_keyed_fields(
             let reference = &access.reference;
             quote! {
                 if let Some(value) = #reference {
-                    renderer.keyed_raw(#key, ::kdl_config::render_value(&::kdl_config::Value::from(value.clone())));
+                    renderer.keyed_raw(#key, ::kdl_config::render_value(&#val_expr));
                 }
             }
         } else {
             let value = &access.value;
+            let owned_val_expr = value_from_expr(field, quote! { #value.clone() });
             quote! {
-                renderer.keyed_raw(#key, ::kdl_config::render_value(&::kdl_config::Value::from(#value.clone())));
+                renderer.keyed_raw(#key, ::kdl_config::render_value(&#owned_val_expr));
             }
         };
 
@@ -664,12 +679,18 @@ fn render_value_fields(
         let bool_mode_tokens = bool_mode_tokens(bool_mode);
 
         let render_body = if field.is_vec || field.is_option_vec {
+            let map_fn = if field.from_type.is_some() {
+                let from_ty = field.from_type.as_ref().unwrap();
+                quote! { |v| ::kdl_config::Value::from(<#from_ty>::from(v)) }
+            } else {
+                quote! { ::kdl_config::Value::from }
+            };
             if field.is_option_vec {
                 let reference = &access.reference;
                 quote! {
                     if let Some(values) = #reference {
                         if !values.is_empty() {
-                            let rendered = ::kdl_config::render_value_node(#key, &values.iter().cloned().map(::kdl_config::Value::from).collect::<::std::vec::Vec<_>>());
+                            let rendered = ::kdl_config::render_value_node(#key, &values.iter().cloned().map(#map_fn).collect::<::std::vec::Vec<_>>());
                             value_nodes.push((#key.to_string(), idx, rendered));
                             idx += 1;
                         }
@@ -679,7 +700,7 @@ fn render_value_fields(
                 let reference = &access.reference;
                 quote! {
                     if !(#reference).is_empty() {
-                        let rendered = ::kdl_config::render_value_node(#key, &(#reference).iter().cloned().map(::kdl_config::Value::from).collect::<::std::vec::Vec<_>>());
+                        let rendered = ::kdl_config::render_value_node(#key, &(#reference).iter().cloned().map(#map_fn).collect::<::std::vec::Vec<_>>());
                         value_nodes.push((#key.to_string(), idx, rendered));
                         idx += 1;
                     }
@@ -727,17 +748,19 @@ fn render_value_fields(
             }
         } else if field.is_optional {
             let reference = &access.reference;
+            let val_expr = value_from_expr(field, quote! { value.clone() });
             quote! {
                 if let Some(value) = #reference {
-                    let rendered = ::kdl_config::render_value_node_scalar(#key, &::kdl_config::Value::from(value.clone()));
+                    let rendered = ::kdl_config::render_value_node_scalar(#key, &#val_expr);
                     value_nodes.push((#key.to_string(), idx, rendered));
                     idx += 1;
                 }
             }
         } else {
             let value = &access.value;
+            let val_expr = value_from_expr(field, quote! { #value.clone() });
             quote! {
-                let rendered = ::kdl_config::render_value_node_scalar(#key, &::kdl_config::Value::from(#value.clone()));
+                let rendered = ::kdl_config::render_value_node_scalar(#key, &#val_expr);
                 value_nodes.push((#key.to_string(), idx, rendered));
                 idx += 1;
             }
@@ -1096,15 +1119,17 @@ fn render_positional_fields_node(
 
         let render_body = if field.is_optional {
             let reference = &access.reference;
+            let val_expr = value_from_expr(field, quote! { value.clone() });
             quote! {
                 if let Some(value) = #reference {
-                    positional_args.push((#index, ::kdl_config::Value::from(value.clone()), None));
+                    positional_args.push((#index, #val_expr, None));
                 }
             }
         } else {
             let value = &access.value;
+            let val_expr = value_from_expr(field, quote! { #value.clone() });
             quote! {
-                positional_args.push((#index, ::kdl_config::Value::from(#value.clone()), None));
+                positional_args.push((#index, #val_expr, None));
             }
         };
 
@@ -1125,13 +1150,14 @@ fn render_positional_list_fields_node(
     for field in fields {
         let access = accessor(field);
         let cond = render_condition(field, &access);
+        let val_expr = value_from_expr(field, quote! { value.clone() });
 
         let render_body = if field.is_option_vec {
             let reference = &access.reference;
             quote! {
                 if let Some(values) = #reference {
                     for (idx, value) in values.iter().enumerate() {
-                        positional_args.push((idx, ::kdl_config::Value::from(value.clone()), None));
+                        positional_args.push((idx, #val_expr, None));
                     }
                 }
             }
@@ -1139,7 +1165,7 @@ fn render_positional_list_fields_node(
             let reference = &access.reference;
             quote! {
                 for (idx, value) in (#reference).iter().enumerate() {
-                    positional_args.push((idx, ::kdl_config::Value::from(value.clone()), None));
+                    positional_args.push((idx, #val_expr, None));
                 }
             }
         };
@@ -1162,6 +1188,7 @@ fn render_keyed_fields_node(
         let access = accessor(field);
         let key = &field.kdl_key;
         let cond = render_condition(field, &access);
+        let val_expr = value_from_expr(field, quote! { value.clone() });
 
         let render_body = if field.is_vec || field.is_option_vec {
             if field.is_option_vec {
@@ -1169,7 +1196,7 @@ fn render_keyed_fields_node(
                 quote! {
                     if let Some(values) = #reference {
                         for value in values {
-                            node.set_attr(#key, ::kdl_config::Value::from(value.clone()));
+                            node.set_attr(#key, #val_expr);
                         }
                     }
                 }
@@ -1177,7 +1204,7 @@ fn render_keyed_fields_node(
                 let reference = &access.reference;
                 quote! {
                     for value in #reference {
-                        node.set_attr(#key, ::kdl_config::Value::from(value.clone()));
+                        node.set_attr(#key, #val_expr);
                     }
                 }
             }
@@ -1185,13 +1212,14 @@ fn render_keyed_fields_node(
             let reference = &access.reference;
             quote! {
                 if let Some(value) = #reference {
-                    node.set_attr(#key, ::kdl_config::Value::from(value.clone()));
+                    node.set_attr(#key, #val_expr);
                 }
             }
         } else {
             let value = &access.value;
+            let owned_val_expr = value_from_expr(field, quote! { #value.clone() });
             quote! {
-                node.set_attr(#key, ::kdl_config::Value::from(#value.clone()));
+                node.set_attr(#key, #owned_val_expr);
             }
         };
 
@@ -1315,12 +1343,18 @@ fn render_value_fields_node(
         let bool_mode_tokens = bool_mode_tokens(bool_mode);
 
         let render_body = if field.is_vec || field.is_option_vec {
+            let map_fn = if field.from_type.is_some() {
+                let from_ty = field.from_type.as_ref().unwrap();
+                quote! { |v| ::kdl_config::Value::from(<#from_ty>::from(v)) }
+            } else {
+                quote! { ::kdl_config::Value::from }
+            };
             if field.is_option_vec {
                 let reference = &access.reference;
                 quote! {
                     if let Some(values) = #reference {
                         if !values.is_empty() {
-                            let node_values = values.iter().cloned().map(::kdl_config::Value::from).collect::<::std::vec::Vec<_>>();
+                            let node_values = values.iter().cloned().map(#map_fn).collect::<::std::vec::Vec<_>>();
                             let node = ::kdl_config::value_node(#key, &node_values);
                             value_nodes.push((#key.to_string(), idx, node));
                             idx += 1;
@@ -1331,7 +1365,7 @@ fn render_value_fields_node(
                 let reference = &access.reference;
                 quote! {
                     if !(#reference).is_empty() {
-                        let node_values = (#reference).iter().cloned().map(::kdl_config::Value::from).collect::<::std::vec::Vec<_>>();
+                        let node_values = (#reference).iter().cloned().map(#map_fn).collect::<::std::vec::Vec<_>>();
                         let node = ::kdl_config::value_node(#key, &node_values);
                         value_nodes.push((#key.to_string(), idx, node));
                         idx += 1;
@@ -1380,17 +1414,19 @@ fn render_value_fields_node(
             }
         } else if field.is_optional {
             let reference = &access.reference;
+            let val_expr = value_from_expr(field, quote! { value.clone() });
             quote! {
                 if let Some(value) = #reference {
-                    let node = ::kdl_config::value_node(#key, &[::kdl_config::Value::from(value.clone())]);
+                    let node = ::kdl_config::value_node(#key, &[#val_expr]);
                     value_nodes.push((#key.to_string(), idx, node));
                     idx += 1;
                 }
             }
         } else {
             let value = &access.value;
+            let val_expr = value_from_expr(field, quote! { #value.clone() });
             quote! {
-                let node = ::kdl_config::value_node(#key, &[::kdl_config::Value::from(#value.clone())]);
+                let node = ::kdl_config::value_node(#key, &[#val_expr]);
                 value_nodes.push((#key.to_string(), idx, node));
                 idx += 1;
             }

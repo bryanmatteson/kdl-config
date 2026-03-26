@@ -763,6 +763,36 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
             };
         }
 
+        // Type conversion
+        Some("from") => {
+            let value: Expr = meta.value()?.parse()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = value
+            {
+                raw.from = Some(s.value());
+            } else {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "expected string literal for `from`",
+                ));
+            }
+        }
+        Some("try_from") => {
+            let value: Expr = meta.value()?.parse()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = value
+            {
+                raw.try_from = Some(s.value());
+            } else {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "expected string literal for `try_from`",
+                ));
+            }
+        }
+
         // Validation
         Some("validate") => {
             if meta.input.peek(syn::Token![=]) {
@@ -1794,6 +1824,18 @@ fn parse_validation_rule_with_args(
                 parse_validation_usize(parts[1], span)?,
             ))
         }
+        "min_chars" => Ok(ValidationRule::MinChars(parse_validation_usize(args, span)?)),
+        "max_chars" => Ok(ValidationRule::MaxChars(parse_validation_usize(args, span)?)),
+        "chars" => {
+            let parts: Vec<&str> = args.split(',').collect();
+            if parts.len() != 2 {
+                return Err(syn::Error::new(span, "chars() requires exactly 2 arguments"));
+            }
+            Ok(ValidationRule::Chars(
+                parse_validation_usize(parts[0], span)?,
+                parse_validation_usize(parts[1], span)?,
+            ))
+        }
         "pattern" => Ok(ValidationRule::Pattern(parse_validation_string_arg(args))),
         "min_items" => Ok(ValidationRule::MinItems(parse_validation_usize(
             args, span,
@@ -1883,6 +1925,8 @@ fn parse_validation_rule_meta(
                 "multiple_of" => return Ok(ValidationRule::MultipleOf(expr_to_f64(&value)?)),
                 "min_len" => return Ok(ValidationRule::MinLen(expr_to_usize(&value)?)),
                 "max_len" => return Ok(ValidationRule::MaxLen(expr_to_usize(&value)?)),
+                "min_chars" => return Ok(ValidationRule::MinChars(expr_to_usize(&value)?)),
+                "max_chars" => return Ok(ValidationRule::MaxChars(expr_to_usize(&value)?)),
                 "min_items" => return Ok(ValidationRule::MinItems(expr_to_usize(&value)?)),
                 "max_items" => return Ok(ValidationRule::MaxItems(expr_to_usize(&value)?)),
                 "pattern" => {
@@ -2103,6 +2147,27 @@ fn parse_validation_rule_from_exprs(
                 return Err(syn::Error::new(span, "len() takes 2 arguments"));
             }
             Ok(ValidationRule::Len(
+                expr_to_usize(&args[0])?,
+                expr_to_usize(&args[1])?,
+            ))
+        }
+        "min_chars" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "min_chars() takes 1 argument"));
+            }
+            Ok(ValidationRule::MinChars(expr_to_usize(&args[0])?))
+        }
+        "max_chars" => {
+            if args.len() != 1 {
+                return Err(syn::Error::new(span, "max_chars() takes 1 argument"));
+            }
+            Ok(ValidationRule::MaxChars(expr_to_usize(&args[0])?))
+        }
+        "chars" => {
+            if args.len() != 2 {
+                return Err(syn::Error::new(span, "chars() takes 2 arguments"));
+            }
+            Ok(ValidationRule::Chars(
                 expr_to_usize(&args[0])?,
                 expr_to_usize(&args[1])?,
             ))

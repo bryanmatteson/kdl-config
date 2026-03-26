@@ -7,6 +7,15 @@ use crate::attrs::{
 };
 use crate::render_gen::FieldAccessor;
 
+/// Generate a `Value::from(...)` expression, optionally converting through an intermediate type.
+fn value_from_expr(field: &FieldInfo, value_expr: TokenStream) -> TokenStream {
+    if let Some(from_ty) = &field.from_type {
+        quote! { ::kdl_config::Value::from(<#from_ty>::from(#value_expr)) }
+    } else {
+        quote! { ::kdl_config::Value::from(#value_expr) }
+    }
+}
+
 pub fn generate_update_impl(
     struct_name: &syn::Ident,
     struct_attrs: &StructAttrs,
@@ -230,12 +239,13 @@ fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor) -> TokenStrea
     if !is_bool {
         if field.placement.positional_list {
             let reference = &access.reference;
+            let val_expr = value_from_expr(field, quote! { value.clone() });
             if field.is_option_vec {
                 return quote! {
                     if let Some(values) = #reference {
                         node.entries_mut().retain(|entry| entry.name().is_some());
                         for (idx, value) in values.iter().enumerate() {
-                            let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(value.clone()));
+                            let v = ::kdl_config::value_to_kdl(&#val_expr);
                             ::kdl_config::update_or_insert_positional(node, idx, v);
                         }
                     } else {
@@ -246,7 +256,7 @@ fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor) -> TokenStrea
             return quote! {
                 node.entries_mut().retain(|entry| entry.name().is_some());
                 for (idx, value) in (#reference).iter().enumerate() {
-                    let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(value.clone()));
+                    let v = ::kdl_config::value_to_kdl(&#val_expr);
                     ::kdl_config::update_or_insert_positional(node, idx, v);
                 }
             };
@@ -255,9 +265,10 @@ fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor) -> TokenStrea
         if let Some(positional) = field.placement.positional {
             let reference = &access.reference;
             if field.is_optional {
+                let val_expr = value_from_expr(field, quote! { value.clone() });
                 return quote! {
                     if let Some(value) = #reference {
-                        let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(value.clone()));
+                        let v = ::kdl_config::value_to_kdl(&#val_expr);
                         ::kdl_config::update_or_insert_positional(node, #positional, v);
                     } else {
                         ::kdl_config::remove_positional_entry(node, #positional);
@@ -265,8 +276,9 @@ fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor) -> TokenStrea
                 };
             }
             let value = &access.value;
+            let val_expr = value_from_expr(field, quote! { #value.clone() });
             return quote! {
-                let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(#value.clone()));
+                let v = ::kdl_config::value_to_kdl(&#val_expr);
                 ::kdl_config::update_or_insert_positional(node, #positional, v);
             };
         }
@@ -274,12 +286,13 @@ fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor) -> TokenStrea
 
     let update_keyed = if field.is_vec || field.is_option_vec {
         let reference = &access.reference;
+        let val_expr = value_from_expr(field, quote! { value.clone() });
         if field.is_option_vec {
             quote! {
                 if let Some(values) = #reference {
                     ::kdl_config::remove_attr_entries(node, #kdl_key);
                     for value in values {
-                        let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(value.clone()));
+                        let v = ::kdl_config::value_to_kdl(&#val_expr);
                         ::kdl_config::update_or_insert_attr(node, #kdl_key, v);
                     }
                 } else {
@@ -290,16 +303,17 @@ fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor) -> TokenStrea
             quote! {
                 ::kdl_config::remove_attr_entries(node, #kdl_key);
                 for value in #reference {
-                    let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(value.clone()));
+                    let v = ::kdl_config::value_to_kdl(&#val_expr);
                     ::kdl_config::update_or_insert_attr(node, #kdl_key, v);
                 }
             }
         }
     } else if field.is_optional {
         let reference = &access.reference;
+        let val_expr = value_from_expr(field, quote! { value.clone() });
         quote! {
             if let Some(value) = #reference {
-                let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(value.clone()));
+                let v = ::kdl_config::value_to_kdl(&#val_expr);
                 ::kdl_config::update_or_insert_attr(node, #kdl_key, v);
             } else {
                 ::kdl_config::remove_attr_entries(node, #kdl_key);
@@ -307,8 +321,9 @@ fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor) -> TokenStrea
         }
     } else {
         let value = &access.value;
+        let val_expr = value_from_expr(field, quote! { #value.clone() });
         quote! {
-            let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(#value.clone()));
+            let v = ::kdl_config::value_to_kdl(&#val_expr);
             ::kdl_config::update_or_insert_attr(node, #kdl_key, v);
         }
     };
@@ -406,6 +421,7 @@ fn generate_update_attr(field: &FieldInfo, access: &FieldAccessor) -> TokenStrea
 }
 
 fn generate_update_value(field: &FieldInfo, access: &FieldAccessor) -> TokenStream {
+    let val_expr_elem = value_from_expr(field, quote! { value.clone() });
     let kdl_key = &field.kdl_key;
 
     if field.is_vec || field.is_option_vec {
@@ -433,7 +449,7 @@ fn generate_update_value(field: &FieldInfo, access: &FieldAccessor) -> TokenStre
                         child.entries_mut().retain(|entry| entry.name().is_none());
                         child.entries_mut().clear();
                         for value in values {
-                            let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(value.clone()));
+                            let v = ::kdl_config::value_to_kdl(&#val_expr_elem);
                             child.entries_mut().push(::kdl_config::KdlEntry::new(v));
                         }
                     }
@@ -465,7 +481,7 @@ fn generate_update_value(field: &FieldInfo, access: &FieldAccessor) -> TokenStre
                     child.entries_mut().retain(|entry| entry.name().is_none());
                     child.entries_mut().clear();
                     for value in #reference {
-                        let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(value.clone()));
+                        let v = ::kdl_config::value_to_kdl(&#val_expr_elem);
                         child.entries_mut().push(::kdl_config::KdlEntry::new(v));
                     }
                 }
@@ -494,7 +510,7 @@ fn generate_update_value(field: &FieldInfo, access: &FieldAccessor) -> TokenStre
                 if let Some(child) = target_child {
                     child.entries_mut().retain(|entry| entry.name().is_none());
                     child.entries_mut().clear();
-                    let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(value.clone()));
+                    let v = ::kdl_config::value_to_kdl(&#val_expr_elem);
                     child.entries_mut().push(::kdl_config::KdlEntry::new(v));
                 }
             } else {
@@ -505,6 +521,7 @@ fn generate_update_value(field: &FieldInfo, access: &FieldAccessor) -> TokenStre
         }
     } else {
         let value = &access.value;
+        let val_expr_owned = value_from_expr(field, quote! { #value.clone() });
         quote! {
             let mut target_child: ::core::option::Option<&mut ::kdl_config::KdlNode> = None;
             if let Some(children) = node.children_mut() {
@@ -525,7 +542,7 @@ fn generate_update_value(field: &FieldInfo, access: &FieldAccessor) -> TokenStre
             if let Some(child) = target_child {
                 child.entries_mut().retain(|entry| entry.name().is_none());
                 child.entries_mut().clear();
-                let v = ::kdl_config::value_to_kdl(&::kdl_config::Value::from(#value.clone()));
+                let v = ::kdl_config::value_to_kdl(&#val_expr_owned);
                 child.entries_mut().push(::kdl_config::KdlEntry::new(v));
             }
         }
@@ -585,7 +602,7 @@ fn generate_update_child(
                     value.update(child, ctx)?;
                 } else {
                     let rendered = ::kdl_config::to_kdl(value, #kdl_key);
-                    let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: kdl::KdlError| {
+                    let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: ::kdl_config::kdl::KdlError| {
                         ::kdl_config::KdlConfigError::custom(#struct_name, e.to_string())
                     })?;
                     let new_node = doc.nodes()[0].clone();
@@ -612,7 +629,7 @@ fn generate_update_child(
                 #value.update(child, ctx)?;
             } else {
                 let rendered = ::kdl_config::to_kdl(#reference, #kdl_key);
-                let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: kdl::KdlError| {
+                let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: ::kdl_config::kdl::KdlError| {
                     ::kdl_config::KdlConfigError::custom(#struct_name, e.to_string())
                 })?;
                 let new_node = doc.nodes()[0].clone();
@@ -657,7 +674,7 @@ fn generate_update_children(
                         }
                     } else {
                         let rendered = ::kdl_config::to_kdl(value, #kdl_key);
-                        let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: kdl::KdlError| {
+                        let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: ::kdl_config::kdl::KdlError| {
                             ::kdl_config::KdlConfigError::custom(#struct_name, e.to_string())
                         })?;
                         let new_node = doc.nodes()[0].clone();
@@ -696,7 +713,7 @@ fn generate_update_children(
                     }
                 } else {
                     let rendered = ::kdl_config::to_kdl(value, #kdl_key);
-                    let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: kdl::KdlError| {
+                    let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: ::kdl_config::kdl::KdlError| {
                         ::kdl_config::KdlConfigError::custom(#struct_name, e.to_string())
                     })?;
                     let new_node = doc.nodes()[0].clone();
@@ -790,7 +807,7 @@ fn generate_update_collection(
 
     let insert_new = quote! {
         #insert_render
-        let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: kdl::KdlError| {
+        let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: ::kdl_config::kdl::KdlError| {
             ::kdl_config::KdlConfigError::custom(#struct_name, e.to_string())
         })?;
         let mut new_node = doc.nodes()[0].clone();

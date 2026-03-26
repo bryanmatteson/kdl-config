@@ -693,6 +693,12 @@ pub enum Validation {
     MaxLen(usize),
     /// String length range [min, max].
     Len(usize, usize),
+    /// Minimum string character count.
+    MinChars(usize),
+    /// Maximum string character count.
+    MaxChars(usize),
+    /// String character count range [min, max].
+    Chars(usize, usize),
     /// String must match regex pattern.
     Pattern(String),
     /// String must be non-empty.
@@ -729,6 +735,12 @@ pub enum Validation {
     SubsetOf(String),
 }
 
+impl std::fmt::Display for Validation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.render_inline(f)
+    }
+}
+
 impl Validation {
     fn render_inline<W: std::fmt::Write>(&self, w: &mut W) -> std::fmt::Result {
         match self {
@@ -745,6 +757,9 @@ impl Validation {
             Self::MinLen(v) => write!(w, "min_len({})", v),
             Self::MaxLen(v) => write!(w, "max_len({})", v),
             Self::Len(min, max) => write!(w, "len({}, {})", min, max),
+            Self::MinChars(v) => write!(w, "min_chars({})", v),
+            Self::MaxChars(v) => write!(w, "max_chars({})", v),
+            Self::Chars(min, max) => write!(w, "chars({}, {})", min, max),
             Self::Pattern(p) => write!(w, "pattern({:?})", p),
             Self::NonEmpty => write!(w, "non_empty"),
             Self::Ascii => write!(w, "ascii"),
@@ -791,10 +806,55 @@ impl Validation {
                     return Err(format!("length {} is not in range [{}, {}]", len, min, max));
                 }
             }
+            Self::MinChars(min) => {
+                let count = value.chars().count();
+                if count < *min {
+                    return Err(format!(
+                        "character count {} is less than minimum {}",
+                        count, min
+                    ));
+                }
+            }
+            Self::MaxChars(max) => {
+                let count = value.chars().count();
+                if count > *max {
+                    return Err(format!(
+                        "character count {} exceeds maximum {}",
+                        count, max
+                    ));
+                }
+            }
+            Self::Chars(min, max) => {
+                let count = value.chars().count();
+                if count < *min || count > *max {
+                    return Err(format!(
+                        "character count {} is not in range [{}, {}]",
+                        count, min, max
+                    ));
+                }
+            }
             Self::Pattern(pattern) => {
-                // Pattern validation is best-effort; we store the pattern for schema purposes
-                // but runtime regex matching requires the `regex` crate
-                let _ = pattern;
+                #[cfg(feature = "regex")]
+                {
+                    match regex::Regex::new(pattern) {
+                        Ok(re) => {
+                            if !re.is_match(value) {
+                                return Err(format!(
+                                    "value {:?} does not match pattern {}",
+                                    value, pattern
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            return Err(format!("invalid regex pattern {:?}: {}", pattern, e));
+                        }
+                    }
+                }
+                #[cfg(not(feature = "regex"))]
+                {
+                    // Without the `regex` feature, pattern is schema metadata only.
+                    let _ = pattern;
+                }
             }
             Self::Ascii => {
                 if !value.is_ascii() {
@@ -813,6 +873,10 @@ impl Validation {
 
     /// Validate a numeric value against this rule.
     pub fn validate_number(&self, value: f64) -> Result<(), String> {
+        // NaN fails all ordered comparisons silently — reject it early.
+        if value.is_nan() {
+            return Err("value is NaN".to_string());
+        }
         match self {
             Self::Min(min) => {
                 if value < *min {
@@ -830,7 +894,18 @@ impl Validation {
                 }
             }
             Self::MultipleOf(divisor) => {
-                if *divisor != 0.0 && (value % divisor).abs() > f64::EPSILON {
+                if !value.is_finite() {
+                    return Err(format!("{} is not a finite number", value));
+                }
+                if *divisor == 0.0 {
+                    return Err("multiple_of divisor must not be zero".to_string());
+                }
+                let remainder = (value % divisor).abs();
+                // Use a relative tolerance: the smaller of half the divisor and
+                // a scaled machine-epsilon, so large integers don't false-positive.
+                let tolerance = (f64::EPSILON * value.abs().max(divisor.abs()) * 2.0)
+                    .max(f64::EPSILON);
+                if remainder > tolerance && (divisor.abs() - remainder) > tolerance {
                     return Err(format!("{} is not a multiple of {}", value, divisor));
                 }
             }
@@ -1084,6 +1159,18 @@ fn parse_dsl_rule_with_args(name: &str, args: &str) -> Result<Validation, String
                 return Err("len() requires exactly 2 arguments".to_string());
             }
             Ok(Validation::Len(
+                parse_dsl_usize(parts[0])?,
+                parse_dsl_usize(parts[1])?,
+            ))
+        }
+        "min_chars" => Ok(Validation::MinChars(parse_dsl_usize(args)?)),
+        "max_chars" => Ok(Validation::MaxChars(parse_dsl_usize(args)?)),
+        "chars" => {
+            let parts: Vec<&str> = args.split(',').collect();
+            if parts.len() != 2 {
+                return Err("chars() requires exactly 2 arguments".to_string());
+            }
+            Ok(Validation::Chars(
                 parse_dsl_usize(parts[0])?,
                 parse_dsl_usize(parts[1])?,
             ))

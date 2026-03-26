@@ -257,6 +257,9 @@ pub enum ValidationRule {
     MinLen(usize),
     MaxLen(usize),
     Len(usize, usize),
+    MinChars(usize),
+    MaxChars(usize),
+    Chars(usize, usize),
     Pattern(String),
     NonEmpty,
     Ascii,
@@ -309,6 +312,15 @@ impl quote::ToTokens for ValidationRule {
             }
             ValidationRule::Len(min, max) => {
                 tokens.extend(quote! { ::kdl_config::schema::Validation::Len(#min, #max) })
+            }
+            ValidationRule::MinChars(v) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::MinChars(#v) })
+            }
+            ValidationRule::MaxChars(v) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::MaxChars(#v) })
+            }
+            ValidationRule::Chars(min, max) => {
+                tokens.extend(quote! { ::kdl_config::schema::Validation::Chars(#min, #max) })
             }
             ValidationRule::Pattern(p) => {
                 tokens.extend(quote! { ::kdl_config::schema::Validation::Pattern(#p.to_string()) })

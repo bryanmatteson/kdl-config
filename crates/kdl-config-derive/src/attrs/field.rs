@@ -91,6 +91,8 @@ pub struct FieldAttrs {
     pub conflict: Option<ConflictPolicy>,
     pub render: Option<RenderPlacement>,
     pub scalar: bool,
+    pub from: Option<syn::Type>,
+    pub try_from: Option<syn::Type>,
     pub schema: FieldSchemaOverride,
 }
 
@@ -186,6 +188,10 @@ pub struct RawFieldAttrs {
     pub value_type: bool, // alias for scalar
     pub value_like: bool, // alias for scalar
     pub kdl_value: bool,  // alias for scalar
+
+    // === Type conversion ===
+    pub from: Option<String>,
+    pub try_from: Option<String>,
 
     // === Schema ===
     pub schema: FieldSchemaOverride,
@@ -407,8 +413,29 @@ impl RawFieldAttrs {
             ));
         }
 
-        // Resolve scalar
-        let scalar = self.scalar || self.value_type || self.value_like || self.kdl_value;
+        // Resolve from/try_from
+        if self.from.is_some() && self.try_from.is_some() {
+            return Err(syn::Error::new(
+                span,
+                "field cannot specify both `from` and `try_from`",
+            ));
+        }
+        let from = self
+            .from
+            .as_deref()
+            .map(syn::parse_str::<syn::Type>)
+            .transpose()
+            .map_err(|e| syn::Error::new(span, format!("invalid `from` type: {e}")))?;
+        let try_from = self
+            .try_from
+            .as_deref()
+            .map(syn::parse_str::<syn::Type>)
+            .transpose()
+            .map_err(|e| syn::Error::new(span, format!("invalid `try_from` type: {e}")))?;
+
+        // Resolve scalar — from/try_from implies scalar
+        let scalar =
+            self.scalar || self.value_type || self.value_like || self.kdl_value || from.is_some() || try_from.is_some();
 
         // Merge top-level validate(...) into schema validations
         if !self.validations.is_empty() {
@@ -436,6 +463,8 @@ impl RawFieldAttrs {
             conflict: self.conflict,
             render: self.render,
             scalar,
+            from,
+            try_from,
             schema: self.schema,
         })
     }

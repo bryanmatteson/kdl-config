@@ -73,7 +73,7 @@ pub fn is_numeric_type(ty: &Type) -> bool {
             .map(|s| {
                 matches!(
                     s.ident.to_string().as_str(),
-                    "i128" | "i64" | "i32" | "u64" | "u32" | "usize" | "f64" | "f32"
+                    "i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32" | "u64" | "u128" | "isize" | "usize" | "f32" | "f64"
                 )
             })
             .unwrap_or(false),
