@@ -217,6 +217,8 @@ membership item="gamma" allowed="alpha" allowed="beta" // error: "value must exi
 
 **Compile-time safety:** Referencing a field that doesn't exist is a compile-time error (the generated code references the field variable directly). Numeric comparison rules require both fields to be numeric types that implement `AsF64`.
 
+> **Agent note — floating-point tolerance:** `equal_to` and `not_equal_to` use a relative tolerance: `2 × f64::EPSILON × max(|a|, |b|, 1.0)`. This means two values that differ by less than about 2 ULP are considered equal. For typical config values (small integers, reasonable floats) this is invisible. For extremely large magnitudes the tolerance scales proportionally. `less_than`, `greater_than`, and their `_or_equal` variants use exact comparison with no tolerance.
+
 **Option semantics for cross-field rules:** If either side of a cross-field rule is `Option<T>` and is `None`, the rule is **skipped entirely**. All four combinations are handled:
 - Both `None` -> skipped
 - This `None`, other `Some` -> skipped
@@ -315,23 +317,26 @@ Validation runs in a strict, deterministic order during `KdlDecode`:
 
 ## Error Messages
 
-Validation errors produce `KdlConfigError` with `ErrorKind::InvalidValue` or `ErrorKind::Multiple`. The `Display` format for a single error is:
+Validation errors produce `KdlConfigError` with `ErrorKind::InvalidValue` or `ErrorKind::Multiple`. The full `Display` format for a single error is:
 
 ```
-error parsing {StructName} field '{field_name}': invalid value '{rule}': {message}
+error parsing {StructName} field '{field_name}' at line {L}, column {C}: invalid value '{rule}': {message}
 ```
 
+- Location (`at line L, column C`) appears when the parser has source position information (always present for `parse_str` and file-based loading; absent for programmatic construction without source context).
 - `rule` is the human-readable validation rule (e.g., `min(5)`, `positive`, `non_empty`).
 - `message` is the failure reason (e.g., `"0 is less than minimum 1"`, `"value must not be empty"`).
 
-For multiple errors:
+For multiple errors, the outer wrapper shows the count and each sub-error is numbered on its own line. Each sub-error carries the precise source location of the field's KDL entry:
 
 ```
-error parsing {StructName}: 3 validation errors:
-  [1] error parsing {StructName} field 'host': invalid value 'non_empty': value must not be empty
-  [2] error parsing {StructName} field 'port': invalid value 'min(1)': 0 is less than minimum 1
-  [3] error parsing {StructName} field 'workers': invalid value 'positive': -1 is not positive
+error parsing ServerConfig at line 1, column 1: 3 validation errors:
+  [1] error parsing ServerConfig field 'host' at line 1, column 8: invalid value 'non_empty': value must not be empty
+  [2] error parsing ServerConfig field 'port' at line 1, column 17: invalid value 'min(1)': 0 is less than minimum 1
+  [3] error parsing ServerConfig field 'workers' at line 1, column 24: invalid value 'positive': -1 is not positive
 ```
+
+> **Agent note — per-field location tracking:** For scalar fields (attributes, positional args, value children), each sub-error carries the precise location of the KDL entry that produced the value — not the node-level offset. This means `field 'a' at line 1, column 7` and `field 'b' at line 1, column 12` point to their actual positions in the source. For non-scalar fields (child structs, collections), the sub-error falls back to the containing node's offset.
 
 ## Schema Integration
 
@@ -370,6 +375,6 @@ Use `validate` when you want to reject invalid final state.
 
 5. **Adding validation rules to `bool` fields** — Compiles fine but does nothing. Bool validation is a no-op.
 
-6. **Assuming byte length = character count** — `min_len`, `max_len`, and `len` use `.len()` (byte length). For multi-byte UTF-8 strings, byte length exceeds character count.
+6. **Assuming byte length = character count** — `min_len`, `max_len`, and `len` use `.len()` (byte length). For multi-byte UTF-8 strings, byte length exceeds character count. Use `min_chars`, `max_chars`, or `chars` when the constraint is about visible characters.
 
 7. **Using `multiple_of = 0`** — This is a runtime error, not silently ignored. Always use a positive divisor.

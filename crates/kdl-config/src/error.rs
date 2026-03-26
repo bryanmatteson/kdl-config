@@ -287,6 +287,20 @@ impl KdlConfigError {
                 self.location = Some(source.location(offset));
             }
         }
+        // Propagate context into Multiple inner errors so each sub-error
+        // carries its own location and path annotations.
+        if let ErrorKind::Multiple(ref mut inner_errors) = self.kind {
+            for inner in inner_errors.iter_mut() {
+                if inner.node_path.is_none() {
+                    inner.node_path = path.cloned();
+                }
+                if inner.location.is_none() {
+                    if let (Some(source), Some(offset)) = (source, offset) {
+                        inner.location = Some(source.location(offset));
+                    }
+                }
+            }
+        }
         self
     }
 

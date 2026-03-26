@@ -994,7 +994,10 @@ impl Validation {
                 }
             }
             Self::EqualTo(_) => {
-                if (value - other_value).abs() > f64::EPSILON {
+                let tolerance =
+                    (f64::EPSILON * value.abs().max(other_value.abs()).max(1.0) * 2.0)
+                        .max(f64::EPSILON);
+                if (value - other_value).abs() > tolerance {
                     return Err(format!(
                         "{} must equal '{}' ({})",
                         value, other_field, other_value
@@ -1002,7 +1005,10 @@ impl Validation {
                 }
             }
             Self::NotEqualTo(_) => {
-                if (value - other_value).abs() <= f64::EPSILON {
+                let tolerance =
+                    (f64::EPSILON * value.abs().max(other_value.abs()).max(1.0) * 2.0)
+                        .max(f64::EPSILON);
+                if (value - other_value).abs() <= tolerance {
                     return Err(format!(
                         "{} must not equal '{}' ({})",
                         value, other_field, other_value

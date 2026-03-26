@@ -283,8 +283,19 @@ pub(crate) fn generate_field_parser(field: &FieldInfo, struct_name: &str) -> Tok
     };
 
     let validation = generate_field_validation(field, struct_name, &kind);
+
+    // For non-scalar fields with validations, emit a default None offset variable.
+    // Scalar fields emit their own offset variable in generate_value_scalar_parser.
+    let has_validations = !field.schema.validations.is_empty();
+    let offset_decl = if has_validations && !matches!(kind, FieldKind::ValueScalar) {
+        let field_offset_ident = format_ident!("__kdl_field_offset_{}", field.ident);
+        quote! { let #field_offset_ident: ::core::option::Option<usize> = ::core::option::Option::None; }
+    } else {
+        quote! {}
+    };
     quote! {
         #parser
+        #offset_decl
         #validation
     }
 }
@@ -1219,8 +1230,10 @@ fn generate_value_scalar_parser(
 
     let scan_block = wrap_path_scan(field, struct_name, &field_name, kdl_key, scan_block);
 
+    let field_offset_ident = format_ident!("__kdl_field_offset_{}", field_ident);
     quote! {
         #mark_usage
+        let mut #field_offset_ident: ::core::option::Option<usize> = ::core::option::Option::None;
         let #field_ident: #ty = {
             #parent_claims
             #claims_shadow
@@ -1272,6 +1285,23 @@ fn generate_value_scalar_parser(
             };
 
             if let Some((val, source)) = selected {
+                // Capture the span offset of the source entry for per-field validation errors.
+                #field_offset_ident = match &source {
+                    #source_ident::AttrKeyed => {
+                        node.entries().iter()
+                            .find(|e| e.name().map(|n| n.value()) == Some(#kdl_key))
+                            .map(|e| e.span().offset())
+                    }
+                    #source_ident::Arg(idx) => {
+                        node.entries().get(*idx).map(|e| e.span().offset())
+                    }
+                    #source_ident::Flag(indices) => {
+                        indices.first().and_then(|idx| node.entries().get(*idx)).map(|e| e.span().offset())
+                    }
+                    #source_ident::Child(idx) => {
+                        node.iter_children().nth(*idx).map(|c| c.span().offset())
+                    }
+                };
                 match source {
                     #source_ident::AttrKeyed => {
                         claims.claim_attr(#kdl_key);
@@ -3168,9 +3198,29 @@ fn generate_field_validation(
     }
 
     if blocks.is_empty() {
-        quote! {}
-    } else {
-        quote! { #(#blocks)* }
+        return quote! {};
+    }
+
+    // Wrap the validation calls to stamp per-field location on any new errors.
+    // The __kdl_field_offset_{field} variable is set by the scalar parser when a
+    // source entry is known. For non-scalar fields it defaults to None, meaning
+    // the node-level offset from with_context applies as the fallback.
+    let field_offset_ident = format_ident!("__kdl_field_offset_{}", field_ident);
+    quote! {
+        {
+            let __pre_count = __kdl_validation_errors.len();
+            #(#blocks)*
+            // Stamp per-field source location on newly added validation errors.
+            if let ::core::option::Option::Some(offset) = #field_offset_ident {
+                if let ::core::option::Option::Some(source) = ctx.source {
+                    for err in &mut __kdl_validation_errors[__pre_count..] {
+                        if err.location.is_none() {
+                            err.location = ::core::option::Option::Some(source.location(offset));
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

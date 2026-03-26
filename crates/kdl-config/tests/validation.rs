@@ -851,24 +851,29 @@ fn neq_rejects_equal() {
 // pattern validation (runtime with regex feature)
 // ==========================================================================
 
-#[derive(Debug, PartialEq, kdl_config::KdlNode)]
-#[kdl(node = "pat")]
-struct PatternValidation {
-    #[kdl(validate(pattern = "^[a-z]+$"))]
-    val: String,
-}
+#[cfg(feature = "regex")]
+mod pattern_tests {
+    use kdl_config::parse_str;
 
-#[test]
-fn pattern_passes() {
-    let cfg: PatternValidation = parse_str(r#"pat val="hello""#).unwrap();
-    assert_eq!(cfg.val, "hello");
-}
+    #[derive(Debug, PartialEq, kdl_config::KdlNode)]
+    #[kdl(node = "pat")]
+    struct PatternValidation {
+        #[kdl(validate(pattern = "^[a-z]+$"))]
+        val: String,
+    }
 
-#[test]
-fn pattern_rejects() {
-    let err = parse_str::<PatternValidation>(r#"pat val="Hello123""#).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("does not match pattern"), "got: {msg}");
+    #[test]
+    fn pattern_passes() {
+        let cfg: PatternValidation = parse_str(r#"pat val="hello""#).unwrap();
+        assert_eq!(cfg.val, "hello");
+    }
+
+    #[test]
+    fn pattern_rejects() {
+        let err = parse_str::<PatternValidation>(r#"pat val="Hello123""#).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("does not match pattern"), "got: {msg}");
+    }
 }
 
 // ==========================================================================
@@ -919,4 +924,117 @@ fn error_message_uses_rule_display_not_debug() {
     // Should contain the Display form "min(5)", not the Debug form "Min(5.0)"
     assert!(msg.contains("min(5)"), "expected rule display form, got: {msg}");
     assert!(!msg.contains("Min(5.0)"), "should not contain Debug form, got: {msg}");
+}
+
+// ==========================================================================
+// multiple_of(0) produces a runtime error
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "mz")]
+struct MultipleOfZeroValidation {
+    #[kdl(validate(multiple_of = 0))]
+    val: i32,
+}
+
+#[test]
+fn multiple_of_zero_is_runtime_error() {
+    let err = parse_str::<MultipleOfZeroValidation>("mz val=10").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("divisor must not be zero"),
+        "expected divisor-zero error, got: {msg}"
+    );
+}
+
+// ==========================================================================
+// Multiple error display format
+// ==========================================================================
+
+#[test]
+fn multiple_error_display_format() {
+    let err = parse_str::<MultiValidation>("multi a=0 b=0").unwrap_err();
+    let msg = err.to_string();
+    // Should show the count
+    assert!(msg.contains("2 validation errors:"), "expected count prefix, got: {msg}");
+    // Should show numbered sub-errors
+    assert!(msg.contains("[1]"), "expected [1] marker, got: {msg}");
+    assert!(msg.contains("[2]"), "expected [2] marker, got: {msg}");
+    // Sub-errors should be on separate lines
+    let lines: Vec<&str> = msg.lines().collect();
+    assert!(lines.len() >= 3, "expected at least 3 lines, got {} lines: {msg}", lines.len());
+}
+
+// ==========================================================================
+// Combined field-level + cross-field errors collected together
+// ==========================================================================
+
+#[derive(Debug, PartialEq, kdl_config::KdlNode)]
+#[kdl(node = "combo")]
+struct CombinedValidation {
+    #[kdl(validate(min = 10, less_than = "b"))]
+    a: f64,
+    #[kdl(validate(max = 50))]
+    b: f64,
+}
+
+#[test]
+fn field_and_cross_field_errors_combined() {
+    // a=5 fails min=10 (field-level), a=5 < b=100 passes less_than, b=100 fails max=50
+    // So we expect 2 errors: a's min failure + b's max failure
+    let err = parse_str::<CombinedValidation>("combo a=5 b=100").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("validation errors"), "expected multiple errors, got: {msg}");
+    assert!(msg.contains("'a'"), "expected field 'a' in error, got: {msg}");
+    assert!(msg.contains("'b'"), "expected field 'b' in error, got: {msg}");
+}
+
+#[test]
+fn field_level_and_cross_field_errors_combined() {
+    // a=5 fails min=10 (field-level), a=5 < b=3 ALSO fails less_than (cross-field), b=3 passes max=50
+    // So we expect 2 errors: a's min failure + a's less_than failure
+    let err = parse_str::<CombinedValidation>("combo a=5 b=3").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("validation errors"), "expected multiple errors, got: {msg}");
+    assert!(msg.contains("less than minimum"), "expected min error, got: {msg}");
+    assert!(msg.contains("must be less than"), "expected cross-field error, got: {msg}");
+}
+
+// ==========================================================================
+// Per-field location tracking in validation errors
+// ==========================================================================
+
+#[test]
+fn per_field_validation_errors_have_individual_locations() {
+    // Use multi-line input so each field has a distinct column position.
+    let input = r#"multi a=0 b=0"#;
+    let err = parse_str::<MultiValidation>(input).unwrap_err();
+    let msg = err.to_string();
+
+    // Each sub-error should include "at line" with a position
+    // The outer wrapper and both inner errors should all have location info
+    assert!(msg.contains("at line"), "expected location info in error, got: {msg}");
+
+    // Check that individual sub-errors have their own location
+    if let kdl_config::ErrorKind::Multiple(ref inner) = err.kind {
+        assert_eq!(inner.len(), 2);
+        // Both inner errors should have location set (from per-field offset stamping)
+        for (i, sub_err) in inner.iter().enumerate() {
+            assert!(
+                sub_err.location.is_some(),
+                "sub-error [{}] should have location, got: {:?}", i + 1, sub_err
+            );
+        }
+        // The two errors are for fields 'a' and 'b' which are at different column offsets
+        let loc_a = inner[0].location.unwrap();
+        let loc_b = inner[1].location.unwrap();
+        // 'a' appears before 'b' in the input, so it should have a smaller column
+        assert!(
+            loc_a.column < loc_b.column,
+            "field 'a' (col {}) should have smaller column than field 'b' (col {})",
+            loc_a.column, loc_b.column
+        );
+    } else {
+        panic!("expected Multiple error kind, got: {:?}", err.kind);
+    }
 }
