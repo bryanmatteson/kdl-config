@@ -395,9 +395,18 @@ fn multiple_field_failures_collected() {
     let err = parse_str::<MultiValidation>("multi a=0 b=0").unwrap_err();
     let msg = err.to_string();
     // Both fields fail — error should contain both
-    assert!(msg.contains("validation errors"), "expected multiple errors, got: {msg}");
-    assert!(msg.contains("'a'"), "expected field 'a' mentioned, got: {msg}");
-    assert!(msg.contains("'b'"), "expected field 'b' mentioned, got: {msg}");
+    assert!(
+        msg.contains("validation errors"),
+        "expected multiple errors, got: {msg}"
+    );
+    assert!(
+        msg.contains("'a'"),
+        "expected field 'a' mentioned, got: {msg}"
+    );
+    assert!(
+        msg.contains("'b'"),
+        "expected field 'b' mentioned, got: {msg}"
+    );
 }
 
 #[test]
@@ -405,7 +414,10 @@ fn single_failure_no_wrapper() {
     let err = parse_str::<MultiValidation>("multi a=0 b=50").unwrap_err();
     let msg = err.to_string();
     // Only field 'a' fails — should be a direct error, not wrapped
-    assert!(msg.contains("'a'"), "expected field 'a' mentioned, got: {msg}");
+    assert!(
+        msg.contains("'a'"),
+        "expected field 'a' mentioned, got: {msg}"
+    );
     assert!(
         !msg.contains("validation errors"),
         "single error should not be wrapped, got: {msg}"
@@ -922,8 +934,14 @@ fn error_message_uses_rule_display_not_debug() {
     let err = parse_str::<BoundaryValidation>("bnd val=4").unwrap_err();
     let msg = err.to_string();
     // Should contain the Display form "min(5)", not the Debug form "Min(5.0)"
-    assert!(msg.contains("min(5)"), "expected rule display form, got: {msg}");
-    assert!(!msg.contains("Min(5.0)"), "should not contain Debug form, got: {msg}");
+    assert!(
+        msg.contains("min(5)"),
+        "expected rule display form, got: {msg}"
+    );
+    assert!(
+        !msg.contains("Min(5.0)"),
+        "should not contain Debug form, got: {msg}"
+    );
 }
 
 // ==========================================================================
@@ -956,13 +974,20 @@ fn multiple_error_display_format() {
     let err = parse_str::<MultiValidation>("multi a=0 b=0").unwrap_err();
     let msg = err.to_string();
     // Should show the count
-    assert!(msg.contains("2 validation errors:"), "expected count prefix, got: {msg}");
+    assert!(
+        msg.contains("2 validation errors:"),
+        "expected count prefix, got: {msg}"
+    );
     // Should show numbered sub-errors
     assert!(msg.contains("[1]"), "expected [1] marker, got: {msg}");
     assert!(msg.contains("[2]"), "expected [2] marker, got: {msg}");
     // Sub-errors should be on separate lines
     let lines: Vec<&str> = msg.lines().collect();
-    assert!(lines.len() >= 3, "expected at least 3 lines, got {} lines: {msg}", lines.len());
+    assert!(
+        lines.len() >= 3,
+        "expected at least 3 lines, got {} lines: {msg}",
+        lines.len()
+    );
 }
 
 // ==========================================================================
@@ -984,9 +1009,18 @@ fn field_and_cross_field_errors_combined() {
     // So we expect 2 errors: a's min failure + b's max failure
     let err = parse_str::<CombinedValidation>("combo a=5 b=100").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("validation errors"), "expected multiple errors, got: {msg}");
-    assert!(msg.contains("'a'"), "expected field 'a' in error, got: {msg}");
-    assert!(msg.contains("'b'"), "expected field 'b' in error, got: {msg}");
+    assert!(
+        msg.contains("validation errors"),
+        "expected multiple errors, got: {msg}"
+    );
+    assert!(
+        msg.contains("'a'"),
+        "expected field 'a' in error, got: {msg}"
+    );
+    assert!(
+        msg.contains("'b'"),
+        "expected field 'b' in error, got: {msg}"
+    );
 }
 
 #[test]
@@ -995,9 +1029,18 @@ fn field_level_and_cross_field_errors_combined() {
     // So we expect 2 errors: a's min failure + a's less_than failure
     let err = parse_str::<CombinedValidation>("combo a=5 b=3").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("validation errors"), "expected multiple errors, got: {msg}");
-    assert!(msg.contains("less than minimum"), "expected min error, got: {msg}");
-    assert!(msg.contains("must be less than"), "expected cross-field error, got: {msg}");
+    assert!(
+        msg.contains("validation errors"),
+        "expected multiple errors, got: {msg}"
+    );
+    assert!(
+        msg.contains("less than minimum"),
+        "expected min error, got: {msg}"
+    );
+    assert!(
+        msg.contains("must be less than"),
+        "expected cross-field error, got: {msg}"
+    );
 }
 
 // ==========================================================================
@@ -1013,7 +1056,10 @@ fn per_field_validation_errors_have_individual_locations() {
 
     // Each sub-error should include "at line" with a position
     // The outer wrapper and both inner errors should all have location info
-    assert!(msg.contains("at line"), "expected location info in error, got: {msg}");
+    assert!(
+        msg.contains("at line"),
+        "expected location info in error, got: {msg}"
+    );
 
     // Check that individual sub-errors have their own location
     if let kdl_config::ErrorKind::Multiple(ref inner) = err.kind {
@@ -1022,7 +1068,9 @@ fn per_field_validation_errors_have_individual_locations() {
         for (i, sub_err) in inner.iter().enumerate() {
             assert!(
                 sub_err.location.is_some(),
-                "sub-error [{}] should have location, got: {:?}", i + 1, sub_err
+                "sub-error [{}] should have location, got: {:?}",
+                i + 1,
+                sub_err
             );
         }
         // The two errors are for fields 'a' and 'b' which are at different column offsets
@@ -1032,7 +1080,8 @@ fn per_field_validation_errors_have_individual_locations() {
         assert!(
             loc_a.column < loc_b.column,
             "field 'a' (col {}) should have smaller column than field 'b' (col {})",
-            loc_a.column, loc_b.column
+            loc_a.column,
+            loc_b.column
         );
     } else {
         panic!("expected Multiple error kind, got: {:?}", err.kind);

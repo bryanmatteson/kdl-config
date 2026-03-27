@@ -818,10 +818,7 @@ impl Validation {
             Self::MaxChars(max) => {
                 let count = value.chars().count();
                 if count > *max {
-                    return Err(format!(
-                        "character count {} exceeds maximum {}",
-                        count, max
-                    ));
+                    return Err(format!("character count {} exceeds maximum {}", count, max));
                 }
             }
             Self::Chars(min, max) => {
@@ -903,8 +900,8 @@ impl Validation {
                 let remainder = (value % divisor).abs();
                 // Use a relative tolerance: the smaller of half the divisor and
                 // a scaled machine-epsilon, so large integers don't false-positive.
-                let tolerance = (f64::EPSILON * value.abs().max(divisor.abs()) * 2.0)
-                    .max(f64::EPSILON);
+                let tolerance =
+                    (f64::EPSILON * value.abs().max(divisor.abs()) * 2.0).max(f64::EPSILON);
                 if remainder > tolerance && (divisor.abs() - remainder) > tolerance {
                     return Err(format!("{} is not a multiple of {}", value, divisor));
                 }
@@ -994,9 +991,8 @@ impl Validation {
                 }
             }
             Self::EqualTo(_) => {
-                let tolerance =
-                    (f64::EPSILON * value.abs().max(other_value.abs()).max(1.0) * 2.0)
-                        .max(f64::EPSILON);
+                let tolerance = (f64::EPSILON * value.abs().max(other_value.abs()).max(1.0) * 2.0)
+                    .max(f64::EPSILON);
                 if (value - other_value).abs() > tolerance {
                     return Err(format!(
                         "{} must equal '{}' ({})",
@@ -1005,9 +1001,8 @@ impl Validation {
                 }
             }
             Self::NotEqualTo(_) => {
-                let tolerance =
-                    (f64::EPSILON * value.abs().max(other_value.abs()).max(1.0) * 2.0)
-                        .max(f64::EPSILON);
+                let tolerance = (f64::EPSILON * value.abs().max(other_value.abs()).max(1.0) * 2.0)
+                    .max(f64::EPSILON);
                 if (value - other_value).abs() <= tolerance {
                     return Err(format!(
                         "{} must not equal '{}' ({})",

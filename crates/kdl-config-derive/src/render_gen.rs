@@ -184,12 +184,12 @@ pub(crate) fn render_body_with_accessor(
             #children_map_render
             #registry_render
 
-            value_nodes.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+            value_nodes.sort_by_key(|(_, idx, _)| *idx);
             for (_, _, rendered) in value_nodes {
                 renderer.child(rendered);
             }
 
-            child_nodes.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+            child_nodes.sort_by_key(|(_, idx, _)| *idx);
             for (_, _, rendered) in child_nodes {
                 renderer.child(rendered);
             }
@@ -300,8 +300,8 @@ pub(crate) fn render_node_body_with_accessor(
             node.add_arg_with_repr(::kdl_config::Value::String(flag), Some(repr));
         }
 
-        value_nodes.sort_by(|(a_key, a_idx, _), (b_key, b_idx, _)| a_key.cmp(b_key).then(a_idx.cmp(b_idx)));
-        child_nodes.sort_by(|(a_key, a_idx, _), (b_key, b_idx, _)| a_key.cmp(b_key).then(a_idx.cmp(b_idx)));
+        value_nodes.sort_by_key(|(_, idx, _)| *idx);
+        child_nodes.sort_by_key(|(_, idx, _)| *idx);
         for (_, _, child) in value_nodes {
             node.add_child(child);
         }

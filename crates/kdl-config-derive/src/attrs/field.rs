@@ -434,8 +434,12 @@ impl RawFieldAttrs {
             .map_err(|e| syn::Error::new(span, format!("invalid `try_from` type: {e}")))?;
 
         // Resolve scalar — from/try_from implies scalar
-        let scalar =
-            self.scalar || self.value_type || self.value_like || self.kdl_value || from.is_some() || try_from.is_some();
+        let scalar = self.scalar
+            || self.value_type
+            || self.value_like
+            || self.kdl_value
+            || from.is_some()
+            || try_from.is_some();
 
         // Merge top-level validate(...) into schema validations
         if !self.validations.is_empty() {

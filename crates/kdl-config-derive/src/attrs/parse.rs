@@ -274,11 +274,7 @@ fn parse_struct_meta(
             }
         }
         // Ignored at struct level
-        Some("choice")
-        | Some("value")
-        | Some("meta")
-        | Some("group")
-        | Some("alias")
+        Some("choice") | Some("value") | Some("meta") | Some("group") | Some("alias")
         | Some("aliases") => {
             if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
                 if meta.input.peek(syn::Token![=]) {
@@ -1824,12 +1820,19 @@ fn parse_validation_rule_with_args(
                 parse_validation_usize(parts[1], span)?,
             ))
         }
-        "min_chars" => Ok(ValidationRule::MinChars(parse_validation_usize(args, span)?)),
-        "max_chars" => Ok(ValidationRule::MaxChars(parse_validation_usize(args, span)?)),
+        "min_chars" => Ok(ValidationRule::MinChars(parse_validation_usize(
+            args, span,
+        )?)),
+        "max_chars" => Ok(ValidationRule::MaxChars(parse_validation_usize(
+            args, span,
+        )?)),
         "chars" => {
             let parts: Vec<&str> = args.split(',').collect();
             if parts.len() != 2 {
-                return Err(syn::Error::new(span, "chars() requires exactly 2 arguments"));
+                return Err(syn::Error::new(
+                    span,
+                    "chars() requires exactly 2 arguments",
+                ));
             }
             Ok(ValidationRule::Chars(
                 parse_validation_usize(parts[0], span)?,

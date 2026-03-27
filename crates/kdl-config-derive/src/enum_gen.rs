@@ -10,7 +10,7 @@ use crate::attrs::{
     is_option_type, parse_struct_attrs, serde_rename_from_attrs,
 };
 use crate::parse_gen::{generate_field_parser, generate_skip_marks, generate_struct_overrides};
-use crate::render_gen::{FieldAccessor, render_body_with_accessor};
+use crate::render_gen::{FieldAccessor, render_node_body_with_accessor};
 use crate::update_gen;
 
 #[derive(Debug)]
@@ -250,9 +250,9 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
         .map(|variant| generate_parse_arm(enum_name, &enum_name_str, variant))
         .collect();
 
-    let render_arms: Vec<TokenStream> = variants
+    let render_node_arms: Vec<TokenStream> = variants
         .iter()
-        .map(|variant| generate_render_arm(variant, &struct_attrs))
+        .map(|variant| generate_render_node_arm(variant, &struct_attrs, &discr_select))
         .collect();
 
     let update_arms: Vec<TokenStream> = variants
@@ -310,24 +310,14 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
 
         impl ::kdl_config::KdlRender for #enum_name {
             fn render<W: ::std::fmt::Write>(&self, w: &mut W, name: &str, indent: usize) -> ::std::fmt::Result {
-                let rendered = match self {
-                    #(#render_arms)*
-                };
-
-                let mut iter = rendered.lines().peekable();
-                while let Some(line) = iter.next() {
-                    ::kdl_config::write_indent(w, indent)?;
-                    w.write_str(line)?;
-                    if iter.peek().is_some() {
-                        w.write_str("\n")?;
-                    }
-                }
-
-                Ok(())
+                let node = self.render_node(name);
+                node.render(w, &node.name, indent)
             }
 
             fn render_node(&self, name: &str) -> ::kdl_config::Node {
-                ::kdl_config::render_child_node(self, name)
+                match self {
+                    #(#render_node_arms)*
+                }
             }
         }
 
@@ -519,25 +509,31 @@ fn generate_parse_arm(
     }
 }
 
-fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> TokenStream {
+fn generate_render_node_arm(
+    variant: &VariantInfo,
+    struct_attrs: &StructAttrs,
+    discr_select: &SelectSpec,
+) -> TokenStream {
     let variant_ident = &variant.ident;
-    let tag_render = tag_render_expr(&variant.tag);
+    let discr_value_expr = tag_value_expr(&variant.tag);
+    let discr_set = generate_discriminator_node_set(discr_select, &discr_value_expr);
 
     match &variant.kind {
         VariantKind::Unit => {
             quote! {
                 Self::#variant_ident => {
-                    let rendered = ::kdl_config::render_key(name);
-                    ::kdl_config::insert_arg(&rendered, &#tag_render)
+                    let mut node = ::kdl_config::Node::named(name.to_string());
+                    #discr_set
+                    node
                 }
             }
         }
         VariantKind::Newtype(_) => {
             quote! {
                 Self::#variant_ident(inner) => {
-                    let mut rendered = String::new();
-                    inner.render(&mut rendered, name, 0)?;
-                    ::kdl_config::insert_arg(&rendered, &#tag_render)
+                    let mut node = inner.render_node(name);
+                    #discr_set
+                    node
                 }
             }
         }
@@ -548,7 +544,6 @@ fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> Tok
             for (idx, ty) in types.iter().enumerate() {
                 let binding = format_ident!("v{}", idx);
                 bindings.push(binding.clone());
-                let pos_index = idx + 1;
 
                 if is_option_type(ty) {
                     positional.push(quote! {
@@ -556,28 +551,28 @@ fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> Tok
                             Some(val) => ::kdl_config::Value::from(val.clone()),
                             None => ::kdl_config::Value::Null,
                         };
-                        renderer.positional_raw(#pos_index, ::kdl_config::render_value(&value));
+                        node.add_arg(value);
                     });
                 } else {
                     positional.push(quote! {
                         let value = ::kdl_config::Value::from(#binding.clone());
-                        renderer.positional_raw(#pos_index, ::kdl_config::render_value(&value));
+                        node.add_arg(value);
                     });
                 }
             }
 
             quote! {
                 Self::#variant_ident(#(#bindings),*) => {
-                    let mut renderer = ::kdl_config::NodeRenderer::new(name.to_string(), ::kdl_config::Modifier::Inherit);
-                    renderer.positional_raw(0, #tag_render);
+                    let mut node = ::kdl_config::Node::named(name.to_string());
                     #(#positional)*
-                    renderer.render()
+                    #discr_set
+                    node
                 }
             }
         }
         VariantKind::Struct { fields, .. } => {
             let bindings: Vec<&Ident> = fields.iter().map(|f| &f.ident).collect();
-            let render_body = render_body_with_accessor(
+            let render_node_body = render_node_body_with_accessor(
                 struct_attrs,
                 fields,
                 quote! { name.to_string() },
@@ -587,9 +582,52 @@ fn generate_render_arm(variant: &VariantInfo, struct_attrs: &StructAttrs) -> Tok
 
             quote! {
                 &Self::#variant_ident { #(ref #bindings),* } => {
-                    let rendered = #render_body;
-                    ::kdl_config::insert_arg(&rendered, &#tag_render)
+                    let mut node = #render_node_body;
+                    #discr_set
+                    node
                 }
+            }
+        }
+    }
+}
+
+fn generate_discriminator_node_set(select: &SelectSpec, value_expr: &TokenStream) -> TokenStream {
+    match &select.selector {
+        SelectorAst::Arg(index) => {
+            let idx = *index as usize;
+            quote! {
+                node.insert_arg(#idx, #value_expr);
+            }
+        }
+        SelectorAst::Attr(name) => {
+            quote! {
+                node.set_attr(#name, #value_expr);
+            }
+        }
+        SelectorAst::Name => {
+            quote! {
+                let discr_value = #value_expr;
+                node.name = match discr_value {
+                    ::kdl_config::Value::String(s) => s,
+                    ::kdl_config::Value::Int(n) => n.to_string(),
+                    ::kdl_config::Value::Float(f) => ::kdl_config::render_value(&::kdl_config::Value::Float(f)),
+                    ::kdl_config::Value::Bool(value) => ::kdl_config::render_value(&::kdl_config::Value::Bool(value)),
+                    ::kdl_config::Value::Null => "#null".to_string(),
+                    ::kdl_config::Value::Path(path) => path.to_string_lossy().to_string(),
+                    ::kdl_config::Value::Array(values) => ::kdl_config::render_value(&::kdl_config::Value::Array(values)),
+                };
+            }
+        }
+        SelectorAst::Func(_) => quote! {},
+        SelectorAst::Any(selectors) => {
+            if let Some(selector) = selectors.first() {
+                let select = SelectSpec {
+                    selector: selector.clone(),
+                    opts: select.opts.clone(),
+                };
+                generate_discriminator_node_set(&select, value_expr)
+            } else {
+                quote! {}
             }
         }
     }
@@ -1009,16 +1047,6 @@ fn tag_match_expr(tag: &VariantTag) -> TokenStream {
         VariantTag::Literal(_) => {
             let value_expr = tag_kdl_value_expr(tag);
             quote! { discr == #value_expr }
-        }
-    }
-}
-
-fn tag_render_expr(tag: &VariantTag) -> TokenStream {
-    match tag {
-        VariantTag::String(s) => quote! { ::kdl_config::render_key(#s) },
-        VariantTag::Literal(_) => {
-            let value_expr = tag_value_expr(tag);
-            quote! { ::kdl_config::render_value(&#value_expr) }
         }
     }
 }

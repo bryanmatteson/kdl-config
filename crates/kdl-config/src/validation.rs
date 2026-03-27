@@ -27,7 +27,9 @@ macro_rules! impl_kdl_validate_numeric {
     };
 }
 
-impl_kdl_validate_numeric!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f32, f64, isize, usize);
+impl_kdl_validate_numeric!(
+    i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f32, f64, isize, usize
+);
 
 // --- String implementations ---
 
@@ -128,7 +130,9 @@ macro_rules! impl_as_f64 {
     };
 }
 
-impl_as_f64!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f32, f64, isize, usize);
+impl_as_f64!(
+    i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f32, f64, isize, usize
+);
 
 // ---------------------------------------------------------------------------
 // Relational cross-field helpers (exists_in / subset_of)

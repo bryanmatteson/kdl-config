@@ -68,21 +68,40 @@ fn render_value_atom(value: &Value) -> String {
         Value::Bool(true) => "#true".to_string(),
         Value::Bool(false) => "#false".to_string(),
         Value::Int(n) => n.to_string(),
-        Value::Float(f) => {
-            let s = f.to_string();
-            if s.contains('.') || s.contains('e') || s.contains('E') {
-                s
-            } else {
-                format!("{s}.0")
-            }
-        }
-        Value::String(s) => escape_string(s),
+        Value::Float(f) => render_float(*f),
+        Value::String(s) => render_string_atom(s),
         Value::Path(p) => escape_string(&p.to_string_lossy()),
         Value::Array(arr) => arr
             .iter()
             .map(render_value_atom)
             .collect::<Vec<_>>()
             .join(" "),
+    }
+}
+
+fn render_float(f: f64) -> String {
+    let rendered = if ((f as f32) as f64) == f {
+        (f as f32).to_string()
+    } else {
+        f.to_string()
+    };
+
+    if f.is_finite()
+        && !rendered.contains('.')
+        && !rendered.contains('e')
+        && !rendered.contains('E')
+    {
+        format!("{rendered}.0")
+    } else {
+        rendered
+    }
+}
+
+fn render_string_atom(value: &str) -> String {
+    if is_valid_identifier(value) {
+        value.to_string()
+    } else {
+        escape_string(value)
     }
 }
 
@@ -263,13 +282,11 @@ impl NodeRenderer {
             result.push_str(&render_key(flag));
         }
 
-        let mut keyed = self.keyed.clone();
-        keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
-        for (key, value) in keyed {
+        for (key, value) in &self.keyed {
             result.push(' ');
-            result.push_str(&key);
+            result.push_str(key);
             result.push('=');
-            result.push_str(&value);
+            result.push_str(value);
         }
 
         if !self.children.is_empty() {
