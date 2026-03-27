@@ -167,8 +167,7 @@ pub struct NodeRenderer {
     modifier: Modifier,
     name_repr: Option<String>,
     positional: Vec<(usize, String)>,
-    flags: Vec<String>,
-    keyed: Vec<(String, String)>,
+    inline_tokens: Vec<String>,
     children: Vec<String>,
 }
 
@@ -211,7 +210,7 @@ impl NodeRenderer {
     }
 
     pub fn flag(&mut self, token: impl Into<String>) -> &mut Self {
-        self.flags.push(token.into());
+        self.inline_tokens.push(render_key(&token.into()));
         self
     }
 
@@ -219,7 +218,8 @@ impl NodeRenderer {
         let key = key.into();
         let rendered_key = render_key(&key);
         for rendered_value in render_value_tokens(value) {
-            self.keyed.push((rendered_key.clone(), rendered_value));
+            self.inline_tokens
+                .push(format!("{rendered_key}={rendered_value}"));
         }
         self
     }
@@ -231,7 +231,8 @@ impl NodeRenderer {
     ) -> &mut Self {
         let key = key.into();
         let rendered_key = render_key(&key);
-        self.keyed.push((rendered_key, rendered_value.into()));
+        self.inline_tokens
+            .push(format!("{rendered_key}={}", rendered_value.into()));
         self
     }
 
@@ -243,7 +244,8 @@ impl NodeRenderer {
     ) -> &mut Self {
         let key = key.into();
         let rendered_key = render_key_with_repr(&key, key_repr);
-        self.keyed.push((rendered_key, rendered_value.into()));
+        self.inline_tokens
+            .push(format!("{rendered_key}={}", rendered_value.into()));
         self
     }
 
@@ -277,16 +279,9 @@ impl NodeRenderer {
             result.push_str(&value);
         }
 
-        for flag in &self.flags {
+        for token in &self.inline_tokens {
             result.push(' ');
-            result.push_str(&render_key(flag));
-        }
-
-        for (key, value) in &self.keyed {
-            result.push(' ');
-            result.push_str(key);
-            result.push('=');
-            result.push_str(value);
+            result.push_str(token);
         }
 
         if !self.children.is_empty() {
@@ -452,6 +447,38 @@ pub fn insert_arg(rendered: &str, arg: &str) -> String {
         s
     } else {
         format!("{} {}", rendered, arg)
+    }
+}
+
+pub fn insert_attr(rendered: &str, key: &str, value: &str) -> String {
+    let attr = format!("{}={}", render_key(key), value);
+    if let Some(pos) = rendered.find(' ') {
+        let mut s = String::with_capacity(rendered.len() + attr.len() + 1);
+        s.push_str(&rendered[..pos]);
+        s.push(' ');
+        s.push_str(&attr);
+        s.push_str(&rendered[pos..]);
+        s
+    } else if let Some(pos) = rendered.find('{') {
+        let mut s = String::with_capacity(rendered.len() + attr.len() + 1);
+        s.push_str(&rendered[..pos]);
+        s.push(' ');
+        s.push_str(&attr);
+        s.push_str(&rendered[pos..]);
+        s
+    } else {
+        format!("{} {}", rendered, attr)
+    }
+}
+
+pub fn replace_node_name(rendered: &str, name: &str) -> String {
+    let replacement = render_key(name);
+    if let Some(pos) = rendered.find(' ') {
+        format!("{}{}", replacement, &rendered[pos..])
+    } else if let Some(pos) = rendered.find('{') {
+        format!("{}{}", replacement, &rendered[pos..])
+    } else {
+        replacement
     }
 }
 pub fn write_indent<W: std::fmt::Write>(w: &mut W, indent: usize) -> std::fmt::Result {

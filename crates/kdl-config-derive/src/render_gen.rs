@@ -85,104 +85,18 @@ pub(crate) fn render_body_with_accessor(
     modifier_expr: Option<TokenStream>,
     accessor: fn(&FieldInfo) -> FieldAccessor,
 ) -> TokenStream {
-    let mut positional_fields = Vec::new();
-    let mut positional_list_fields = Vec::new();
-    let mut keyed_fields = Vec::new();
-    let mut flag_fields = Vec::new();
-    let mut value_fields = Vec::new();
-    let mut child_fields = Vec::new();
-    let mut children_fields = Vec::new();
-    let mut registry_fields = Vec::new();
-    let mut children_map_fields = Vec::new();
-    let mut flatten_fields = Vec::new();
-
-    for field in fields {
-        if field.is_modifier || field.is_skipped {
-            continue;
-        }
-        if field.flatten {
-            flatten_fields.push(field);
-            continue;
-        }
-        if let Some(collection) = field.collection.as_ref() {
-            if matches!(
-                collection.mode,
-                CollectionMode::ChildrenMapAll | CollectionMode::ChildrenMapNode { .. }
-            ) {
-                children_map_fields.push(field);
-                continue;
-            }
-        }
-        let kind = field_kind(field);
-        let render_placement = render_placement_for(struct_attrs, field, kind);
-
-        match render_placement {
-            RenderPlacement::Attr => {
-                if field.placement.positional_list {
-                    positional_list_fields.push(field);
-                } else if field.placement.positional.is_some() {
-                    positional_fields.push(field);
-                } else if field.is_bool {
-                    flag_fields.push(field);
-                } else {
-                    keyed_fields.push(field);
-                }
-            }
-            RenderPlacement::Value => {
-                // Presence-only booleans should render inline as flags, not as child value nodes
-                let is_presence_only = field.is_bool
-                    && matches!(
-                        field.bool_mode.as_ref().unwrap_or(
-                            &struct_attrs
-                                .default_bool
-                                .clone()
-                                .unwrap_or(BoolMode::PresenceAndValue)
-                        ),
-                        BoolMode::PresenceOnly
-                    );
-                if is_presence_only {
-                    flag_fields.push(field);
-                } else {
-                    value_fields.push(field);
-                }
-            }
-            RenderPlacement::Child => child_fields.push(field),
-            RenderPlacement::Children => children_fields.push(field),
-            RenderPlacement::Registry => registry_fields.push(field),
-        }
-    }
-
-    let positional_render = render_positional_fields(&positional_fields, accessor);
-    let positional_list_render = render_positional_list_fields(&positional_list_fields, accessor);
-    let keyed_render = render_keyed_fields(&keyed_fields, accessor);
-    let flag_render = render_flag_fields(&flag_fields, struct_attrs, accessor);
-    let value_render = render_value_fields(&value_fields, struct_attrs, accessor);
-    let child_render = render_child_fields(&child_fields, accessor);
-    let children_render = render_children_fields(&children_fields, accessor);
-    let registry_render = render_registry_fields(&registry_fields, accessor);
-    let children_map_render = render_children_map_fields(&children_map_fields, accessor);
-    let flatten_render = render_flatten_fields(&flatten_fields, accessor);
+    let ordered_render = render_fields_in_order(struct_attrs, fields, accessor);
     let modifier_expr = modifier_expr.unwrap_or_else(|| modifier_expr_for(fields, accessor));
 
     quote! {
         {
             let mut renderer = ::kdl_config::NodeRenderer::new(#name_expr, #modifier_expr);
 
-            #positional_render
-            #positional_list_render
-            #flag_render
-            #keyed_render
-
             let mut value_nodes: ::std::vec::Vec<(String, usize, String)> = ::std::vec::Vec::new();
             let mut child_nodes: ::std::vec::Vec<(String, usize, String)> = ::std::vec::Vec::new();
             let mut idx: usize = 0;
 
-            #flatten_render
-            #value_render
-            #child_render
-            #children_render
-            #children_map_render
-            #registry_render
+            #ordered_render
 
             value_nodes.sort_by_key(|(_, idx, _)| *idx);
             for (_, _, rendered) in value_nodes {
@@ -206,67 +120,7 @@ pub(crate) fn render_node_body_with_accessor(
     modifier_expr: Option<TokenStream>,
     accessor: fn(&FieldInfo) -> FieldAccessor,
 ) -> TokenStream {
-    let mut positional_fields = Vec::new();
-    let mut positional_list_fields = Vec::new();
-    let mut keyed_fields = Vec::new();
-    let mut flag_fields = Vec::new();
-    let mut value_fields = Vec::new();
-    let mut child_fields = Vec::new();
-    let mut children_fields = Vec::new();
-    let mut registry_fields = Vec::new();
-    let mut children_map_fields = Vec::new();
-    let mut flatten_fields = Vec::new();
-
-    for field in fields {
-        if field.is_modifier || field.is_skipped {
-            continue;
-        }
-        if field.flatten {
-            flatten_fields.push(field);
-            continue;
-        }
-        if let Some(collection) = field.collection.as_ref() {
-            if matches!(
-                collection.mode,
-                CollectionMode::ChildrenMapAll | CollectionMode::ChildrenMapNode { .. }
-            ) {
-                children_map_fields.push(field);
-                continue;
-            }
-        }
-        let kind = field_kind(field);
-        let render_placement = render_placement_for(struct_attrs, field, kind);
-
-        match render_placement {
-            RenderPlacement::Attr => {
-                if field.placement.positional_list {
-                    positional_list_fields.push(field);
-                } else if field.placement.positional.is_some() {
-                    positional_fields.push(field);
-                } else if field.placement.flag.is_some() || field.is_bool {
-                    flag_fields.push(field);
-                } else {
-                    keyed_fields.push(field);
-                }
-            }
-            RenderPlacement::Value => value_fields.push(field),
-            RenderPlacement::Child => child_fields.push(field),
-            RenderPlacement::Children => children_fields.push(field),
-            RenderPlacement::Registry => registry_fields.push(field),
-        }
-    }
-
-    let positional_render = render_positional_fields_node(&positional_fields, accessor);
-    let positional_list_render =
-        render_positional_list_fields_node(&positional_list_fields, accessor);
-    let keyed_render = render_keyed_fields_node(&keyed_fields, accessor);
-    let flag_render = render_flag_fields_node(&flag_fields, struct_attrs, accessor);
-    let value_render = render_value_fields_node(&value_fields, struct_attrs, accessor);
-    let child_render = render_child_fields_node(&child_fields, accessor);
-    let children_render = render_children_fields_node(&children_fields, accessor);
-    let registry_render = render_registry_fields_node(&registry_fields, accessor);
-    let children_map_render = render_children_map_fields_node(&children_map_fields, accessor);
-    let flatten_render = render_flatten_fields_node(&flatten_fields, accessor);
+    let ordered_render = render_fields_in_order_node(struct_attrs, fields, accessor);
     let modifier_expr = modifier_expr.unwrap_or_else(|| modifier_expr_for(fields, accessor));
 
     quote! {
@@ -279,16 +133,7 @@ pub(crate) fn render_node_body_with_accessor(
         let mut child_nodes: ::std::vec::Vec<(String, usize, ::kdl_config::Node)> = ::std::vec::Vec::new();
         let mut idx: usize = 0;
 
-        #flatten_render
-        #positional_render
-        #positional_list_render
-        #keyed_render
-        #flag_render
-        #value_render
-        #child_render
-        #children_render
-        #children_map_render
-        #registry_render
+        #ordered_render
 
         positional_args.sort_by_key(|(idx, _, _)| *idx);
         for (_, value, repr) in positional_args {
@@ -311,6 +156,145 @@ pub(crate) fn render_node_body_with_accessor(
 
         node
     }
+}
+
+fn render_fields_in_order(
+    struct_attrs: &StructAttrs,
+    fields: &[FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
+    let mut items = Vec::new();
+
+    for field in fields {
+        if field.is_modifier || field.is_skipped {
+            continue;
+        }
+
+        let render = render_field_in_order(struct_attrs, field, accessor);
+        items.push(render);
+    }
+
+    quote! { #(#items)* }
+}
+
+fn render_fields_in_order_node(
+    struct_attrs: &StructAttrs,
+    fields: &[FieldInfo],
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
+    let mut items = Vec::new();
+
+    for field in fields {
+        if field.is_modifier || field.is_skipped {
+            continue;
+        }
+
+        let render = render_field_in_order_node(struct_attrs, field, accessor);
+        items.push(render);
+    }
+
+    quote! { #(#items)* }
+}
+
+fn render_field_in_order(
+    struct_attrs: &StructAttrs,
+    field: &FieldInfo,
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
+    if field.flatten {
+        return render_flatten_fields(&[field], accessor);
+    }
+
+    if let Some(collection) = field.collection.as_ref()
+        && matches!(
+            collection.mode,
+            CollectionMode::ChildrenMapAll | CollectionMode::ChildrenMapNode { .. }
+        )
+    {
+        return render_children_map_fields(&[field], accessor);
+    }
+
+    let kind = field_kind(field);
+    match render_placement_for(struct_attrs, field, kind) {
+        RenderPlacement::Attr => {
+            if field.placement.positional_list {
+                render_positional_list_fields(&[field], accessor)
+            } else if field.placement.positional.is_some() {
+                render_positional_fields(&[field], accessor)
+            } else if field.placement.flag.is_some() || field.is_bool {
+                render_flag_fields(&[field], struct_attrs, accessor)
+            } else {
+                render_keyed_fields(&[field], accessor)
+            }
+        }
+        RenderPlacement::Value => {
+            if is_presence_only_bool(field, struct_attrs) {
+                render_flag_fields(&[field], struct_attrs, accessor)
+            } else {
+                render_value_fields(&[field], struct_attrs, accessor)
+            }
+        }
+        RenderPlacement::Child => render_child_fields(&[field], accessor),
+        RenderPlacement::Children => render_children_fields(&[field], accessor),
+        RenderPlacement::Registry => render_registry_fields(&[field], accessor),
+    }
+}
+
+fn render_field_in_order_node(
+    struct_attrs: &StructAttrs,
+    field: &FieldInfo,
+    accessor: fn(&FieldInfo) -> FieldAccessor,
+) -> TokenStream {
+    if field.flatten {
+        return render_flatten_fields_node(&[field], accessor);
+    }
+
+    if let Some(collection) = field.collection.as_ref()
+        && matches!(
+            collection.mode,
+            CollectionMode::ChildrenMapAll | CollectionMode::ChildrenMapNode { .. }
+        )
+    {
+        return render_children_map_fields_node(&[field], accessor);
+    }
+
+    let kind = field_kind(field);
+    match render_placement_for(struct_attrs, field, kind) {
+        RenderPlacement::Attr => {
+            if field.placement.positional_list {
+                render_positional_list_fields_node(&[field], accessor)
+            } else if field.placement.positional.is_some() {
+                render_positional_fields_node(&[field], accessor)
+            } else if field.placement.flag.is_some() || field.is_bool {
+                render_flag_fields_node(&[field], struct_attrs, accessor)
+            } else {
+                render_keyed_fields_node(&[field], accessor)
+            }
+        }
+        RenderPlacement::Value => {
+            if is_presence_only_bool(field, struct_attrs) {
+                render_flag_fields_node(&[field], struct_attrs, accessor)
+            } else {
+                render_value_fields_node(&[field], struct_attrs, accessor)
+            }
+        }
+        RenderPlacement::Child => render_child_fields_node(&[field], accessor),
+        RenderPlacement::Children => render_children_fields_node(&[field], accessor),
+        RenderPlacement::Registry => render_registry_fields_node(&[field], accessor),
+    }
+}
+
+fn is_presence_only_bool(field: &FieldInfo, struct_attrs: &StructAttrs) -> bool {
+    field.is_bool
+        && matches!(
+            field.bool_mode.as_ref().unwrap_or(
+                &struct_attrs
+                    .default_bool
+                    .clone()
+                    .unwrap_or(BoolMode::PresenceAndValue)
+            ),
+            BoolMode::PresenceOnly
+        )
 }
 
 /// Determine the render placement for a field.

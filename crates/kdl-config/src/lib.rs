@@ -53,9 +53,9 @@ pub use node_ext::{
 pub use node_path::NodePath;
 pub use parse::{parse_config, parse_node};
 pub use render::{
-    NodeRenderer, escape_string, insert_arg, is_valid_identifier, render_child_node,
+    NodeRenderer, escape_string, insert_arg, insert_attr, is_valid_identifier, render_child_node,
     render_flatten, render_key, render_key_with_repr, render_node, render_value, render_value_node,
-    render_value_node_scalar, render_value_with_repr, value_node, value_to_kdl,
+    render_value_node_scalar, render_value_with_repr, replace_node_name, value_node, value_to_kdl,
     value_to_kdl_values, write_indent,
 };
 pub use resolve::{decode_at, decode_at_with_config, node_at};
