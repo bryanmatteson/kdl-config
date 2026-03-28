@@ -98,11 +98,7 @@ fn render_float(f: f64) -> String {
 }
 
 fn render_string_atom(value: &str) -> String {
-    if is_valid_identifier(value) {
-        value.to_string()
-    } else {
-        escape_string(value)
-    }
+    escape_string(value)
 }
 
 pub fn render_value(value: &Value) -> String {
@@ -167,7 +163,8 @@ pub struct NodeRenderer {
     modifier: Modifier,
     name_repr: Option<String>,
     positional: Vec<(usize, String)>,
-    inline_tokens: Vec<String>,
+    flags: Vec<String>,
+    keyed_tokens: Vec<(String, String)>,
     children: Vec<String>,
 }
 
@@ -210,7 +207,7 @@ impl NodeRenderer {
     }
 
     pub fn flag(&mut self, token: impl Into<String>) -> &mut Self {
-        self.inline_tokens.push(render_key(&token.into()));
+        self.flags.push(render_key(&token.into()));
         self
     }
 
@@ -218,8 +215,8 @@ impl NodeRenderer {
         let key = key.into();
         let rendered_key = render_key(&key);
         for rendered_value in render_value_tokens(value) {
-            self.inline_tokens
-                .push(format!("{rendered_key}={rendered_value}"));
+            self.keyed_tokens
+                .push((key.clone(), format!("{rendered_key}={rendered_value}")));
         }
         self
     }
@@ -231,8 +228,8 @@ impl NodeRenderer {
     ) -> &mut Self {
         let key = key.into();
         let rendered_key = render_key(&key);
-        self.inline_tokens
-            .push(format!("{rendered_key}={}", rendered_value.into()));
+        self.keyed_tokens
+            .push((key, format!("{rendered_key}={}", rendered_value.into())));
         self
     }
 
@@ -244,8 +241,8 @@ impl NodeRenderer {
     ) -> &mut Self {
         let key = key.into();
         let rendered_key = render_key_with_repr(&key, key_repr);
-        self.inline_tokens
-            .push(format!("{rendered_key}={}", rendered_value.into()));
+        self.keyed_tokens
+            .push((key, format!("{rendered_key}={}", rendered_value.into())));
         self
     }
 
@@ -279,7 +276,14 @@ impl NodeRenderer {
             result.push_str(&value);
         }
 
-        for token in &self.inline_tokens {
+        for token in &self.flags {
+            result.push(' ');
+            result.push_str(token);
+        }
+
+        let mut keyed_tokens = self.keyed_tokens.clone();
+        keyed_tokens.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (_, token) in &keyed_tokens {
             result.push(' ');
             result.push_str(token);
         }

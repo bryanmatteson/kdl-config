@@ -26,7 +26,7 @@ pub use parse::{
     parse_field_attrs, parse_struct_attrs, serde_rename_all_from_attrs, serde_rename_from_attrs,
 };
 pub use type_utils::{
-    extract_children_map_types, extract_hashmap_types, extract_inner_type,
+    extract_btreemap_types, extract_children_map_types, extract_hashmap_types, extract_inner_type,
     extract_registry_vec_value, is_bool_type, is_numeric_type, is_option_type, is_string_type,
     is_value_type,
 };

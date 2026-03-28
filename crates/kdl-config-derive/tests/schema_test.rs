@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use kdl_config::schema::{KdlSchema, SchemaLiteral, SchemaRef, SchemaType};
 use kdl_config_derive::{KdlChoice, KdlNode, KdlSchema, KdlValue};
 
@@ -70,6 +72,14 @@ struct ScalarSchemaConfig {
 struct PathSchemaConfig {
     #[kdl(path = "app.http", attr)]
     port: i64,
+}
+
+#[derive(KdlSchema)]
+#[allow(dead_code)]
+#[kdl(node = "config")]
+struct BTreeRegistrySchemaConfig {
+    #[kdl(registry, container = "item")]
+    items: BTreeMap<String, Setting>,
 }
 
 #[derive(KdlSchema)]
@@ -220,6 +230,32 @@ fn test_scalar_schema_generation() {
         .expect("ScalarSchemaConfig schema not found");
     let prop = schema.props.get("mode").expect("missing mode prop");
     assert_eq!(prop.ty, SchemaType::String);
+}
+
+#[test]
+fn test_btreemap_registry_schema_generation() {
+    let mut registry = kdl_config::schema::SchemaRegistry::default();
+    BTreeRegistrySchemaConfig::register_definitions(&mut registry);
+
+    let schema = registry
+        .definitions
+        .get("BTreeRegistrySchemaConfig")
+        .expect("BTreeRegistrySchemaConfig schema not found");
+    let children = schema
+        .children
+        .as_ref()
+        .expect("expected registry children");
+    let item = children
+        .nodes
+        .iter()
+        .find_map(|child| match child {
+            SchemaRef::Inline(node) if node.name.as_deref() == Some("item") => Some(node),
+            _ => None,
+        })
+        .expect("expected item child schema");
+
+    assert_eq!(item.ref_type.as_deref(), Some("Setting"));
+    assert!(item.registry_key.is_some());
 }
 
 #[test]

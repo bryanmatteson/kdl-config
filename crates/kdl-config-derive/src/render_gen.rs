@@ -98,12 +98,16 @@ pub(crate) fn render_body_with_accessor(
 
             #ordered_render
 
-            value_nodes.sort_by_key(|(_, idx, _)| *idx);
+            value_nodes.sort_by(|(a_name, a_idx, _), (b_name, b_idx, _)| {
+                a_name.cmp(b_name).then(a_idx.cmp(b_idx))
+            });
             for (_, _, rendered) in value_nodes {
                 renderer.child(rendered);
             }
 
-            child_nodes.sort_by_key(|(_, idx, _)| *idx);
+            child_nodes.sort_by(|(a_name, a_idx, _), (b_name, b_idx, _)| {
+                a_name.cmp(b_name).then(a_idx.cmp(b_idx))
+            });
             for (_, _, rendered) in child_nodes {
                 renderer.child(rendered);
             }
@@ -145,8 +149,12 @@ pub(crate) fn render_node_body_with_accessor(
             node.add_arg_with_repr(::kdl_config::Value::String(flag), Some(repr));
         }
 
-        value_nodes.sort_by_key(|(_, idx, _)| *idx);
-        child_nodes.sort_by_key(|(_, idx, _)| *idx);
+        value_nodes.sort_by(|(a_name, a_idx, _), (b_name, b_idx, _)| {
+            a_name.cmp(b_name).then(a_idx.cmp(b_idx))
+        });
+        child_nodes.sort_by(|(a_name, a_idx, _), (b_name, b_idx, _)| {
+            a_name.cmp(b_name).then(a_idx.cmp(b_idx))
+        });
         for (_, _, child) in value_nodes {
             node.add_child(child);
         }
@@ -414,7 +422,7 @@ fn render_condition(field: &FieldInfo, accessor: &FieldAccessor) -> TokenStream 
     if field.skip_serialize_empty_collections {
         if field.is_option_vec {
             checks.push(quote! { (#reference).as_ref().map_or(true, |values| !values.is_empty()) });
-        } else if field.is_vec || field.is_hashmap {
+        } else if field.is_vec || field.is_hashmap || field.is_btreemap {
             checks.push(quote! { !(#reference).is_empty() });
         }
     }
@@ -938,6 +946,21 @@ fn render_children_map_fields(
                     }
                 });
             }
+            (Some(map_node), crate::attrs::ChildrenMapKind::BTreeMap) => {
+                items.push(quote! {
+                    if #cond {
+                        for (name, value) in #reference {
+                            let rendered_key = ::kdl_config::render_value(
+                                &::kdl_config::Value::from((*name).clone()),
+                            );
+                            let mut rendered = ::kdl_config::to_kdl(value, #map_node);
+                            rendered = ::kdl_config::insert_arg(&rendered, &rendered_key);
+                            child_nodes.push((#map_node.to_string(), idx, rendered));
+                            idx += 1;
+                        }
+                    }
+                });
+            }
             (Some(map_node), crate::attrs::ChildrenMapKind::Vec) => {
                 items.push(quote! {
                     if #cond {
@@ -979,6 +1002,18 @@ fn render_children_map_fields(
                             .collect();
                         entries.sort_by(|a, b| a.0.cmp(&b.0));
                         for (rendered_key, _name, value) in entries {
+                            let rendered = ::kdl_config::to_kdl(value, &rendered_key);
+                            child_nodes.push((rendered_key, idx, rendered));
+                            idx += 1;
+                        }
+                    }
+                });
+            }
+            (None, crate::attrs::ChildrenMapKind::BTreeMap) => {
+                items.push(quote! {
+                    if #cond {
+                        for (name, value) in #reference {
+                            let rendered_key = name.to_string();
                             let rendered = ::kdl_config::to_kdl(value, &rendered_key);
                             child_nodes.push((rendered_key, idx, rendered));
                             idx += 1;
@@ -1611,6 +1646,25 @@ fn render_children_map_fields_node(
                     }
                 });
             }
+            (Some(map_node), crate::attrs::ChildrenMapKind::BTreeMap) => {
+                items.push(quote! {
+                    if #cond {
+                        for (name, value) in #reference {
+                            let rendered_key = ::kdl_config::render_value(
+                                &::kdl_config::Value::from((*name).clone()),
+                            );
+                            let mut child = value.render_node(#map_node);
+                            child.insert_arg_with_repr(
+                                0,
+                                ::kdl_config::Value::from((*name).clone()),
+                                Some(rendered_key),
+                            );
+                            child_nodes.push((#map_node.to_string(), idx, child));
+                            idx += 1;
+                        }
+                    }
+                });
+            }
             (Some(map_node), crate::attrs::ChildrenMapKind::Vec) => {
                 items.push(quote! {
                     if #cond {
@@ -1660,6 +1714,18 @@ fn render_children_map_fields_node(
                             .collect();
                         entries.sort_by(|a, b| a.0.cmp(&b.0));
                         for (rendered_key, _name, value) in entries {
+                            let child = value.render_node(&rendered_key);
+                            child_nodes.push((rendered_key, idx, child));
+                            idx += 1;
+                        }
+                    }
+                });
+            }
+            (None, crate::attrs::ChildrenMapKind::BTreeMap) => {
+                items.push(quote! {
+                    if #cond {
+                        for (name, value) in #reference {
+                            let rendered_key = name.to_string();
                             let child = value.render_node(&rendered_key);
                             child_nodes.push((rendered_key, idx, child));
                             idx += 1;

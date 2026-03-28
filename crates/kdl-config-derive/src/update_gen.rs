@@ -149,7 +149,7 @@ fn render_condition(field: &FieldInfo, accessor: &FieldAccessor) -> TokenStream 
     if field.skip_serialize_empty_collections {
         if field.is_option_vec {
             checks.push(quote! { (#reference).as_ref().map_or(true, |values| !values.is_empty()) });
-        } else if field.is_vec || field.is_hashmap {
+        } else if field.is_vec || field.is_hashmap || field.is_btreemap {
             checks.push(quote! { !(#reference).is_empty() });
         }
     }
@@ -750,10 +750,10 @@ fn generate_update_collection(
         (None, true)
     } else {
         let (_kind, key_ty, _val_ty) = crate::attrs::extract_children_map_types(&field.ty)
-            .expect("children_map requires HashMap<K, V> or Vec<(K, V)>");
+            .expect("children_map requires HashMap<K, V>, BTreeMap<K, V>, or Vec<(K, V)>");
         (Some(key_ty.clone()), false)
     };
-    let is_hashmap = field.is_hashmap;
+    let is_hashmap = field.is_hashmap || field.is_btreemap;
     let is_option_vec = field.is_option_vec;
 
     let filter = if all_children {

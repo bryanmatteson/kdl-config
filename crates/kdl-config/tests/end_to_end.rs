@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use kdl_config::newtypes::ScalarString;
 use kdl_config::{
@@ -305,6 +305,13 @@ struct RegistryConfig {
     nodes: HashMap<String, RegistryEntry>,
 }
 
+#[derive(Debug, PartialEq, Kdl)]
+#[kdl(node = "config")]
+struct RegistryBTreeConfig {
+    #[kdl(registry, container = "config_node")]
+    nodes: BTreeMap<String, RegistryEntry>,
+}
+
 #[test]
 fn parses_registry_keyed_by_first_arg() {
     let parsed = parse_named::<RegistryConfig>(
@@ -316,6 +323,23 @@ fn parses_registry_keyed_by_first_arg() {
     assert_eq!(parsed.nodes.get("first").unwrap().size, 1);
     assert_eq!(parsed.nodes.get("second").unwrap().size, 2);
     assert_eq!(parsed.nodes.get("third").unwrap().size, 3);
+}
+
+#[test]
+fn parses_and_renders_registry_btreemap() {
+    let parsed = parse_named::<RegistryBTreeConfig>(
+        "config {\n  config_node beta size=2\n  config_node alpha size=1\n}",
+        "config",
+    )
+    .unwrap();
+
+    assert_eq!(parsed.nodes.get("alpha").unwrap().size, 1);
+    assert_eq!(parsed.nodes.get("beta").unwrap().size, 2);
+
+    let rendered = kdl_config::to_kdl(&parsed, "config");
+    assert!(rendered.contains("config_node \"alpha\" size=1"));
+    assert!(rendered.contains("config_node \"beta\" size=2"));
+    assert!(rendered.find("\"alpha\"").unwrap() < rendered.find("\"beta\"").unwrap());
 }
 
 #[derive(Debug, PartialEq, KdlNode)]
@@ -336,6 +360,13 @@ struct CategoryOverrides {
 struct ChildrenMapByArgConfig {
     #[kdl(children_map, map_node = "category")]
     categories: HashMap<String, CategoryOverrides>,
+}
+
+#[derive(Debug, PartialEq, KdlNode)]
+#[kdl(node = "config")]
+struct ChildrenMapByArgBTreeConfig {
+    #[kdl(children_map, map_node = "category")]
+    categories: BTreeMap<String, CategoryOverrides>,
 }
 
 #[derive(Debug, PartialEq, KdlNode)]
@@ -407,6 +438,29 @@ fn parses_children_map_keyed_by_first_arg() {
         parsed.categories.get("code").unwrap().indexing.chunk_size,
         2000
     );
+}
+
+#[test]
+fn parses_and_renders_children_map_btreemap() {
+    let parsed = parse_named::<ChildrenMapByArgBTreeConfig>(
+        "config {\n  category \"docs\" {\n    indexing chunk_size=3000\n  }\n  category \"code\" {\n    indexing chunk_size=2000\n  }\n}",
+        "config",
+    )
+    .unwrap();
+
+    assert_eq!(
+        parsed.categories.get("docs").unwrap().indexing.chunk_size,
+        3000
+    );
+    assert_eq!(
+        parsed.categories.get("code").unwrap().indexing.chunk_size,
+        2000
+    );
+
+    let rendered = kdl_config::to_kdl(&parsed, "config");
+    assert!(rendered.contains("category \"code\""));
+    assert!(rendered.contains("category \"docs\""));
+    assert!(rendered.find("\"code\"").unwrap() < rendered.find("\"docs\"").unwrap());
 }
 
 #[test]

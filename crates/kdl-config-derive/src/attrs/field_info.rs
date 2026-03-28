@@ -25,6 +25,7 @@ pub struct FieldInfo {
     pub is_vec: bool,
     pub is_option_vec: bool,
     pub is_hashmap: bool,
+    pub is_btreemap: bool,
     pub is_bool: bool,
     pub is_modifier: bool,
     pub is_scalar: bool,
@@ -136,6 +137,7 @@ impl FieldInfo {
                 .map(is_vec_type)
                 .unwrap_or(false);
         let is_hashmap = is_hashmap_type(&field.ty);
+        let is_btreemap = is_btreemap_type(&field.ty);
         let is_bool = is_bool_type(&field.ty)
             || (is_optional
                 && extract_inner_type(&field.ty)
@@ -155,7 +157,7 @@ impl FieldInfo {
             ));
         }
 
-        if is_hashmap || is_modifier {
+        if is_hashmap || is_btreemap || is_modifier {
             return Err(syn::Error::new(
                 err_span,
                 "tuple struct positional fields must be scalar value types",
@@ -207,6 +209,7 @@ impl FieldInfo {
             is_vec,
             is_option_vec,
             is_hashmap,
+            is_btreemap,
             is_bool,
             is_modifier,
             is_scalar,
@@ -250,6 +253,7 @@ impl FieldInfo {
         let is_option_vec =
             is_optional && extract_inner_type(&ty).map(is_vec_type).unwrap_or(false);
         let is_hashmap = is_hashmap_type(&ty);
+        let is_btreemap = is_btreemap_type(&ty);
         let is_bool = is_bool_type(&ty)
             || (is_optional && extract_inner_type(&ty).map(is_bool_type).unwrap_or(false));
         let is_modifier = is_modifier_type(&ty)
@@ -296,6 +300,7 @@ impl FieldInfo {
             is_vec,
             is_option_vec,
             is_hashmap,
+            is_btreemap,
             is_registry_vec,
             err_span,
         )?;
@@ -313,6 +318,7 @@ impl FieldInfo {
             is_vec,
             is_option_vec,
             is_hashmap,
+            is_btreemap,
             is_bool,
             is_modifier,
             is_scalar,
@@ -350,6 +356,7 @@ impl FieldInfo {
         is_vec: bool,
         is_option_vec: bool,
         is_hashmap: bool,
+        is_btreemap: bool,
         is_registry_vec: bool,
         err_span: Span,
     ) -> syn::Result<()> {
@@ -448,10 +455,17 @@ impl FieldInfo {
         }
 
         // Registry validation
-        if attrs.placement.registry && !is_hashmap && !is_registry_vec {
+        let registry_map_key_is_string = extract_hashmap_types(ty)
+            .map(|(key_ty, _)| is_string_type(key_ty))
+            .or_else(|| extract_btreemap_types(ty).map(|(key_ty, _)| is_string_type(key_ty)))
+            .unwrap_or(false);
+        if attrs.placement.registry
+            && !((is_hashmap || is_btreemap) && registry_map_key_is_string)
+            && !is_registry_vec
+        {
             return Err(syn::Error::new(
                 err_span,
-                "registry placement requires HashMap<String, V> or Vec<(String, V)> field type",
+                "registry placement requires HashMap<String, V>, BTreeMap<String, V>, or Vec<(String, V)> field type",
             ));
         }
 
@@ -461,7 +475,7 @@ impl FieldInfo {
             if children_map_kind.is_none() {
                 return Err(syn::Error::new(
                     err_span,
-                    "children_map placement requires HashMap<K, V> or Vec<(K, V)> field type",
+                    "children_map placement requires HashMap<K, V>, BTreeMap<K, V>, or Vec<(K, V)> field type",
                 ));
             }
             if has_any_placement(&attrs.placement) {
@@ -576,7 +590,8 @@ impl FieldInfo {
         self.skip_serialize_none =
             struct_attrs.skip_serialize_none.unwrap_or(false) && self.is_optional;
 
-        let supports_empty_check = self.is_vec || self.is_option_vec || self.is_hashmap;
+        let supports_empty_check =
+            self.is_vec || self.is_option_vec || self.is_hashmap || self.is_btreemap;
         self.skip_serialize_empty_collections = struct_attrs
             .skip_serialize_empty_collections
             .unwrap_or(false)

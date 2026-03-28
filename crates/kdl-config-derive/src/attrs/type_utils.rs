@@ -40,6 +40,18 @@ pub fn is_hashmap_type(ty: &Type) -> bool {
     }
 }
 
+/// Check if a type is `BTreeMap<K, V>`.
+pub fn is_btreemap_type(ty: &Type) -> bool {
+    match ty {
+        Type::Path(TypePath { path, .. }) => path
+            .segments
+            .last()
+            .map(|s| s.ident == "BTreeMap")
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 /// Check if a type is `bool`.
 pub fn is_bool_type(ty: &Type) -> bool {
     match ty {
@@ -155,6 +167,27 @@ pub fn extract_hashmap_types(ty: &Type) -> Option<(&Type, &Type)> {
     None
 }
 
+/// Extract key and value types from `BTreeMap<K, V>`.
+pub fn extract_btreemap_types(ty: &Type) -> Option<(&Type, &Type)> {
+    if let Type::Path(TypePath { path, .. }) = ty {
+        if let Some(segment) = path.segments.last() {
+            if segment.ident == "BTreeMap" {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    let mut iter = args.args.iter();
+                    if let (
+                        Some(syn::GenericArgument::Type(key_ty)),
+                        Some(syn::GenericArgument::Type(val_ty)),
+                    ) = (iter.next(), iter.next())
+                    {
+                        return Some((key_ty, val_ty));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Extract types from a 2-tuple `(A, B)`.
 pub fn extract_tuple_types(ty: &Type) -> Option<(&Type, &Type)> {
     if let Type::Tuple(tuple) = ty {
@@ -188,11 +221,16 @@ pub fn extract_vec_tuple_types(ty: &Type) -> Option<(&Type, &Type)> {
 ///
 /// Supports:
 /// - `HashMap<K, V>` -> `(ChildrenMapKind::HashMap, K, V)`
+/// - `BTreeMap<K, V>` -> `(ChildrenMapKind::BTreeMap, K, V)`
 /// - `Vec<(K, V)>` -> `(ChildrenMapKind::Vec, K, V)`
 /// - `Option<Vec<(K, V)>>` -> `(ChildrenMapKind::OptionVec, K, V)`
 pub fn extract_children_map_types(ty: &Type) -> Option<(ChildrenMapKind, &Type, &Type)> {
     if let Some((key_ty, val_ty)) = extract_hashmap_types(ty) {
         return Some((ChildrenMapKind::HashMap, key_ty, val_ty));
+    }
+
+    if let Some((key_ty, val_ty)) = extract_btreemap_types(ty) {
+        return Some((ChildrenMapKind::BTreeMap, key_ty, val_ty));
     }
 
     if let Some((key_ty, val_ty)) = extract_vec_tuple_types(ty) {

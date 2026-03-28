@@ -232,8 +232,8 @@ pub(crate) fn generate_struct_overrides(struct_attrs: &StructAttrs) -> TokenStre
 }
 
 pub(crate) fn generate_field_parser(field: &FieldInfo, struct_name: &str) -> TokenStream {
-    if field.is_hashmap && field.collection.is_none() {
-        return quote! { compile_error!("HashMap fields require #[kdl(registry)] or #[kdl(children_map)]"); };
+    if (field.is_hashmap || field.is_btreemap) && field.collection.is_none() {
+        return quote! { compile_error!("HashMap/BTreeMap fields require #[kdl(registry)] or #[kdl(children_map)]"); };
     }
     if crate::attrs::extract_registry_vec_value(&field.ty).is_some() && field.collection.is_none() {
         return quote! { compile_error!("Vec<(String, T)> fields require #[kdl(registry)] or #[kdl(children_map)]"); };
@@ -2521,6 +2521,10 @@ fn generate_collection_parser(
         if field.is_hashmap {
             let (_key_ty, val_ty) = extract_hashmap_types(ty).expect("registry requires HashMap");
             (ChildrenMapKind::HashMap, None, val_ty)
+        } else if field.is_btreemap {
+            let (_key_ty, val_ty) =
+                crate::attrs::extract_btreemap_types(ty).expect("registry requires BTreeMap");
+            (ChildrenMapKind::BTreeMap, None, val_ty)
         } else {
             let (val_ty, is_option_vec) = crate::attrs::extract_registry_vec_value(ty)
                 .expect("registry vec requires Vec<(String, T)>");
@@ -2532,8 +2536,8 @@ fn generate_collection_parser(
             (kind, None, val_ty)
         }
     } else {
-        let (kind, key_ty, val_ty) =
-            extract_children_map_types(ty).expect("children_map requires HashMap or Vec<(K, V)>");
+        let (kind, key_ty, val_ty) = extract_children_map_types(ty)
+            .expect("children_map requires HashMap, BTreeMap, or Vec<(K, V)>");
         (kind, Some(key_ty), val_ty)
     };
     let key_ty = if is_registry {
@@ -2722,13 +2726,22 @@ fn generate_collection_parser(
     };
 
     let (field_init, map_insert, finalize_vec) = match collection_kind {
-        ChildrenMapKind::HashMap => {
-            let field_init = if is_registry {
-                quote! { let mut #field_ident: #ty = ::std::collections::HashMap::new(); }
+        ChildrenMapKind::HashMap | ChildrenMapKind::BTreeMap => {
+            let map_new = if collection_kind == ChildrenMapKind::BTreeMap {
+                quote! { ::std::collections::BTreeMap::new() }
             } else {
-                quote! { let mut #field_ident: #ty = ::std::collections::HashMap::new(); }
+                quote! { ::std::collections::HashMap::new() }
             };
+            let map_type_name = if collection_kind == ChildrenMapKind::BTreeMap {
+                "BTreeMap"
+            } else {
+                "HashMap"
+            };
+            let field_init = quote! { let mut #field_ident: #ty = #map_new; };
             let map_insert = if is_registry {
+                let append_err = format!(
+                    "append conflict policy is not supported for {map_type_name} registry fields"
+                );
                 quote! {
                     match field_config.conflict {
                         ::kdl_config::ConflictPolicy::Error => {
@@ -2747,12 +2760,15 @@ fn generate_collection_parser(
                             return Err(::kdl_config::KdlConfigError::incompatible_placement(
                                 #struct_name,
                                 #field_name,
-                                "append conflict policy is not supported for HashMap registry fields",
+                                #append_err,
                             ));
                         }
                     }
                 }
             } else {
+                let append_err = format!(
+                    "append conflict policy is not supported for children_map {map_type_name} fields"
+                );
                 quote! {
                     match field_config.conflict {
                         ::kdl_config::ConflictPolicy::Error => {
@@ -2771,7 +2787,7 @@ fn generate_collection_parser(
                             return Err(::kdl_config::KdlConfigError::incompatible_placement(
                                 #struct_name,
                                 #field_name,
-                                "append conflict policy is not supported for children_map HashMap fields",
+                                #append_err,
                             ));
                         }
                     }

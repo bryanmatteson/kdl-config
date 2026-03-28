@@ -219,6 +219,7 @@ pub struct CollectionSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChildrenMapKind {
     HashMap,
+    BTreeMap,
     Vec,
     OptionVec,
 }

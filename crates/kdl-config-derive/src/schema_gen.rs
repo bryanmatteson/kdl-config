@@ -5,10 +5,10 @@ use syn::{Attribute, DataEnum, DeriveInput, Expr, ExprLit, ExprUnary, Fields, Li
 
 use crate::attrs::{
     BoolMode, CollectionMode, ConflictPolicy, DefaultPlacement, FieldInfo, FlagStyle,
-    SchemaTypeOverride, SelectorAst, StructAttrs, extract_children_map_types,
-    extract_hashmap_types, extract_inner_type, extract_registry_vec_value, has_child_placement,
-    has_value_placement, is_option_type, is_value_type, parse_field_attrs, parse_struct_attrs,
-    serde_rename_from_attrs,
+    SchemaTypeOverride, SelectorAst, StructAttrs, extract_btreemap_types,
+    extract_children_map_types, extract_hashmap_types, extract_inner_type,
+    extract_registry_vec_value, has_child_placement, has_value_placement, is_option_type,
+    is_value_type, parse_field_attrs, parse_struct_attrs, serde_rename_from_attrs,
 };
 
 pub fn generate_schema_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -142,6 +142,8 @@ fn field_kind(field: &FieldInfo) -> SchemaFieldKind {
 fn registry_value_type(field: &FieldInfo) -> Option<&syn::Type> {
     if field.is_hashmap {
         extract_hashmap_types(&field.ty).map(|(_, val)| val)
+    } else if field.is_btreemap {
+        extract_btreemap_types(&field.ty).map(|(_, val)| val)
     } else {
         extract_registry_vec_value(&field.ty).map(|(val, _)| val)
     }
@@ -631,7 +633,7 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
                 field.container.clone().unwrap_or_else(|| kdl_key.clone())
             };
             let val_ty = registry_value_type(field).expect(
-                "registry placement requires HashMap<String, V> or Vec<(String, V)> field type",
+                "registry placement requires HashMap<String, V>, BTreeMap<String, V>, or Vec<(String, V)> field type",
             );
             let default_selector = SelectorAst::Arg(0);
             let selector = field
@@ -655,8 +657,9 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             field.collection.as_ref().map(|spec| &spec.mode),
             Some(CollectionMode::ChildrenMapNode { .. } | CollectionMode::ChildrenMapAll)
         ) {
-            let (_kind, key_ty, val_ty) = extract_children_map_types(&field.ty)
-                .expect("children_map placement requires HashMap<K, V> or Vec<(K, V)>");
+            let (_kind, key_ty, val_ty) = extract_children_map_types(&field.ty).expect(
+                "children_map placement requires HashMap<K, V>, BTreeMap<K, V>, or Vec<(K, V)>",
+            );
             register_calls.push(quote! {
                 <#val_ty as ::kdl_config::schema::KdlSchema>::register_definitions(registry);
             });

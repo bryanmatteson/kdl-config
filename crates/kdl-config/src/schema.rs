@@ -1506,6 +1506,16 @@ impl<T: KdlSchema> KdlSchema for std::collections::HashMap<String, T> {
     }
 }
 
+impl<T: KdlSchema> KdlSchema for std::collections::BTreeMap<String, T> {
+    fn schema_ref() -> SchemaRef {
+        T::schema_ref()
+    }
+
+    fn register_definitions(registry: &mut SchemaRegistry) {
+        T::register_definitions(registry);
+    }
+}
+
 impl<T: KdlSchema> KdlSchema for (String, T) {
     fn schema_ref() -> SchemaRef {
         T::schema_ref()
