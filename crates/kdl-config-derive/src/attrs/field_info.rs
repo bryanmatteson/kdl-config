@@ -19,6 +19,8 @@ pub struct FieldInfo {
     pub ty: Type,
     pub kdl_key: String,
     pub kdl_aliases: Vec<String>,
+    pub tag_attr: Option<String>,
+    pub hoist_attrs: Vec<String>,
     pub placement: FieldPlacement,
     pub required: bool,
     pub is_optional: bool,
@@ -203,6 +205,8 @@ impl FieldInfo {
             ty: field.ty.clone(),
             kdl_key,
             kdl_aliases: vec![],
+            tag_attr: None,
+            hoist_attrs: vec![],
             placement,
             required,
             is_optional,
@@ -312,6 +316,8 @@ impl FieldInfo {
             ty: ty.clone(),
             kdl_key,
             kdl_aliases: attrs.aliases,
+            tag_attr: attrs.tag_attr,
+            hoist_attrs: attrs.hoist_attrs,
             placement: attrs.placement,
             required,
             is_optional,
@@ -405,6 +411,45 @@ impl FieldInfo {
                 err_span,
                 "path cannot be combined with modifier placement",
             ));
+        }
+
+        if attrs.tag_attr.is_some() || !attrs.hoist_attrs.is_empty() {
+            if !attrs.placement.child {
+                return Err(syn::Error::new(
+                    err_span,
+                    "tag_attr/hoist_attrs are only supported on #[kdl(child)] fields",
+                ));
+            }
+            if attrs.placement.children || attrs.placement.children_any || attrs.placement.value {
+                return Err(syn::Error::new(
+                    err_span,
+                    "tag_attr/hoist_attrs cannot be combined with children, children_any, or value placement",
+                ));
+            }
+            if attrs.children_map || attrs.placement.registry {
+                return Err(syn::Error::new(
+                    err_span,
+                    "tag_attr/hoist_attrs cannot be combined with registry or children_map placement",
+                ));
+            }
+            if attrs.select.is_some() {
+                return Err(syn::Error::new(
+                    err_span,
+                    "tag_attr/hoist_attrs cannot be combined with field selectors",
+                ));
+            }
+            if attrs.flatten {
+                return Err(syn::Error::new(
+                    err_span,
+                    "tag_attr/hoist_attrs cannot be combined with flatten",
+                ));
+            }
+            if attrs.tag_attr.is_none() && !attrs.hoist_attrs.is_empty() {
+                return Err(syn::Error::new(
+                    err_span,
+                    "hoist_attrs requires tag_attr",
+                ));
+            }
         }
 
         // Value placement validation

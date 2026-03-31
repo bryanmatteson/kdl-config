@@ -64,12 +64,20 @@ pub fn generate_parse_impl(
 
     let field_names: Vec<&Ident> = fields.iter().map(|f| &f.ident).collect();
 
-    let valid_attr_keys: Vec<String> = fields
+    let mut valid_attr_keys: Vec<String> = fields
         .iter()
         .filter(|f| !f.is_skipped)
         .filter(|f| matches!(field_kind(f), FieldKind::ValueScalar | FieldKind::ValueVec))
         .flat_map(|f| std::iter::once(f.kdl_key.clone()).chain(f.kdl_aliases.iter().cloned()))
         .collect();
+    for field in fields.iter().filter(|f| !f.is_skipped) {
+        if let Some(tag_attr) = field.tag_attr.as_ref() {
+            valid_attr_keys.push(tag_attr.clone());
+        }
+        valid_attr_keys.extend(field.hoist_attrs.iter().cloned());
+    }
+    valid_attr_keys.sort();
+    valid_attr_keys.dedup();
     let valid_child_names: Vec<String> = fields
         .iter()
         .filter(|f| !f.is_skipped)
@@ -103,6 +111,54 @@ pub fn generate_parse_impl(
         }
     }
     let alias_pairs: Vec<(String, String)> = alias_to_key.into_iter().collect();
+    let mut attr_claims: BTreeMap<String, String> = BTreeMap::new();
+    for field in fields.iter().filter(|f| !f.is_skipped) {
+        if matches!(field_kind(field), FieldKind::ValueScalar | FieldKind::ValueVec) {
+            for key in std::iter::once(field.kdl_key.clone()).chain(field.kdl_aliases.iter().cloned())
+            {
+                match attr_claims.get(&key) {
+                    Some(existing) if existing != &field.kdl_key => {
+                        let msg = format!(
+                            "attribute '{key}' is claimed by multiple fields ('{existing}' and '{}')",
+                            field.kdl_key
+                        );
+                        return quote! { compile_error!(#msg); };
+                    }
+                    _ => {
+                        attr_claims.insert(key, field.kdl_key.clone());
+                    }
+                }
+            }
+        }
+
+        let tagged_owner = format!("tagged child '{}'", field.kdl_key);
+        if let Some(tag_attr) = field.tag_attr.as_ref() {
+            match attr_claims.get(tag_attr) {
+                Some(existing) if existing != &tagged_owner => {
+                    let msg = format!(
+                        "attribute '{tag_attr}' is claimed by multiple fields ('{existing}' and '{tagged_owner}')"
+                    );
+                    return quote! { compile_error!(#msg); };
+                }
+                _ => {
+                    attr_claims.insert(tag_attr.clone(), tagged_owner.clone());
+                }
+            }
+        }
+        for hoist_attr in &field.hoist_attrs {
+            match attr_claims.get(hoist_attr) {
+                Some(existing) if existing != &tagged_owner => {
+                    let msg = format!(
+                        "attribute '{hoist_attr}' is claimed by multiple fields ('{existing}' and '{tagged_owner}')"
+                    );
+                    return quote! { compile_error!(#msg); };
+                }
+                _ => {
+                    attr_claims.insert(hoist_attr.clone(), tagged_owner.clone());
+                }
+            }
+        }
+    }
     let alias_node_setup = if alias_pairs.is_empty() {
         quote! {}
     } else {
@@ -1592,44 +1648,140 @@ fn generate_node_parser(
     } else {
         ty
     };
+    let tagged_child = field.tag_attr.is_some() || !field.hoist_attrs.is_empty();
     let child_ident = format_ident!("__kdl_child_{}", field_ident);
     let inject_node_ident = format_ident!("__kdl_inject_node_{}", field_ident);
     let inject_value_ident = format_ident!("__kdl_inject_value_{}", field_ident);
-    let (inject_prep, decode_target) = if let Some(spec) = field.select.as_ref() {
-        if let Some(inject) = spec.opts.inject.as_ref() {
-            let inject_name = match inject {
-                InjectOpt::Implicit => "name".to_string(),
-                InjectOpt::Field(name) => name.clone(),
-            };
-            let consume = spec.opts.consume.unwrap_or(false);
-            let inject_extract = selector_inject_extract(
-                &spec.selector,
-                struct_name,
-                &field_name,
-                &child_ident,
-                &inject_value_ident,
-                &inject_node_ident,
-                consume,
-            );
-            let inject_attr = quote! {
-                let mut entry = ::kdl_config::KdlEntry::new(#inject_value_ident);
-                entry.set_name(Some(#inject_name));
-                #inject_node_ident.entries_mut().push(entry);
-            };
-            (
-                quote! { #inject_extract #inject_attr },
-                quote! { &#inject_node_ident },
-            )
+    let effective_node_ident = format_ident!("__kdl_effective_node_{}", field_ident);
+    let parent_injected_ident = format_ident!("__kdl_parent_injected_{}", field_ident);
+    let (inject_prep, decode_target) = if !tagged_child {
+        if let Some(spec) = field.select.as_ref() {
+            if let Some(inject) = spec.opts.inject.as_ref() {
+                let inject_name = match inject {
+                    InjectOpt::Implicit => "name".to_string(),
+                    InjectOpt::Field(name) => name.clone(),
+                };
+                let consume = spec.opts.consume.unwrap_or(false);
+                let inject_extract = selector_inject_extract(
+                    &spec.selector,
+                    struct_name,
+                    &field_name,
+                    &child_ident,
+                    &inject_value_ident,
+                    &inject_node_ident,
+                    consume,
+                );
+                let inject_attr = quote! {
+                    let mut entry = ::kdl_config::KdlEntry::new(#inject_value_ident);
+                    entry.set_name(Some(#inject_name));
+                    #inject_node_ident.entries_mut().push(entry);
+                };
+                (
+                    quote! { #inject_extract #inject_attr },
+                    quote! { &#inject_node_ident },
+                )
+            } else {
+                (quote! {}, quote! { #child_ident })
+            }
         } else {
             (quote! {}, quote! { #child_ident })
         }
     } else {
-        (quote! {}, quote! { #child_ident })
+        (quote! {}, quote! { &#effective_node_ident })
+    };
+    let tagged_child_prep = if tagged_child {
+        let tag_attr = field.tag_attr.as_ref().map(|value| quote! { #value });
+        let hoist_attrs: Vec<TokenStream> = field.hoist_attrs.iter().map(|value| quote! { #value }).collect();
+        let inject_tag = if let Some(tag_attr) = tag_attr {
+            quote! {
+                if node.attr_values(#tag_attr).is_none() && #child_ident.attr_values(#tag_attr).is_some() {
+                    return Err(::kdl_config::KdlConfigError {
+                        struct_name: #struct_name.to_string(),
+                        field_name: Some(#field_name.to_string()),
+                        kdl_key: Some(#kdl_key.to_string()),
+                        placement: ::kdl_config::Placement::Child,
+                        required: false,
+                        kind: ::kdl_config::ErrorKind::Custom(format!(
+                            "child '{}' must not set selector attribute '{}'; write it on the parent node instead",
+                            #kdl_key,
+                            #tag_attr,
+                        )),
+                        node_path: None,
+                        location: None,
+                    });
+                }
+                if let Some(values) = node.attr_values(#tag_attr) {
+                    #parent_injected_ident = true;
+                    claims.claim_attr(#tag_attr);
+                    if #effective_node_ident.attr_values(#tag_attr).is_some() {
+                        return Err(::kdl_config::KdlConfigError {
+                            struct_name: #struct_name.to_string(),
+                            field_name: Some(#field_name.to_string()),
+                            kdl_key: Some(#kdl_key.to_string()),
+                            placement: ::kdl_config::Placement::Child,
+                            required: false,
+                            kind: ::kdl_config::ErrorKind::Custom(format!(
+                                "parent attribute '{}' conflicts with the same attribute in child '{}'",
+                                #tag_attr,
+                                #kdl_key,
+                            )),
+                            node_path: None,
+                            location: None,
+                        });
+                    }
+                    for value in values {
+                        let mut entry = ::kdl_config::KdlEntry::new(value.clone());
+                        entry.set_name(Some(#tag_attr));
+                        #effective_node_ident.entries_mut().push(entry);
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
+        let inject_hoisted = hoist_attrs.iter().map(|attr| {
+            quote! {
+                if let Some(values) = node.attr_values(#attr) {
+                    #parent_injected_ident = true;
+                    claims.claim_attr(#attr);
+                    if #effective_node_ident.attr_values(#attr).is_some() {
+                        return Err(::kdl_config::KdlConfigError {
+                            struct_name: #struct_name.to_string(),
+                            field_name: Some(#field_name.to_string()),
+                            kdl_key: Some(#kdl_key.to_string()),
+                            placement: ::kdl_config::Placement::Child,
+                            required: false,
+                            kind: ::kdl_config::ErrorKind::Custom(format!(
+                                "parent attribute '{}' conflicts with the same attribute in child '{}'",
+                                #attr,
+                                #kdl_key,
+                            )),
+                            node_path: None,
+                            location: None,
+                        });
+                    }
+                    for value in values {
+                        let mut entry = ::kdl_config::KdlEntry::new(value.clone());
+                        entry.set_name(Some(#attr));
+                        #effective_node_ident.entries_mut().push(entry);
+                    }
+                }
+            }
+        });
+        quote! {
+            let mut #effective_node_ident = #child_ident.clone();
+            let mut #parent_injected_ident = false;
+            #inject_tag
+            #(#inject_hoisted)*
+        }
+    } else {
+        quote! {}
     };
     let explicit_child_loop = if field.placement.children_any {
         quote! {
             for (child_index, #child_ident) in node.iter_children().enumerate() {
                 let child_ctx = ctx.with_child(#child_ident.name_str(), child_index);
+                #tagged_child_prep
                 #inject_prep
                 let v = <#value_ty as ::kdl_config::KdlDecode>::decode(#decode_target, &child_ctx)?;
                 claims.claim_child(child_index);
@@ -1645,12 +1797,16 @@ fn generate_node_parser(
             }
         }
     } else {
-        quote! {
+        let synthetic_child = if tagged_child {
+            quote! {
+                let mut __kdl_seen_matching_child = false;
             for (child_index, #child_ident) in node.iter_children().enumerate() {
                 if #child_ident.name_str() != #kdl_key {
                     continue;
                 }
+                __kdl_seen_matching_child = true;
                 let child_ctx = ctx.with_child(#child_ident.name_str(), child_index);
+                #tagged_child_prep
                 #inject_prep
                 let v = <#value_ty as ::kdl_config::KdlDecode>::decode(#decode_target, &child_ctx)?;
                 claims.claim_child(child_index);
@@ -1664,7 +1820,47 @@ fn generate_node_parser(
                     ::kdl_config::Placement::Child,
                 )?;
             }
-        }
+                if !__kdl_seen_matching_child {
+                    let #child_ident = ::kdl_config::KdlNode::new(#kdl_key);
+                    let child_ctx = ctx.with_child(#kdl_key, 0);
+                    #tagged_child_prep
+                    if #parent_injected_ident {
+                        let v = <#value_ty as ::kdl_config::KdlDecode>::decode(#decode_target, &child_ctx)?;
+                        ::kdl_config::helpers::resolve_scalar(
+                            field_config.conflict,
+                            &mut #field_ident,
+                            v,
+                            #struct_name,
+                            #field_name,
+                            #kdl_key,
+                            ::kdl_config::Placement::Child,
+                        )?;
+                    }
+                }
+            }
+        } else {
+            quote! {
+                for (child_index, #child_ident) in node.iter_children().enumerate() {
+                    if #child_ident.name_str() != #kdl_key {
+                        continue;
+                    }
+                    let child_ctx = ctx.with_child(#child_ident.name_str(), child_index);
+                    #inject_prep
+                    let v = <#value_ty as ::kdl_config::KdlDecode>::decode(#decode_target, &child_ctx)?;
+                    claims.claim_child(child_index);
+                    ::kdl_config::helpers::resolve_scalar(
+                        field_config.conflict,
+                        &mut #field_ident,
+                        v,
+                        #struct_name,
+                        #field_name,
+                        #kdl_key,
+                        ::kdl_config::Placement::Child,
+                    )?;
+                }
+            }
+        };
+        synthetic_child
     };
 
     let default_expr = generate_missing_expr(

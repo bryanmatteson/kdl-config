@@ -82,6 +82,42 @@ struct BTreeRegistrySchemaConfig {
     items: BTreeMap<String, Setting>,
 }
 
+#[derive(KdlNode)]
+#[allow(dead_code)]
+#[kdl(node = "provider")]
+struct SchemaOnnxProvider {
+    #[kdl(attr)]
+    model: Option<String>,
+}
+
+#[derive(KdlNode)]
+#[allow(dead_code)]
+#[kdl(node = "provider")]
+struct SchemaOllamaProvider {
+    #[kdl(attr)]
+    model: Option<String>,
+    #[kdl(attr)]
+    endpoint: Option<String>,
+}
+
+#[derive(KdlSchema)]
+#[allow(dead_code)]
+#[kdl(node = "provider", select = attr("provider"))]
+enum SchemaSemanticProvider {
+    #[kdl(tag = "onnx")]
+    Onnx(SchemaOnnxProvider),
+    #[kdl(tag = "ollama")]
+    Ollama(SchemaOllamaProvider),
+}
+
+#[derive(KdlSchema)]
+#[allow(dead_code)]
+#[kdl(node = "semantic")]
+struct TaggedChildSchemaConfig {
+    #[kdl(child, tag_attr = "provider", hoist_attrs = any("model"))]
+    provider: SchemaSemanticProvider,
+}
+
 #[derive(KdlSchema)]
 #[allow(dead_code)]
 #[kdl(
@@ -256,6 +292,37 @@ fn test_btreemap_registry_schema_generation() {
 
     assert_eq!(item.ref_type.as_deref(), Some("Setting"));
     assert!(item.registry_key.is_some());
+}
+
+#[test]
+fn tagged_child_schema_surfaces_parent_attrs() {
+    let mut registry = kdl_config::schema::SchemaRegistry::default();
+    TaggedChildSchemaConfig::register_definitions(&mut registry);
+
+    let schema = registry
+        .definitions
+        .get("TaggedChildSchemaConfig")
+        .expect("TaggedChildSchemaConfig schema not found");
+
+    let provider = schema.props.get("provider").expect("missing provider prop");
+    assert_eq!(provider.ty, SchemaType::String);
+
+    let model = schema.props.get("model").expect("missing model prop");
+    assert_eq!(model.ty, SchemaType::String);
+
+    let children = schema.children.as_ref().expect("expected child schema");
+    let provider_child = children
+        .nodes
+        .iter()
+        .find_map(|child| match child {
+            SchemaRef::Inline(node) if node.name.as_deref() == Some("provider") => Some(node),
+            _ => None,
+        })
+        .expect("expected provider child wrapper");
+    assert_eq!(
+        provider_child.ref_type.as_deref(),
+        Some("SchemaSemanticProvider")
+    );
 }
 
 #[test]

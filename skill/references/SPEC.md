@@ -142,7 +142,72 @@ Used with `registry`, `children_map`, and tagged enum discriminators.
 | `inject` | Inject selected value into a field (implicit = `attr("name")` only) |
 | `inject = "field"` | Inject into named field |
 
-### 3.7 Serialization Control
+### 3.7 Tagged Child Fields
+
+`child` fields whose type is a tagged enum may opt into parent-driven variant selection and
+explicit parent-attr hoisting.
+
+| Attribute | Syntax | Purpose |
+|---|---|---|
+| `tag_attr` | `= "key"` | Select enum variant from a keyed attribute on the parent node |
+| `hoist_attrs` | `= any("a", "b", …)` | Forward selected keyed attrs from parent into the effective child node |
+
+Example:
+
+```rust
+#[derive(KdlNode)]
+#[kdl(node = "semantic")]
+struct SemanticConfig {
+    #[kdl(child, tag_attr = "provider", hoist_attrs = any("model"))]
+    provider: SemanticProvider,
+
+    #[kdl(child, tag_attr = "backend")]
+    backend: VectorBackend,
+}
+```
+
+Canonical KDL:
+
+```kdl
+semantic provider=ollama backend=qdrant model="nomic-embed-code-safe" {
+    provider endpoint="http://localhost:11434"
+    backend endpoint="http://localhost:6333"
+}
+```
+
+Decode semantics:
+
+1. Read `tag_attr` from the parent, or use the field default when omitted.
+2. Create an effective child node for the field from the authored child node if present, else an empty node with the field's child name.
+3. Forward any declared `hoist_attrs` from the parent into the effective child node.
+4. Reject duplicates when a hoisted attr is already present on the authored child node.
+5. Decode the enum variant selected by `tag_attr` from the effective child node.
+
+Rules:
+
+- `tag_attr` is only valid on `child` fields whose type is a tagged enum (`#[derive(KdlNode)]` on enum with selector-capable tags).
+- `hoist_attrs` requires `tag_attr` and only forwards keyed scalar attrs in the initial design.
+- Hoisted attrs are considered consumed on the parent for unknown-field checking.
+- A hoisted attr must be claimed by at most one tagged child field on the same parent struct.
+- If no `tag_attr` is present and the field has no default, the field is missing.
+- If the selected variant cannot decode a hoisted attr, parsing fails normally for that variant.
+- Child-local discriminators are rejected when `tag_attr` is used; canonical rendering and parsing put variant selection on the parent.
+
+Render semantics:
+
+- Render the selected variant discriminator on the parent as `tag_attr=value`.
+- Render hoisted attrs on the parent, not inside the child node.
+- Render the child node only for non-hoisted nested config.
+- Omit the child node when it would be empty after removing hoisted attrs.
+
+Required errors:
+
+- unknown `tag_attr` value
+- missing `tag_attr` when no default variant exists
+- duplicate attr between parent hoist and authored child node
+- duplicate claim of the same hoisted attr by multiple tagged child fields
+
+### 3.8 Serialization Control
 
 | Attribute | Effect |
 |---|---|
@@ -152,7 +217,7 @@ Used with `registry`, `children_map`, and tagged enum discriminators.
 | `required` | Field must be present (error if missing) |
 | `optional` | Field may be absent (explicit; default for `Option`, `Vec`) |
 
-### 3.8 Type Conversion
+### 3.9 Type Conversion
 
 | Attribute | Syntax | Trait bound (parse) | Trait bound (render) |
 |---|---|---|---|
@@ -161,11 +226,11 @@ Used with `registry`, `children_map`, and tagged enum discriminators.
 
 Both work with `Option<T>` and `Vec<T>` (conversion applies per element). Cannot use both simultaneously. Implies `scalar`.
 
-### 3.9 Scalar Hints
+### 3.10 Scalar Hints
 
 `scalar` / `value_type` / `value_like` / `kdl_value` — all equivalent. Mark field as scalar (`FromKdlValue`) when the derive can't infer it from the type. Implied by `from`/`try_from`.
 
-### 3.10 Path Re-rooting
+### 3.11 Path Re-rooting
 
 | Syntax | Behavior |
 |---|---|

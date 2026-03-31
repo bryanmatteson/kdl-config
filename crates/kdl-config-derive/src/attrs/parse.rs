@@ -525,6 +525,25 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
                 raw.container = Some(s.value());
             }
         }
+        Some("tag_attr") => {
+            let value: Expr = meta.value()?.parse()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = value
+            {
+                raw.tag_attr = Some(s.value());
+            } else {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "tag_attr requires a string literal",
+                ));
+            }
+        }
+        Some("hoist_attrs") => {
+            let value: Expr = meta.value()?.parse()?;
+            let names = parse_string_or_any_names_expr(value, meta.path.span(), "hoist_attrs")?;
+            raw.hoist_attrs.extend(names);
+        }
         Some("path") => {
             let value: Expr = meta.value()?.parse()?;
             if let Expr::Lit(ExprLit {

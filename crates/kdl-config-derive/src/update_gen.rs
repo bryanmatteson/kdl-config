@@ -93,7 +93,24 @@ pub(crate) fn generate_field_update(
             }
         }
         RenderPlacement::Value | RenderPlacement::Child | RenderPlacement::Children => {
+            let extra_attr_removals = if matches!(render_placement, RenderPlacement::Child)
+                && (field.tag_attr.is_some() || !field.hoist_attrs.is_empty())
+            {
+                let tag_attr = field.tag_attr.as_ref().map(|value| quote! {
+                    ::kdl_config::remove_attr_entries(node, #value);
+                });
+                let hoist_removals = field.hoist_attrs.iter().map(|value| quote! {
+                    ::kdl_config::remove_attr_entries(node, #value);
+                });
+                quote! {
+                    #tag_attr
+                    #(#hoist_removals)*
+                }
+            } else {
+                quote! {}
+            };
             quote! {
+                #extra_attr_removals
                 if let Some(children) = node.children_mut() {
                     children.nodes_mut().retain(|child| child.base_name() != #kdl_key);
                 }
@@ -584,6 +601,137 @@ fn generate_update_child(
     struct_name: &str,
 ) -> TokenStream {
     let kdl_key = &field.kdl_key;
+    let tagged_child = field.tag_attr.is_some() || !field.hoist_attrs.is_empty();
+
+    if tagged_child {
+        let tag_attr = field.tag_attr.as_ref().map(|value| quote! { #value });
+        let hoist_attrs: Vec<TokenStream> =
+            field.hoist_attrs.iter().map(|value| quote! { #value }).collect();
+        let canonicalize_child = {
+            let hoist_parent = hoist_attrs.iter().map(|attr| {
+                quote! {
+                    ::kdl_config::remove_attr_entries(node, #attr);
+                    if let Some(values) = rendered_child.attr_values(#attr).map(|values| values.to_vec()) {
+                        for value in values {
+                            let v = ::kdl_config::value_to_kdl(&value);
+                            ::kdl_config::update_or_insert_attr(node, #attr, v);
+                        }
+                        rendered_child = rendered_child.without_attr(#attr);
+                    }
+                }
+            });
+            let tag_parent = if let Some(tag_attr) = tag_attr {
+                quote! {
+                    ::kdl_config::remove_attr_entries(node, #tag_attr);
+                    if let Some(values) = rendered_child.attr_values(#tag_attr).map(|values| values.to_vec()) {
+                        for value in values {
+                            let v = ::kdl_config::value_to_kdl(&value);
+                            ::kdl_config::update_or_insert_attr(node, #tag_attr, v);
+                        }
+                        rendered_child = rendered_child.without_attr(#tag_attr);
+                    }
+                }
+            } else {
+                quote! {}
+            };
+            quote! {
+                #tag_parent
+                #(#hoist_parent)*
+            }
+        };
+
+        if field.is_optional {
+            let reference = &access.reference;
+            let remove_tag_attr = if let Some(tag_attr) = field.tag_attr.as_ref() {
+                quote! { ::kdl_config::remove_attr_entries(node, #tag_attr); }
+            } else {
+                quote! {}
+            };
+            let remove_hoist_attrs = field.hoist_attrs.iter().map(|attr| {
+                quote! { ::kdl_config::remove_attr_entries(node, #attr); }
+            });
+            return quote! {
+                if let Some(value) = #reference {
+                    let mut rendered_child = ::kdl_config::KdlRender::render_node(value, #kdl_key);
+                    #canonicalize_child
+
+                    let child_is_empty = rendered_child.args().is_empty()
+                        && rendered_child.attrs().is_empty()
+                        && rendered_child.children().is_empty();
+
+                    if child_is_empty {
+                        if let Some(children) = node.children_mut() {
+                            children.nodes_mut().retain(|child| child.base_name() != #kdl_key);
+                        }
+                    } else {
+                        let rendered = ::kdl_config::render_node(&rendered_child);
+                        let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: ::kdl_config::kdl::KdlError| {
+                            ::kdl_config::KdlConfigError::custom(#struct_name, e.to_string())
+                        })?;
+                        let new_node = doc.nodes()[0].clone();
+
+                        let mut target_child: ::core::option::Option<&mut ::kdl_config::KdlNode> = None;
+                        if let Some(children) = node.children_mut() {
+                            for child in children.nodes_mut().iter_mut() {
+                                if child.base_name() == #kdl_key {
+                                    target_child = Some(child);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(child) = target_child {
+                            *child = new_node;
+                        } else {
+                            node.ensure_children().nodes_mut().push(new_node);
+                        }
+                    }
+                } else {
+                    #remove_tag_attr
+                    #(#remove_hoist_attrs)*
+                    if let Some(children) = node.children_mut() {
+                        children.nodes_mut().retain(|child| child.base_name() != #kdl_key);
+                    }
+                }
+            };
+        }
+
+        let value = &access.value;
+        return quote! {
+            let mut rendered_child = ::kdl_config::KdlRender::render_node(&#value, #kdl_key);
+            #canonicalize_child
+
+            let child_is_empty = rendered_child.args().is_empty()
+                && rendered_child.attrs().is_empty()
+                && rendered_child.children().is_empty();
+
+            if child_is_empty {
+                if let Some(children) = node.children_mut() {
+                    children.nodes_mut().retain(|child| child.base_name() != #kdl_key);
+                }
+            } else {
+                let rendered = ::kdl_config::render_node(&rendered_child);
+                let doc: ::kdl_config::KdlDocument = rendered.parse().map_err(|e: ::kdl_config::kdl::KdlError| {
+                    ::kdl_config::KdlConfigError::custom(#struct_name, e.to_string())
+                })?;
+                let new_node = doc.nodes()[0].clone();
+
+                let mut target_child: ::core::option::Option<&mut ::kdl_config::KdlNode> = None;
+                if let Some(children) = node.children_mut() {
+                    for child in children.nodes_mut().iter_mut() {
+                        if child.base_name() == #kdl_key {
+                            target_child = Some(child);
+                            break;
+                        }
+                    }
+                }
+                if let Some(child) = target_child {
+                    *child = new_node;
+                } else {
+                    node.ensure_children().nodes_mut().push(new_node);
+                }
+            }
+        };
+    }
 
     if field.is_optional {
         let reference = &access.reference;

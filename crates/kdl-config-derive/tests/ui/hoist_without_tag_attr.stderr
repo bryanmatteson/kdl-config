@@ -1,0 +1,5 @@
+error: hoist_attrs requires tag_attr
+  --> tests/ui/hoist_without_tag_attr.rs:13:6
+   |
+13 |     #[kdl(child, hoist_attrs = "model")]
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

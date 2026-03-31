@@ -43,6 +43,127 @@ impl SchemaRegistry {
     }
 }
 
+fn inline_schema_for_ref(registry: &SchemaRegistry, schema_ref: &SchemaRef) -> Option<KdlNodeSchema> {
+    match schema_ref {
+        SchemaRef::Inline(schema) => Some(schema.clone()),
+        SchemaRef::Ref(name) => registry.definitions.get(name).cloned(),
+        SchemaRef::Choice(choices) => Some(KdlNodeSchema {
+            variants: Some(choices.clone()),
+            ..KdlNodeSchema::default()
+        }),
+    }
+}
+
+fn merge_schema_types(lhs: &SchemaType, rhs: &SchemaType) -> SchemaType {
+    if lhs == rhs {
+        return lhs.clone();
+    }
+
+    let mut types = Vec::new();
+    let mut seen = HashSet::new();
+    for ty in [lhs, rhs] {
+        match ty {
+            SchemaType::AnyOf(inner) => {
+                for nested in inner {
+                    let key = format!("{nested:?}");
+                    if seen.insert(key) {
+                        types.push(nested.clone());
+                    }
+                }
+            }
+            other => {
+                let key = format!("{other:?}");
+                if seen.insert(key) {
+                    types.push(other.clone());
+                }
+            }
+        }
+    }
+    SchemaType::AnyOf(types)
+}
+
+fn merge_schema_props(lhs: &SchemaProp, rhs: &SchemaProp) -> SchemaProp {
+    SchemaProp {
+        ty: merge_schema_types(&lhs.ty, &rhs.ty),
+        required: lhs.required && rhs.required,
+        bool_mode: if lhs.bool_mode == rhs.bool_mode {
+            lhs.bool_mode
+        } else {
+            None
+        },
+        flag_style: if lhs.flag_style == rhs.flag_style {
+            lhs.flag_style
+        } else {
+            None
+        },
+        conflict: if lhs.conflict == rhs.conflict {
+            lhs.conflict
+        } else {
+            None
+        },
+        description: if lhs.description == rhs.description {
+            lhs.description.clone()
+        } else {
+            None
+        },
+        validations: if lhs.validations == rhs.validations {
+            lhs.validations.clone()
+        } else {
+            vec![]
+        },
+    }
+}
+
+pub fn tagged_child_selector_type(
+    registry: &SchemaRegistry,
+    schema_ref: &SchemaRef,
+) -> Option<SchemaType> {
+    inline_schema_for_ref(registry, schema_ref)
+        .and_then(|schema| schema.values.first().map(|value| value.ty.clone()))
+}
+
+pub fn tagged_child_hoisted_prop(
+    registry: &SchemaRegistry,
+    schema_ref: &SchemaRef,
+    name: &str,
+) -> Option<SchemaProp> {
+    match schema_ref {
+        SchemaRef::Inline(schema) => {
+            if let Some(prop) = schema.props.get(name) {
+                return Some(prop.clone());
+            }
+            let mut merged: Option<SchemaProp> = None;
+            if let Some(variants) = &schema.variants {
+                for variant in variants {
+                    if let Some(prop) = tagged_child_hoisted_prop(registry, variant, name) {
+                        merged = Some(match merged {
+                            Some(existing) => merge_schema_props(&existing, &prop),
+                            None => prop,
+                        });
+                    }
+                }
+            }
+            merged
+        }
+        SchemaRef::Ref(schema_name) => registry
+            .definitions
+            .get(schema_name)
+            .and_then(|schema| tagged_child_hoisted_prop(registry, &SchemaRef::Inline(schema.clone()), name)),
+        SchemaRef::Choice(choices) => {
+            let mut merged: Option<SchemaProp> = None;
+            for choice in choices {
+                if let Some(prop) = tagged_child_hoisted_prop(registry, choice, name) {
+                    merged = Some(match merged {
+                        Some(existing) => merge_schema_props(&existing, &prop),
+                        None => prop,
+                    });
+                }
+            }
+            merged
+        }
+    }
+}
+
 /// Build a schema node for `fragment "name" <type> { ... }`.
 pub fn fragment_node_schema(definitions: &SchemaRegistry) -> KdlNodeSchema {
     let mut names: Vec<String> = definitions.definitions.keys().cloned().collect();

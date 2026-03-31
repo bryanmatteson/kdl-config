@@ -776,8 +776,78 @@ fn render_child_fields(
         let access = accessor(field);
         let key = &field.kdl_key;
         let cond = render_condition(field, &access);
+        let tagged_child = field.tag_attr.is_some() || !field.hoist_attrs.is_empty();
 
-        let render_body = if field.is_optional {
+        let render_body = if tagged_child {
+            let tag_attr = field.tag_attr.as_ref().map(|value| quote! { #value });
+            let hoist_attrs: Vec<TokenStream> =
+                field.hoist_attrs.iter().map(|value| quote! { #value }).collect();
+            let hoist_render = hoist_attrs.iter().map(|attr| {
+                quote! {
+                    if let Some(values) = child.attr_values(#attr).map(|values| values.to_vec()) {
+                        let key_repr = child.attr_repr(#attr).map(|repr| repr.to_string());
+                        for value in values {
+                            renderer.keyed_raw_with_repr(
+                                #attr,
+                                key_repr.as_deref(),
+                                ::kdl_config::render_value(&value),
+                            );
+                        }
+                        child = child.without_attr(#attr);
+                    }
+                }
+            });
+            let tag_render = if let Some(tag_attr) = tag_attr {
+                quote! {
+                    if let Some(values) = child.attr_values(#tag_attr).map(|values| values.to_vec()) {
+                        let key_repr = child.attr_repr(#tag_attr).map(|repr| repr.to_string());
+                        for value in values {
+                            renderer.keyed_raw_with_repr(
+                                #tag_attr,
+                                key_repr.as_deref(),
+                                ::kdl_config::render_value(&value),
+                            );
+                        }
+                        child = child.without_attr(#tag_attr);
+                    }
+                }
+            } else {
+                quote! {}
+            };
+            if field.is_optional {
+                let reference = &access.reference;
+                quote! {
+                    if let Some(value) = #reference {
+                        let mut child = ::kdl_config::KdlRender::render_node(value, #key);
+                        #tag_render
+                        #(#hoist_render)*
+                        if !child.args().is_empty()
+                            || !child.attrs().is_empty()
+                            || !child.children().is_empty()
+                        {
+                            let rendered = ::kdl_config::render_node(&child);
+                            child_nodes.push((#key.to_string(), idx, rendered));
+                            idx += 1;
+                        }
+                    }
+                }
+            } else {
+                let value = &access.value;
+                quote! {
+                    let mut child = ::kdl_config::KdlRender::render_node(&#value, #key);
+                    #tag_render
+                    #(#hoist_render)*
+                    if !child.args().is_empty()
+                        || !child.attrs().is_empty()
+                        || !child.children().is_empty()
+                    {
+                        let rendered = ::kdl_config::render_node(&child);
+                        child_nodes.push((#key.to_string(), idx, rendered));
+                        idx += 1;
+                    }
+                }
+            }
+        } else if field.is_optional {
             let reference = &access.reference;
             quote! {
                 if let Some(value) = #reference {
@@ -1469,12 +1539,76 @@ fn render_child_fields_node(
         let access = accessor(field);
         let key = &field.kdl_key;
         let cond = render_condition(field, &access);
+        let tagged_child = field.tag_attr.is_some() || !field.hoist_attrs.is_empty();
 
-        let render_body = if field.is_optional {
+        let render_body = if tagged_child {
+            let tag_attr = field.tag_attr.as_ref().map(|value| quote! { #value });
+            let hoist_attrs: Vec<TokenStream> =
+                field.hoist_attrs.iter().map(|value| quote! { #value }).collect();
+            let hoist_render = hoist_attrs.iter().map(|attr| {
+                quote! {
+                    if let Some(values) = child.attr_values(#attr).map(|values| values.to_vec()) {
+                        if let Some(key_repr) = child.attr_repr(#attr).map(|repr| repr.to_string()) {
+                            node.set_attr_repr(#attr, key_repr);
+                        }
+                        for value in values {
+                            node.set_attr(#attr, value);
+                        }
+                        child = child.without_attr(#attr);
+                    }
+                }
+            });
+            let tag_render = if let Some(tag_attr) = tag_attr {
+                quote! {
+                    if let Some(values) = child.attr_values(#tag_attr).map(|values| values.to_vec()) {
+                        if let Some(key_repr) = child.attr_repr(#tag_attr).map(|repr| repr.to_string()) {
+                            node.set_attr_repr(#tag_attr, key_repr);
+                        }
+                        for value in values {
+                            node.set_attr(#tag_attr, value);
+                        }
+                        child = child.without_attr(#tag_attr);
+                    }
+                }
+            } else {
+                quote! {}
+            };
+            if field.is_optional {
+                let reference = &access.reference;
+                quote! {
+                    if let Some(value) = #reference {
+                        let mut child = ::kdl_config::KdlRender::render_node(value, #key);
+                        #tag_render
+                        #(#hoist_render)*
+                        if !child.args().is_empty()
+                            || !child.attrs().is_empty()
+                            || !child.children().is_empty()
+                        {
+                            child_nodes.push((#key.to_string(), idx, child));
+                            idx += 1;
+                        }
+                    }
+                }
+            } else {
+                let value = &access.value;
+                quote! {
+                    let mut child = ::kdl_config::KdlRender::render_node(&#value, #key);
+                    #tag_render
+                    #(#hoist_render)*
+                    if !child.args().is_empty()
+                        || !child.attrs().is_empty()
+                        || !child.children().is_empty()
+                    {
+                        child_nodes.push((#key.to_string(), idx, child));
+                        idx += 1;
+                    }
+                }
+            }
+        } else if field.is_optional {
             let reference = &access.reference;
             quote! {
                 if let Some(value) = #reference {
-                    let node = value.render_node(#key);
+                    let node = ::kdl_config::KdlRender::render_node(value, #key);
                     child_nodes.push((#key.to_string(), idx, node));
                     idx += 1;
                 }
@@ -1482,7 +1616,7 @@ fn render_child_fields_node(
         } else {
             let value = &access.value;
             quote! {
-                let node = (#value).render_node(#key);
+                let node = ::kdl_config::KdlRender::render_node(&#value, #key);
                 child_nodes.push((#key.to_string(), idx, node));
                 idx += 1;
             }
@@ -1512,7 +1646,7 @@ fn render_children_fields_node(
             quote! {
                 if let Some(values) = #reference {
                     for child in values {
-                        let node = child.render_node(#key);
+                        let node = ::kdl_config::KdlRender::render_node(child, #key);
                         child_nodes.push((#key.to_string(), idx, node));
                         idx += 1;
                     }
@@ -1522,7 +1656,7 @@ fn render_children_fields_node(
             let reference = &access.reference;
             quote! {
                 for child in #reference {
-                    let node = child.render_node(#key);
+                    let node = ::kdl_config::KdlRender::render_node(child, #key);
                     child_nodes.push((#key.to_string(), idx, node));
                     idx += 1;
                 }

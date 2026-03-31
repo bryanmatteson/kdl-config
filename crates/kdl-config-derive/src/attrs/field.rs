@@ -76,6 +76,8 @@ pub struct FieldAttrs {
     pub required: Option<bool>,
     pub name: Option<String>,
     pub aliases: Vec<String>,
+    pub tag_attr: Option<String>,
+    pub hoist_attrs: Vec<String>,
     pub path: Option<FieldPath>,
     pub container: Option<String>,
     pub children_map: bool,
@@ -147,6 +149,8 @@ pub struct RawFieldAttrs {
     pub name: Option<String>,
     pub rename: Option<String>, // alias for name
     pub aliases: Vec<String>,
+    pub tag_attr: Option<String>,
+    pub hoist_attrs: Vec<String>,
     pub path: Option<FieldPath>,
     pub container: Option<String>,
     pub children_map: bool,
@@ -286,6 +290,17 @@ impl RawFieldAttrs {
         }
         let mut seen_aliases: HashSet<String> = HashSet::new();
         aliases.retain(|alias| seen_aliases.insert(alias.clone()));
+        let mut hoist_attrs = self.hoist_attrs;
+        let mut seen_hoist_attrs: HashSet<String> = HashSet::new();
+        hoist_attrs.retain(|attr| seen_hoist_attrs.insert(attr.clone()));
+        if let Some(tag_attr) = self.tag_attr.as_ref()
+            && hoist_attrs.iter().any(|attr| attr == tag_attr)
+        {
+            return Err(syn::Error::new(
+                span,
+                "hoist_attrs may not include the tag_attr name",
+            ));
+        }
         let path = self.path;
 
         // Resolve flatten
@@ -452,6 +467,8 @@ impl RawFieldAttrs {
             required,
             name,
             aliases,
+            tag_attr: self.tag_attr,
+            hoist_attrs,
             path,
             container: self.container,
             children_map: self.children_map,

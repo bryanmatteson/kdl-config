@@ -1,0 +1,7 @@
+error: attribute 'provider' is claimed by multiple fields ('provider' and 'tagged child 'backend'')
+  --> tests/ui/tagged_child_attr_claim_conflict.rs:14:10
+   |
+14 | #[derive(KdlNode)]
+   |          ^^^^^^^
+   |
+   = note: this error originates in the derive macro `KdlNode` (in Nightly builds, run with -Z macro-backtrace for more info)

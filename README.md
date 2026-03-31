@@ -119,6 +119,7 @@ Users only need to depend on `kdl-config`; derive macros are re-exported automat
 - **Post-Decode Hooks**: Normalize or reject fully-decoded structs with `#[kdl(post_decode = "path")]`.
 - **Conflict Resolution**: Control duplicate handling with `conflict = "error" | "first" | "last" | "append"`.
 - **Selectors**: Advanced key/discriminator extraction with `select(...)` (supports `arg(N)`, `attr("name")`, `name`, `func("path")`, and `any(...)`).
+- **Tagged Child Fields**: Parent-selected child enum variants with explicit attr hoisting for terse simple cases.
 - **Fragments**: Reusable configuration templates with insert nodes and `~` merge patches, expanded before parsing.
 - **Layered Configs**: Load and merge multiple KDL files with `KdlLoader`, using modifier signals (`+`, `-`, `!`) for merge control.
 - **Typed Overlay Merging**: Derive `KdlMerge` and `KdlPartial` to remove manual merge boilerplate.
@@ -306,6 +307,47 @@ enum Choice {
     Beta,
 }
 ```
+
+## Tagged Child Fields
+
+Tagged child fields let a parent node select a child enum variant with a keyed
+attribute while keeping advanced configuration grouped under the child node.
+
+Derive shape:
+
+```rust
+use kdl_config::KdlNode;
+
+#[derive(Debug, KdlNode)]
+#[kdl(node = "semantic")]
+struct SemanticConfig {
+    #[kdl(child, tag_attr = "provider", hoist_attrs = any("model"))]
+    provider: SemanticProvider,
+
+    #[kdl(child, tag_attr = "backend")]
+    backend: VectorBackend,
+}
+```
+
+Canonical KDL:
+
+```kdl
+semantic provider=ollama backend=qdrant model="nomic-embed-code-safe" {
+    provider endpoint="http://localhost:11434"
+    backend endpoint="http://localhost:6333"
+}
+```
+
+Behavior:
+
+- `provider=ollama` selects the `provider` enum variant.
+- `model="..."` on `semantic` is hoisted into the selected provider payload.
+- `provider { ... }` holds non-hoisted advanced provider configuration.
+- `hoist_attrs` requires `tag_attr`.
+- Child-local discriminator attrs are rejected for tagged child fields; the discriminator must live on the parent node.
+- If a hoisted attr is authored both on the parent and inside the child node, parsing fails with a conflict error.
+
+Canonical rendering keeps variant selection and hoisted simple attrs on the parent node, and uses the child block only for advanced nested settings.
 
 ## Fragments
 

@@ -621,6 +621,48 @@ fn collect_schema_parts(fields: &[FieldInfo], struct_attrs: &StructAttrs) -> Sch
             });
         }
 
+        if let Some(tag_attr) = field.tag_attr.as_ref() {
+            let selector_type = quote! {
+                ::kdl_config::schema::tagged_child_selector_type(
+                    registry,
+                    &<#ty as ::kdl_config::schema::KdlSchema>::schema_ref(),
+                )
+                .unwrap_or(::kdl_config::schema::SchemaType::String)
+            };
+            prop_inserts_target.push(prop_insert(
+                selector_type,
+                tag_attr,
+                false,
+                required,
+                quote! { None },
+                quote! { None },
+                quote! { Some(::kdl_config::ConflictPolicy::Error) },
+                quote! { None },
+                &[],
+            ));
+        }
+        for hoist_attr in &field.hoist_attrs {
+            prop_inserts_target.push(quote! {
+                {
+                    let prop = ::kdl_config::schema::tagged_child_hoisted_prop(
+                        registry,
+                        &<#ty as ::kdl_config::schema::KdlSchema>::schema_ref(),
+                        #hoist_attr,
+                    )
+                    .unwrap_or(::kdl_config::schema::SchemaProp {
+                        ty: ::kdl_config::schema::SchemaType::String,
+                        required: false,
+                        bool_mode: None,
+                        flag_style: None,
+                        conflict: Some(::kdl_config::ConflictPolicy::Error),
+                        description: None,
+                        validations: vec![],
+                    });
+                    schema.props.insert(#hoist_attr.to_string(), prop);
+                }
+            });
+        }
+
         let mut handled = false;
 
         if matches!(
