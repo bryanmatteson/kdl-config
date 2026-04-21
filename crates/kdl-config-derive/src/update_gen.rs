@@ -40,7 +40,9 @@ pub fn generate_update_impl(
     let prelude = prelude.unwrap_or_else(|| quote! {});
 
     quote! {
+        #[automatically_derived]
         impl ::kdl_config::KdlUpdate for #struct_name {
+            #[allow(clippy::result_large_err)]
             fn update(&self, node: &mut ::kdl_config::KdlNode, ctx: &::kdl_config::UpdateContext) -> ::core::result::Result<(), ::kdl_config::KdlConfigError> {
                 use ::kdl_config::KdlNodeExt as _;
                 let struct_overrides = #struct_overrides;

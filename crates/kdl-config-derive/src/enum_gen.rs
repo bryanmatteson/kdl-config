@@ -269,7 +269,9 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
         .collect();
 
     Ok(quote! {
+        #[automatically_derived]
         impl ::kdl_config::KdlDecode for #enum_name {
+            #[allow(clippy::result_large_err)]
             fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
                 use ::kdl_config::KdlNodeExt as _;
                 #validate_name
@@ -331,7 +333,9 @@ pub fn generate_enum_impl(input: &DeriveInput, data: &DataEnum) -> syn::Result<T
             }
         }
 
+        #[automatically_derived]
         impl ::kdl_config::KdlUpdate for #enum_name {
+            #[allow(clippy::result_large_err)]
             fn update(&self, node: &mut ::kdl_config::KdlNode, ctx: &::kdl_config::UpdateContext) -> ::core::result::Result<(), ::kdl_config::KdlConfigError> {
                 use ::kdl_config::KdlNodeExt as _;
                 match self {

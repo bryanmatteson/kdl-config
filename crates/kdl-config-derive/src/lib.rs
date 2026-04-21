@@ -225,7 +225,9 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                         .collect();
 
                     let parse_impl = quote::quote! {
+                        #[automatically_derived]
                         impl ::kdl_config::KdlDecode for #struct_name {
+                            #[allow(clippy::result_large_err)]
                             fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
                                 let result = (|| {
                                     use ::kdl_config::KdlNodeExt as _;
@@ -276,7 +278,9 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     };
 
                     let parse_impl = quote::quote! {
+                        #[automatically_derived]
                         impl ::kdl_config::KdlDecode for #struct_name {
+                            #[allow(clippy::result_large_err)]
                             fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
                                 let result = (|| {
                                     use ::kdl_config::KdlNodeExt as _;
@@ -315,7 +319,9 @@ fn derive_kdl_node_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
                     };
 
                     let update_impl = quote::quote! {
+                        #[automatically_derived]
                         impl ::kdl_config::KdlUpdate for #struct_name {
+                            #[allow(clippy::result_large_err)]
                             fn update(&self, node: &mut ::kdl_config::KdlNode, _ctx: &::kdl_config::UpdateContext) -> ::core::result::Result<(), ::kdl_config::KdlConfigError> {
                                 node.entries_mut().clear();
                                 if let Some(children) = node.children_mut() {

@@ -179,7 +179,9 @@ pub fn generate_parse_impl(
     let post_decode = generate_post_decode_hook(struct_attrs, &struct_name_str);
 
     quote! {
+        #[automatically_derived]
         impl ::kdl_config::KdlDecode for #struct_name {
+            #[allow(clippy::result_large_err)]
             fn decode(node: &::kdl_config::KdlNode, ctx: &::kdl_config::DecodeContext) -> ::core::result::Result<Self, ::kdl_config::KdlConfigError> {
                 let result = (|| {
                     use ::kdl_config::KdlNodeExt as _;

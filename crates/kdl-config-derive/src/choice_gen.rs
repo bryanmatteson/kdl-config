@@ -238,7 +238,9 @@ pub fn generate_kdl_choice_impl(
     };
 
     Ok(quote! {
+        #[automatically_derived]
         impl ::kdl_config::KdlDecode for #enum_name {
+            #[allow(clippy::result_large_err)]
             fn decode(
                 node: &::kdl_config::KdlNode,
                 ctx: &::kdl_config::DecodeContext,
@@ -277,7 +279,9 @@ pub fn generate_kdl_choice_impl(
             }
         }
 
+        #[automatically_derived]
         impl ::kdl_config::KdlUpdate for #enum_name {
+            #[allow(clippy::result_large_err)]
             fn update(
                 &self,
                 node: &mut ::kdl_config::KdlNode,
