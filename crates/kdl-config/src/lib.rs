@@ -102,6 +102,49 @@ pub fn to_kdl<T: KdlRender + ?Sized>(value: &T, name: &str) -> String {
     rendered
 }
 
+/// Render a KDL value into a flat document, i.e. as the children of the
+/// implicit wrapper node `name` rather than as a `name { ... }` block.
+///
+/// This is the render counterpart to [`RootMode::Document`]: it strips the
+/// outer wrapper that [`to_kdl`] would emit so the produced text round-trips
+/// through [`parse_str_with_config`] when `root_mode` is
+/// [`RootMode::Document`]. If the value renders to a non-empty node the
+/// returned string ends with a single trailing newline; an empty document
+/// returns an empty string.
+pub fn to_kdl_document<T: KdlRender + ?Sized>(value: &T, name: &str) -> String {
+    let wrapped = to_kdl(value, name);
+    strip_root_wrapper(&wrapped, name)
+}
+
+/// Strip the `name { ... }` wrapper around a rendered KDL document so that
+/// the children become flat top-level nodes. Returns the body with one-level
+/// dedent applied; never panics on unexpected shapes — if the wrapper is not
+/// found the input is returned trimmed with a trailing newline.
+fn strip_root_wrapper(wrapped: &str, name: &str) -> String {
+    let trimmed = wrapped.trim();
+    let prefix = format!("{name} {{");
+    let body = trimmed
+        .strip_prefix(&prefix)
+        .and_then(|s| s.strip_suffix('}'))
+        .unwrap_or(trimmed);
+
+    let mut out = String::with_capacity(body.len());
+    for line in body.lines() {
+        let dedented = line.strip_prefix("    ").unwrap_or(line);
+        if !dedented.is_empty() || !out.is_empty() {
+            out.push_str(dedented);
+            out.push('\n');
+        }
+    }
+
+    let result = out.trim().to_string();
+    if result.is_empty() {
+        result
+    } else {
+        result + "\n"
+    }
+}
+
 /// Parse a KDL string into a typed configuration using default config.
 pub fn parse_str<T: KdlDecode>(contents: &str) -> Result<T, KdlConfigError> {
     parse_str_with_config(contents, &ParseConfig::default())
@@ -112,6 +155,16 @@ pub fn parse_str_with_config<T: KdlDecode>(
     contents: &str,
     config: &ParseConfig,
 ) -> Result<T, KdlConfigError> {
+    // `RootMode::Document` always wraps the document body before parsing.
+    // The wrapper name is internal-only and is stripped back out on render
+    // by callers that want flat output.
+    if let RootMode::Document { name } = &config.root_mode {
+        let wrapped = format!("{name} {{\n{contents}\n}}\n");
+        let mut strict = config.clone();
+        strict.root_mode = RootMode::Strict;
+        return parse_str_with_config(&wrapped, &strict);
+    }
+
     let mut doc: KdlDocument = contents
         .parse()
         .map_err(|e: kdl::KdlError| KdlConfigError::from_kdl_parse_error("KDL Document", e))?;

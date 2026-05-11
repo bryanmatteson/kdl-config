@@ -30,8 +30,24 @@ pub enum ConflictPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RootMode {
+    /// Decode requires exactly one top-level node whose name matches the
+    /// target struct's expected node name.
     Strict,
+    /// Try `Strict` first; on failure, wrap the document in a single node
+    /// named `name` and try again. Useful when files may appear with or
+    /// without the outer wrapper.
     WrapExpectedNode { name: String },
+    /// Treat the entire document body as if it were the children of the
+    /// target struct's expected node. Decode always synthesizes an internal
+    /// wrapper named `name` around the document body and decodes that
+    /// wrapper. There is no strict-first attempt — the on-disk text is
+    /// assumed to have no outer wrapper.
+    ///
+    /// Use this for flat-document configurations whose authored form
+    /// intentionally omits the outer wrapper (e.g. a `stag.kdl` or
+    /// `koda.kdl` whose top-level nodes are the children of an implicit
+    /// `config { ... }` block).
+    Document { name: String },
 }
 
 impl Default for RootMode {
