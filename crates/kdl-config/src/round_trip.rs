@@ -1,5 +1,25 @@
-use crate::{DecodeContext, KdlDecode, KdlNodeExt, KdlUpdate, ParseConfig, Source, UpdateContext};
-use crate::{KdlConfigError, KdlDocument};
+use crate::{
+    DecodeContext, KdlConfigError, KdlDecode, KdlDocument, KdlNodeExt, KdlUpdate, ParseConfig,
+    RootMode, Source, UpdateContext,
+};
+
+/// How the top-level document was wrapped (if at all) when the AST was
+/// parsed. Round-trip render uses this to decide whether to emit the
+/// inner-body form (flat) or the full document (wrapped/strict).
+#[derive(Debug, Clone)]
+enum RootWrap {
+    /// Single explicit top-level node (Strict or successful WrapExpectedNode
+    /// non-fallback path). Render emits the full document.
+    Single,
+    /// Document was wrapped in `name { ... }` at parse time. Render emits
+    /// the body of the wrapper (flat top-level nodes, like the original
+    /// source). The `name` is the synthetic wrapper name; it is kept for
+    /// diagnostics and round-trip parity even though render strips it.
+    Wrapped {
+        #[allow(dead_code)]
+        name: String,
+    },
+}
 
 #[derive(Debug, Clone)]
 pub struct RoundTripAst<T> {
@@ -9,6 +29,7 @@ pub struct RoundTripAst<T> {
     original: String,
     dirty: bool,
     config: ParseConfig,
+    wrap: RootWrap,
 }
 
 impl<T> RoundTripAst<T> {
@@ -39,7 +60,10 @@ impl<T: KdlUpdate> RoundTripAst<T> {
         if let Some(node) = self.doc.nodes_mut().get_mut(self.root_index) {
             self.value.update(node, &ctx)?;
         }
-        Ok(self.doc.to_string())
+        match &self.wrap {
+            RootWrap::Single => Ok(self.doc.to_string()),
+            RootWrap::Wrapped { .. } => Ok(render_wrapped_body(&self.doc, self.root_index)),
+        }
     }
 
     pub fn to_kdl_fragment_aware(&mut self) -> Result<String, KdlConfigError> {
@@ -86,10 +110,41 @@ pub fn parse_str_roundtrip_with_config<T: KdlDecode + KdlUpdate>(
     contents: &str,
     config: &ParseConfig,
 ) -> Result<RoundTripAst<T>, KdlConfigError> {
-    let doc: KdlDocument = contents
+    // `RootMode::Document` always wraps the document body before parsing.
+    // Round-trip uses `RootWrap::Wrapped` so render emits the body back as
+    // a flat document (matching the on-disk shape).
+    let (effective_contents, wrap) = match &config.root_mode {
+        RootMode::Document { name } => {
+            let wrapped = format!("{name} {{\n{contents}\n}}\n");
+            let mut strict = config.clone();
+            strict.root_mode = RootMode::Strict;
+            return parse_str_roundtrip_with_config_inner::<T>(
+                &wrapped,
+                &strict,
+                contents.to_string(),
+                RootWrap::Wrapped { name: name.clone() },
+            );
+        }
+        _ => (contents.to_string(), RootWrap::Single),
+    };
+    parse_str_roundtrip_with_config_inner::<T>(
+        &effective_contents,
+        config,
+        contents.to_string(),
+        wrap,
+    )
+}
+
+fn parse_str_roundtrip_with_config_inner<T: KdlDecode + KdlUpdate>(
+    parser_input: &str,
+    config: &ParseConfig,
+    original: String,
+    wrap: RootWrap,
+) -> Result<RoundTripAst<T>, KdlConfigError> {
+    let doc: KdlDocument = parser_input
         .parse()
         .map_err(|e: kdl::KdlError| KdlConfigError::from_kdl_parse_error("KDL Document", e))?;
-    let source = Source::new(contents.to_string());
+    let source = Source::new(parser_input.to_string());
     let mut expanded = doc.clone();
     crate::fragments::expand_fragments(&mut expanded, Some(&source))?;
     let ctx = DecodeContext::new(config, Some(&source));
@@ -114,10 +169,41 @@ pub fn parse_str_roundtrip_with_config<T: KdlDecode + KdlUpdate>(
         value,
         doc,
         root_index,
-        original: contents.to_string(),
+        original,
         dirty: false,
         config: config.clone(),
+        wrap,
     })
+}
+
+/// Render only the children of the wrapper node at `root_index`, dedented one
+/// level. Round-trip counterpart to [`RootMode::Document`]: the parser
+/// internally wrapped a flat document, so render strips that wrapper back out.
+fn render_wrapped_body(doc: &KdlDocument, root_index: usize) -> String {
+    let Some(node) = doc.nodes().get(root_index) else {
+        return doc.to_string();
+    };
+    let Some(children) = node.children() else {
+        return String::new();
+    };
+    let rendered = children.to_string();
+    // `KdlDocument::to_string` for a child block emits each top-level child
+    // node on its own line. Strip one indent level so the output matches the
+    // original flat-document indentation.
+    let mut out = String::with_capacity(rendered.len());
+    for line in rendered.lines() {
+        let dedented = line.strip_prefix("    ").unwrap_or(line);
+        if !dedented.is_empty() || !out.is_empty() {
+            out.push_str(dedented);
+            out.push('\n');
+        }
+    }
+    let trimmed = out.trim().to_string();
+    if trimmed.is_empty() {
+        trimmed
+    } else {
+        trimmed + "\n"
+    }
 }
 
 fn find_root_index(doc: &KdlDocument) -> Result<usize, KdlConfigError> {

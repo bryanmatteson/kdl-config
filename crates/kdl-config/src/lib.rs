@@ -59,7 +59,7 @@ pub use render::{
     value_to_kdl_values, write_indent,
 };
 pub use resolve::{decode_at, decode_at_with_config, node_at};
-pub use round_trip::{RoundTripAst, parse_str_roundtrip};
+pub use round_trip::{RoundTripAst, parse_str_roundtrip, parse_str_roundtrip_with_config};
 pub use selector::{CollectMode, CollectionSpec, InjectOpt, SelectOpts, SelectSpec, SelectorAst};
 pub use types::{MergeModifierPolicy, Modifier, Node, NodeLocation as NodeLocationLegacy, Value};
 
