@@ -62,13 +62,48 @@ pub fn generate_kdl_merge_impl(input: &DeriveInput) -> syn::Result<TokenStream> 
                 }
             })
         }
-        Data::Enum(_) => Err(syn::Error::new_spanned(
-            &input.ident,
-            "KdlMerge currently supports structs only",
-        )),
+        Data::Enum(_) => {
+            // An enum is a sum type: the only meaningful default merge is
+            // "other replaces self". A container-level `#[kdl(merge(func = ...))]`
+            // (or `merge = "keep"`/`"replace"`) overrides; `deep`/`append` are
+            // rejected because they are meaningless for a variant.
+            let expr = parse_enum_merge_expr(&input.attrs)?;
+            Ok(quote! {
+                impl #impl_generics ::kdl_config::merge::DeepMerge for #struct_name #ty_generics #where_clause {
+                    fn deep_merge(self, other: Self) -> Self {
+                        #expr
+                    }
+                }
+            })
+        }
         Data::Union(_) => Err(syn::Error::new_spanned(
             &input.ident,
             "KdlMerge does not support unions",
+        )),
+    }
+}
+
+/// Resolve the `deep_merge(self, other)` body for an enum from a container-level
+/// `#[kdl(merge ...)]` attribute. Default is replace (`other`).
+fn parse_enum_merge_expr(attrs: &[syn::Attribute]) -> syn::Result<TokenStream> {
+    match parse_merge_policy(attrs)? {
+        // `parse_merge_policy` defaults to `Deep` when no merge attr is present;
+        // for an enum that absence means "replace".
+        MergePolicy::Deep => Ok(quote! { other }),
+        MergePolicy::Replace => Ok(quote! { other }),
+        MergePolicy::Keep => Ok(quote! { self }),
+        MergePolicy::Func(path) => {
+            let merge_fn: syn::Path = syn::parse_str(&path).map_err(|_| {
+                syn::Error::new(
+                    proc_macro2::Span::call_site(),
+                    "invalid merge(func = \"...\") path",
+                )
+            })?;
+            Ok(quote! { #merge_fn(self, other) })
+        }
+        MergePolicy::Append => Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "merge = \"append\" is meaningless on an enum; use the default (replace), \"keep\", or merge(func = \"...\")",
         )),
     }
 }
@@ -114,6 +149,7 @@ fn merge_expr(
 
 fn parse_merge_policy(attrs: &[syn::Attribute]) -> syn::Result<MergePolicy> {
     let mut policy: Option<MergePolicy> = None;
+    let mut skip = false;
 
     for attr in attrs {
         if !attr.path().is_ident("kdl") {
@@ -122,6 +158,13 @@ fn parse_merge_policy(attrs: &[syn::Attribute]) -> syn::Result<MergePolicy> {
 
         attr.parse_nested_meta(|meta| {
             if !meta.path.is_ident("merge") {
+                // `#[kdl(skip)]` marks derived/runtime state that a post-decode
+                // hook re-computes: keep `self` on merge so the field's type need
+                // not implement `DeepMerge`. An explicit `merge = "..."` overrides.
+                if meta.path.is_ident("skip") {
+                    skip = true;
+                    return Ok(());
+                }
                 if meta.input.peek(syn::Token![=]) {
                     let _: syn::Expr = meta.value()?.parse()?;
                 } else if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
@@ -164,7 +207,11 @@ fn parse_merge_policy(attrs: &[syn::Attribute]) -> syn::Result<MergePolicy> {
         })?;
     }
 
-    Ok(policy.unwrap_or_default())
+    Ok(policy.unwrap_or(if skip {
+        MergePolicy::Keep
+    } else {
+        MergePolicy::default()
+    }))
 }
 
 fn parse_merge_mode(mode: &LitStr) -> syn::Result<MergePolicy> {

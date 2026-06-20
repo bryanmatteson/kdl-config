@@ -844,6 +844,44 @@ fn parse_field_meta(meta: &syn::meta::ParseNestedMeta, raw: &mut RawFieldAttrs) 
             }
         }
 
+        // Consumed by the KdlMerge / KdlPartial derives; tolerated (and partly
+        // captured) here so a struct may derive `Kdl` alongside them.
+        Some("merge") => {
+            if meta.input.peek(syn::Token![=]) {
+                let value: Expr = meta.value()?.parse()?;
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }) = value
+                {
+                    raw.merge = Some(s.value());
+                }
+            } else if !meta.input.is_empty() && !meta.input.peek(syn::Token![,]) {
+                // merge(func = "...") / merge(mode = "...") — consume.
+                meta.parse_nested_meta(|_| Ok(()))?;
+            }
+        }
+        Some("partial") => {
+            let value: Expr = meta.value()?.parse()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = value
+            {
+                let v = s.value();
+                if v != "whole" && v != "leaf" {
+                    return Err(syn::Error::new_spanned(
+                        s,
+                        "invalid partial mode, expected \"whole\" or \"leaf\"",
+                    ));
+                }
+                raw.partial = Some(v);
+            } else {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "expected string literal for `partial`",
+                ));
+            }
+        }
+
         Some(name) => {
             return Err(syn::Error::new_spanned(
                 &meta.path,

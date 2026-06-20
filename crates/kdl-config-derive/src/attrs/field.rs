@@ -96,6 +96,10 @@ pub struct FieldAttrs {
     pub from: Option<syn::Type>,
     pub try_from: Option<syn::Type>,
     pub schema: FieldSchemaOverride,
+    /// `#[kdl(partial = "whole"|"leaf")]`: controls auto-partial recursion.
+    pub partial: Option<String>,
+    /// `#[kdl(merge = "...")]` policy (consumed by KdlMerge/KdlPartial; ignored by `Kdl`).
+    pub merge: Option<String>,
 }
 
 /// Positional argument specification (can be index or "rest"/"*").
@@ -202,6 +206,10 @@ pub struct RawFieldAttrs {
 
     // === Validation ===
     pub validations: Vec<ValidationRule>,
+
+    // === Merge / partial (consumed by KdlMerge / KdlPartial derives) ===
+    pub partial: Option<String>,
+    pub merge: Option<String>,
 }
 
 /// Parsed field path for re-rooting decoding.
@@ -487,6 +495,8 @@ impl RawFieldAttrs {
             from,
             try_from,
             schema: self.schema,
+            partial: self.partial,
+            merge: self.merge,
         })
     }
 }

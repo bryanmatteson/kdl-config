@@ -1,0 +1,5 @@
+error: KdlPartial: `modifier` fields are not supported by auto-generation; use #[kdl(partial = "whole")] if a wholesale override is intended
+ --> tests/ui/partial_modifier.rs:8:5
+  |
+8 |     marker: kdl_config::Modifier,
+  |     ^^^^^^

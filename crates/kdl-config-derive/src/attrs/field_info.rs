@@ -51,6 +51,10 @@ pub struct FieldInfo {
     pub from_type: Option<Type>,
     pub from_is_try: bool,
     pub schema: FieldSchemaOverride,
+    /// `#[kdl(partial = "whole"|"leaf")]` (auto-partial recursion control).
+    pub partial: Option<String>,
+    /// `#[kdl(merge = "...")]` policy string (used by the auto-partial generator).
+    pub merge: Option<String>,
 }
 
 impl FieldInfo {
@@ -237,6 +241,8 @@ impl FieldInfo {
             from_type: None,
             from_is_try: false,
             schema: attrs.schema,
+            partial: attrs.partial,
+            merge: attrs.merge,
         }))
     }
 
@@ -348,6 +354,8 @@ impl FieldInfo {
             from_type: attrs.from.or(attrs.try_from.clone()),
             from_is_try: attrs.try_from.is_some(),
             schema: attrs.schema,
+            partial: attrs.partial,
+            merge: attrs.merge,
         }))
     }
 

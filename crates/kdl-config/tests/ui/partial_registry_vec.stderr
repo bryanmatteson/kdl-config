@@ -1,0 +1,5 @@
+error: KdlPartial: a `registry` field must use a BTreeMap/HashMap to merge by key across layers; a Vec<(String, T)> registry would replace rather than merge — use a map or #[kdl(partial = "whole")]
+  --> tests/ui/partial_registry_vec.rs:14:5
+   |
+14 |     items: Vec<(String, Item)>,
+   |     ^^^^^

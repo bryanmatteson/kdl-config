@@ -89,8 +89,8 @@ Users only need to depend on `kdl-config`; derive macros are re-exported automat
 | `KdlValue` | Unit enums and newtype structs: maps KDL scalar values to Rust types via `FromKdlValue`. |
 | `KdlChoice` | Choice enums: selects variant by node name. |
 | `KdlSchema` | Schema generation: registers schema definitions for types. |
-| `KdlMerge` | Generates `DeepMerge` impls for typed overlay merging with per-field merge policy. |
-| `KdlPartial` | Generates `PartialConfig<T>` impls for `Option`-wrapped partial structs. |
+| `KdlMerge` | Generates `DeepMerge` impls for structs **and enums** (enums replace by default), with per-field merge policy and `#[kdl(skip)]`-aware (skip fields keep `self`). |
+| `KdlPartial` | On a base struct (no `partial_for`), **generates** the recursive `*Partial` mirror + `PartialConfig` impl. The explicit `#[kdl(partial_for = "...")]` mirror form is still supported. |
 | `Kdl` | Unified macro: dispatches to the above based on `#[kdl(choice)]`, `#[kdl(value)]`, or `#[kdl(schema)]` attributes. |
 
 ## Core Traits
@@ -524,7 +524,27 @@ struct Server {
 - `#[kdl(merge = "append")]`
 - `#[kdl(merge(func = "path"))]`
 
-`KdlPartial` generates `PartialConfig<T>` for partial (usually `Option`-wrapped) overlay structs:
+It also works on **enums** (the only sane default for a sum type is "other replaces self"; override with `#[kdl(merge(func = "..."))]`), and treats `#[kdl(skip)]` fields as `keep` so derived/runtime state need not implement `DeepMerge`.
+
+`KdlPartial` has two forms:
+
+1. **Auto (recommended):** derive it on the *base* struct (no `partial_for`). It generates a sibling `*Partial` type and its `PartialConfig` impl, recursively. The generated mirror decides each field by placement: value/attr/flag leaves become `Option<T>` (overwrite-if-set); child structs recurse into their own `*Partial` (sub-field-granular merge); `Vec` honors `merge = "append"`; maps merge by key; `#[kdl(skip)]` fields are omitted and filled from the base. A child-placed **enum** (or any leaf that should not recurse) is forced to a leaf with `#[kdl(partial = "whole")]`.
+
+```rust
+use kdl_config::merge::PartialConfig;
+use kdl_config::{Kdl, KdlMerge, KdlPartial};
+
+#[derive(Clone, Default, Kdl, KdlMerge, KdlPartial)]
+struct Answer {
+    #[kdl(attr)] provider: String,
+    #[kdl(attr)] model: String,
+    #[kdl(child)] agentic: Agentic,           // recurses -> AgenticPartial
+}
+// AnswerPartial / AgenticPartial are generated. A layer that sets only
+// `provider` leaves `model` and `agentic` untouched.
+```
+
+2. **Explicit:** the original hand-written mirror, still supported as an opt-in:
 
 ```rust
 use kdl_config::merge::PartialConfig;

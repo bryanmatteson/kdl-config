@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "kdl-config"
-version = "0.2.0-dev"
+version = "0.2.0"
 dependencies = [
  "kdl",
  "kdl-config-derive",
@@ -133,11 +133,12 @@ dependencies = [
  "proptest",
  "regex",
  "serde",
+ "trybuild",
 ]
 
 [[package]]
 name = "kdl-config-derive"
-version = "0.2.0-dev"
+version = "0.2.0"
 dependencies = [
  "kdl-config",
  "proc-macro2",
