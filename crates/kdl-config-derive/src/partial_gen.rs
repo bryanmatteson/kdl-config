@@ -122,11 +122,10 @@ fn generate_auto_partial(input: &DeriveInput) -> syn::Result<TokenStream> {
             continue;
         }
 
-        let kept_attrs: Vec<&syn::Attribute> = field
-            .attrs
-            .iter()
-            .filter(|a| a.path().is_ident("kdl"))
-            .collect();
+        // Copy the field's `#[kdl(...)]` decode attrs onto the mirror, but strip
+        // items that are wrong on an `Option`-wrapped partial leaf (see
+        // `partial_field_attrs`).
+        let kept_attrs = partial_field_attrs(field);
 
         let mapping = map_field(&info, &field.ty)?;
         let partial_ty = mapping.partial_ty;
@@ -154,6 +153,52 @@ fn generate_auto_partial(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
         }
     })
+}
+
+/// Re-emit a field's `#[kdl(...)]` decode attributes for the generated partial,
+/// dropping items that are invalid or harmful on an `Option`-wrapped mirror leaf:
+/// - `default` / `default_fn` — would make an absent leaf decode to
+///   `Some(<default>)` instead of `None`, clobbering lower layers on merge;
+/// - `skip_serializing_if` / `skip_serialize_none` / `no_skip_serialize` — their
+///   predicates type against the base field type, not `Option<T>`, breaking the
+///   mirror's render codegen;
+/// - `merge` / `partial` — base-only policies (already consumed via `FieldInfo`).
+fn partial_field_attrs(field: &syn::Field) -> Vec<TokenStream> {
+    const STRIP: &[&str] = &[
+        "default",
+        "default_fn",
+        "skip_serializing_if",
+        "skip_serialize_none",
+        "no_skip_serialize",
+        "merge",
+        "partial",
+    ];
+    let mut out = Vec::new();
+    for attr in &field.attrs {
+        if !attr.path().is_ident("kdl") {
+            continue;
+        }
+        match attr.parse_args_with(
+            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+        ) {
+            Ok(metas) => {
+                let kept: Vec<&syn::Meta> = metas
+                    .iter()
+                    .filter(|m| match m.path().get_ident() {
+                        Some(id) => !STRIP.contains(&id.to_string().as_str()),
+                        None => true,
+                    })
+                    .collect();
+                if !kept.is_empty() {
+                    out.push(quote! { #[kdl(#(#kept),*)] });
+                }
+            }
+            // Attrs that don't parse as a flat meta list (rare) are kept verbatim;
+            // these don't carry default/skip_serializing_if in practice.
+            Err(_) => out.push(quote! { #attr }),
+        }
+    }
+    out
 }
 
 struct FieldMapping {
