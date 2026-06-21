@@ -42,3 +42,35 @@ fn defaulted_leaves_stay_none_when_absent_in_a_layer() {
     assert_eq!(out.label, "kept"); // default + skip_serializing_if leaf preserved
     assert_eq!(out.name, "layer"); // the one set leaf overrides
 }
+
+#[derive(Clone, Default, Debug, PartialEq, Kdl, KdlMerge)]
+struct Item {
+    #[kdl(attr)]
+    x: u32,
+}
+
+// A `children` Vec is a *required* node unless `default` makes it optional.
+// `default` must therefore be KEPT on the (non-Option) mirror field — stripping
+// it would make every layer require the list (regression: ConfigPartial's
+// `builds_raw`/`build` became `MissingRequired`).
+#[derive(Clone, Default, Debug, PartialEq, Kdl, KdlMerge, KdlPartial)]
+struct WithList {
+    #[kdl(children, name = "item", default)]
+    items: Vec<Item>,
+    #[kdl(attr)]
+    name: String,
+}
+
+#[test]
+fn vec_default_kept_so_partial_field_stays_optional() {
+    let base = WithList {
+        items: vec![Item { x: 1 }],
+        name: "base".into(),
+    };
+    // Omitting the children list MUST decode (Vec default kept => not required).
+    let p: WithListPartial = kdl_config::parse_str("withlist name=\"layer\"")
+        .expect("partial decodes with the children list omitted");
+    let out = p.apply_to(base);
+    assert_eq!(out.items, vec![Item { x: 1 }]); // absent list => empty => no-op merge
+    assert_eq!(out.name, "layer");
+}

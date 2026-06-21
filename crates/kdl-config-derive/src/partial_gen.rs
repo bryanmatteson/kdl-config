@@ -122,13 +122,12 @@ fn generate_auto_partial(input: &DeriveInput) -> syn::Result<TokenStream> {
             continue;
         }
 
-        // Copy the field's `#[kdl(...)]` decode attrs onto the mirror, but strip
-        // items that are wrong on an `Option`-wrapped partial leaf (see
-        // `partial_field_attrs`).
-        let kept_attrs = partial_field_attrs(field);
-
+        // Map the field shape first; whether the mirror field is `Option`-typed
+        // controls default-attr stripping (see `partial_field_attrs`).
         let mapping = map_field(&info, &field.ty)?;
         let partial_ty = mapping.partial_ty;
+        let partial_is_option = partial_ty.to_string().replace(' ', "").contains("Option<");
+        let kept_attrs = partial_field_attrs(field, partial_is_option);
         let apply = mapping.apply;
         partial_fields.push(quote! { #(#kept_attrs)* pub #ident: #partial_ty });
         apply_exprs.push(apply);
@@ -157,22 +156,26 @@ fn generate_auto_partial(input: &DeriveInput) -> syn::Result<TokenStream> {
 
 /// Re-emit a field's `#[kdl(...)]` decode attributes for the generated partial,
 /// dropping items that are invalid or harmful on an `Option`-wrapped mirror leaf:
-/// - `default` / `default_fn` — would make an absent leaf decode to
-///   `Some(<default>)` instead of `None`, clobbering lower layers on merge;
 /// - `skip_serializing_if` / `skip_serialize_none` / `no_skip_serialize` — their
 ///   predicates type against the base field type, not `Option<T>`, breaking the
-///   mirror's render codegen;
-/// - `merge` / `partial` — base-only policies (already consumed via `FieldInfo`).
-fn partial_field_attrs(field: &syn::Field) -> Vec<TokenStream> {
-    const STRIP: &[&str] = &[
-        "default",
-        "default_fn",
+///   mirror's render codegen (always stripped; the mirror is never rendered);
+/// - `merge` / `partial` — base-only policies (already consumed via `FieldInfo`);
+/// - `default` / `default_fn` — stripped ONLY when the mirror field is
+///   `Option`-typed (then absent decodes to `None`, not `Some(<default>)`, which
+///   would clobber lower layers). On a non-`Option` mirror field (Vec / map /
+///   non-optional flatten) the default is what relieves required-ness, so it is
+///   KEPT — stripping it would make the field a required node in every layer.
+fn partial_field_attrs(field: &syn::Field, strip_default: bool) -> Vec<TokenStream> {
+    const ALWAYS_STRIP: &[&str] = &[
         "skip_serializing_if",
         "skip_serialize_none",
         "no_skip_serialize",
         "merge",
         "partial",
     ];
+    let strip = |id: &str| -> bool {
+        ALWAYS_STRIP.contains(&id) || (strip_default && (id == "default" || id == "default_fn"))
+    };
     let mut out = Vec::new();
     for attr in &field.attrs {
         if !attr.path().is_ident("kdl") {
@@ -185,7 +188,7 @@ fn partial_field_attrs(field: &syn::Field) -> Vec<TokenStream> {
                 let kept: Vec<&syn::Meta> = metas
                     .iter()
                     .filter(|m| match m.path().get_ident() {
-                        Some(id) => !STRIP.contains(&id.to_string().as_str()),
+                        Some(id) => !strip(&id.to_string()),
                         None => true,
                     })
                     .collect();
